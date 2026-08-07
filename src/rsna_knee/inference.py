@@ -25,6 +25,8 @@ def load_checkpoint(path: str | Path, device: torch.device):
         in_channels=int(ckpt.get("in_channels", 3 if cfg.get("input_mode") == "2p5d" else 1)),
         backbone=str(cfg.get("backbone", "resnet18")),
         target_attention=bool(cfg.get("target_attention", False)),
+        slice_pooling=str(cfg.get("slice_pooling", "attention")),
+        topk_fraction=float(cfg.get("topk_fraction", 0.25)),
     )
     model.load_state_dict(ckpt["model"])
     return model.to(device), ckpt
@@ -38,10 +40,9 @@ def infer_checkpoints(
 ) -> pd.DataFrame:
     """Run image-only fold-ensemble inference.
 
-    ``fusion_alpha`` is retained for backward API compatibility, but values
-    below 1 are rejected by default because the hidden test workflow must not
-    depend on report text. Reports remain a training teacher, not an inference
-    requirement.
+    Reports remain a training teacher. Test-time report fusion is blocked unless
+    the caller explicitly opts in after verifying that test-like data really
+    contains report text.
     """
     if float(fusion_alpha) != 1.0 and not bool(config.get("allow_test_report_fusion", False)):
         raise ValueError(
@@ -82,8 +83,15 @@ def infer_checkpoints(
     for path in checkpoint_paths:
         model, ckpt = load_checkpoint(path, device)
         ckpt_cfg = ckpt.get("config", {})
-        if str(ckpt_cfg.get("input_mode", "2d")) != dcfg.input_mode:
-            raise ValueError(f"checkpoint {path} input_mode does not match inference config")
+        for key, expected in {
+            "input_mode": dcfg.input_mode,
+            "stream_mode": stream_mode,
+        }.items():
+            actual = str(ckpt_cfg.get(key, "2d" if key == "input_mode" else "best"))
+            if actual != str(expected):
+                raise ValueError(
+                    f"checkpoint {path} {key}={actual!r} does not match inference config {expected!r}"
+                )
         fold_uids, p, _ = predict(model, loader, device, runtime)
         if uids is None:
             uids = fold_uids
@@ -99,9 +107,8 @@ def infer_checkpoints(
     final = image_p
 
     if float(fusion_alpha) < 1.0:
-        # Explicit opt-in only; this branch exists for diagnostic experiments
-        # where reports are actually present in the test-like data.
         from .report_labels import label_dataframe
+
         report_p, _ = label_dataframe(test)
         alpha = float(np.clip(fusion_alpha, 0, 1))
         final = alpha * image_p + (1 - alpha) * report_p
