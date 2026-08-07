@@ -20,6 +20,20 @@ pretrained: true
 normalize_input: true
 dropout: 0.25
 
+# Optional in-domain SSL initialization. First run:
+# rsna-knee pretrain --config configs/train.yaml
+ssl_encoder_checkpoint: null
+ssl_output_dir: runs/ssl
+ssl_epochs: 10
+ssl_batch_size: 4
+ssl_n_slices: 5
+ssl_projection_dim: 256
+ssl_temperature: 0.15
+ssl_metadata_weight: 0.25
+ssl_lr: 0.0002
+ssl_weight_decay: 0.0001
+ssl_noise_std: 0.01
+
 # Optimization
 lr: 0.0001
 min_lr: 0.000001
@@ -41,7 +55,7 @@ rank_min_confidence: 0.35
 rank_positive_threshold: 0.75
 rank_negative_threshold: 0.25
 
-# Two-pool sampling. Gold + very reliable pseudo rows form the trusted pool.
+# Two-pool sampling
 trusted_fraction: 0.30
 trusted_pseudo_threshold: 0.60
 
@@ -59,7 +73,7 @@ strict_dicom_inference: true
 # Evaluation
 n_bootstrap: 2000
 
-# Runtime. Launch multi-GPU training with:
+# Runtime. Multi-GPU:
 # torchrun --standalone --nproc_per_node=<N> -m rsna_knee.cli train --config configs/train.yaml --fold 0
 device: auto
 precision: auto
