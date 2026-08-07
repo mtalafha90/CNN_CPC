@@ -1,5 +1,4 @@
-# Single production configuration for the current MRI model.
-# Change data_root/output_dir for your machine or Kaggle mount.
+# Single production configuration. Change data_root/output_dir for your machine.
 data_root: /data/rsna-knee-abnormality-detection
 train_csv: train.csv
 train_series_csv: train_series.csv
@@ -10,11 +9,13 @@ output_dir: runs/model
 seed: 2026
 n_folds: 3
 
-# MRI representation: fixed production path
+# Fixed MRI/model path: dual-sequence 2.5D + hierarchical ConvNeXt-Tiny MIL.
 n_slices: 16
 image_size: 224
 triplet_gap: 1
-batch_size: 4
+batch_size: 2
+encoder_batch_size: 24
+gradient_checkpointing: true
 pretrained: true
 normalize_input: true
 dropout: 0.25
@@ -52,10 +53,9 @@ strict_dicom_inference: true
 # Evaluation
 n_bootstrap: 2000
 
-# Runtime. Multi-GPU parallelism is intentionally the next development step.
+# Runtime. Proper multi-GPU DDP is intentionally the next development step.
 device: auto
 precision: auto
 num_workers: null
 persistent_workers: true
 prefetch_factor: 4
-data_parallel: false
