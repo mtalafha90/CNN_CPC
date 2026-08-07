@@ -1,4 +1,4 @@
-# E08: DINOv2 ViT-S/14 representation through timm.
+# E08: frozen DINOv2 ViT-S/14 representation through timm.
 # Verify current competition rules for external/pretrained weights before running.
 # The official timm model config is fixed at 518x518 input.
 data_root: /data/rsna-knee-abnormality-detection
@@ -12,7 +12,7 @@ n_folds: 3
 stream_mode: dual
 input_mode: 2p5d
 triplet_gap: 1
-backbone: timm:vit_small_patch14_dinov2.lvd142m
+backbone: timm_frozen:vit_small_patch14_dinov2.lvd142m
 target_attention: true
 slice_pooling: attention
 topk_fraction: 0.25
@@ -21,7 +21,7 @@ image_size: 518
 batch_size: 1
 pretrained: true
 dropout: 0.25
-lr: 0.00005
+lr: 0.0001
 weight_decay: 0.0001
 epochs: 12
 patience: 4
