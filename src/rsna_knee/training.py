@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import random
+import time
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -44,12 +46,6 @@ def weighted_bce(logits, target, weight):
 
 
 def pairwise_ranking_loss(logits, target, pairs_per_target: int = 32):
-    """A small AUC-surrogate ranking term, disabled unless configured.
-
-    Pseudo-label probabilities above/below 0.5 define positive/negative pools.
-    The BCE term remains the primary objective; this term only encourages a
-    positive study to rank above a negative study for each target.
-    """
     losses = []
     for j in range(logits.shape[1]):
         pos = torch.nonzero(target[:, j] > 0.5, as_tuple=False).flatten()
@@ -69,7 +65,6 @@ def pairwise_ranking_loss(logits, target, pairs_per_target: int = 32):
 
 @torch.no_grad()
 def predict(model, loader, device, runtime=None):
-    """Score a loader. Passing ``runtime`` enables mixed precision on GPU."""
     model.eval()
     uids, probs, targets = [], [], []
     for batch in loader:
@@ -102,11 +97,13 @@ def _dataset_config(config: dict, root: Path, split: str) -> DatasetConfig:
 
 
 def train_fold(config: dict, fold: int) -> Path:
+    t0 = time.time()
     seed = int(config.get("seed", 2026))
     seed_everything(seed + fold)
     root = Path(config["data_root"])
     df = load_train_csv(root / config.get("train_csv", "train.csv"))
 
+    preflight_payload = None
     if bool(config.get("preflight_before_train", True)):
         result = run_preflight(
             root,
@@ -119,6 +116,7 @@ def train_fold(config: dict, fold: int) -> Path:
             max_failure_rate=float(config.get("preflight_max_failure_rate", 0.05)),
             strict=True,
         )
+        preflight_payload = result.to_dict()
         print(result.summary())
 
     series = load_series_csv(root / config.get("train_series_csv", "train_series.csv"))
@@ -126,11 +124,7 @@ def train_fold(config: dict, fold: int) -> Path:
     print(f"[metadata] {metadata_stats}")
 
     df = add_report_groups(df)
-    df["fold"] = make_balanced_gold_folds(
-        df,
-        int(config.get("n_folds", 3)),
-        seed,
-    )
+    df["fold"] = make_balanced_gold_folds(df, int(config.get("n_folds", 3)), seed)
     if not (df["fold"].eq(fold) & gold_mask(df)).any():
         raise ValueError(f"fold {fold} contains no gold validation studies")
 
@@ -156,26 +150,23 @@ def train_fold(config: dict, fold: int) -> Path:
                 "outside the validation fold"
             )
         else:
+            pseudo, conf = label_dataframe(df)
             print(
                 f"[fold {fold}] only {int(calib_mask.sum())} gold studies available for "
                 "calibration; falling back to fixed rule probabilities"
             )
-            pseudo, conf = label_dataframe(df)
     else:
         pseudo, conf = label_dataframe(df)
 
     targets, weights = combine_gold_and_pseudo(
-        df,
-        pseudo,
-        conf,
-        float(config.get("gold_weight", 8.0)),
+        df, pseudo, conf, float(config.get("gold_weight", 8.0))
     )
 
     stream_mode = str(config.get("stream_mode", "best"))
     series_index = build_series_index(series, df["StudyInstanceUID"].astype(str), stream_mode)
     dcfg = _dataset_config(config, root, "train")
     val_dcfg = _dataset_config(config, root, "validation")
-    val_dcfg.split = "train"  # validation cases live under the training DICOM tree
+    val_dcfg.split = "train"
 
     ti = np.flatnonzero(train_mask.to_numpy())
     vi = np.flatnonzero(val_mask.to_numpy())
@@ -198,20 +189,16 @@ def train_fold(config: dict, fold: int) -> Path:
 
     runtime = resolve_runtime(config)
     print(f"[fold {fold}] {runtime.describe()}")
+    if runtime.device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats()
+
     batch_size = int(config.get("batch_size", 2))
     loader_kwargs = runtime.loader_kwargs()
     train_loader = DataLoader(
-        train_ds,
-        batch_size=batch_size,
-        shuffle=True,
-        drop_last=False,
-        **loader_kwargs,
+        train_ds, batch_size=batch_size, shuffle=True, drop_last=False, **loader_kwargs
     )
     val_loader = DataLoader(
-        val_ds,
-        batch_size=max(1, batch_size),
-        shuffle=False,
-        **loader_kwargs,
+        val_ds, batch_size=max(1, batch_size), shuffle=False, **loader_kwargs
     )
 
     device = runtime.device
@@ -222,6 +209,8 @@ def train_fold(config: dict, fold: int) -> Path:
         in_channels=train_ds.in_channels,
         backbone=str(config.get("backbone", "resnet18")),
         target_attention=bool(config.get("target_attention", False)),
+        slice_pooling=str(config.get("slice_pooling", "attention")),
+        topk_fraction=float(config.get("topk_fraction", 0.25)),
     ).to(device)
     model = wrap_parallel(model, runtime, bool(config.get("data_parallel", True)))
     opt = torch.optim.AdamW(
@@ -239,6 +228,10 @@ def train_fold(config: dict, fold: int) -> Path:
     (outdir / "metadata_repair.json").write_text(
         json.dumps(metadata_stats, indent=2), encoding="utf-8"
     )
+    if preflight_payload is not None:
+        (outdir / "preflight.json").write_text(
+            json.dumps(preflight_payload, indent=2), encoding="utf-8"
+        )
 
     best, bad, history = -np.inf, 0, []
     best_predictions = best_targets = None
@@ -257,7 +250,11 @@ def train_fold(config: dict, fold: int) -> Path:
             with autocast(runtime):
                 logits = model(v, present)
                 bce = weighted_bce(logits, y, w)
-                rank = pairwise_ranking_loss(logits, y, rank_pairs) if rank_weight > 0 else logits.new_zeros(())
+                rank = (
+                    pairwise_ranking_loss(logits, y, rank_pairs)
+                    if rank_weight > 0
+                    else logits.new_zeros(())
+                )
                 loss = bce + rank_weight * rank
             scaler.scale(loss).backward()
             scaler.step(opt)
@@ -315,4 +312,19 @@ def train_fold(config: dict, fold: int) -> Path:
         (outdir / "bootstrap.json").write_text(
             json.dumps(result.to_dict(), indent=2), encoding="utf-8"
         )
+
+    runtime_payload = {
+        "elapsed_seconds": float(time.time() - t0),
+        "device": runtime.device_name,
+        "n_gpus": int(runtime.n_gpus),
+        "precision": runtime.describe(),
+        "num_workers": int(runtime.num_workers),
+        "peak_gpu_memory_bytes": (
+            int(torch.cuda.max_memory_allocated()) if runtime.device.type == "cuda" else 0
+        ),
+        "git_sha_env": os.environ.get("GITHUB_SHA") or os.environ.get("GIT_COMMIT"),
+    }
+    (outdir / "runtime.json").write_text(
+        json.dumps(runtime_payload, indent=2), encoding="utf-8"
+    )
     return outdir / "best.pt"
