@@ -8,16 +8,44 @@ output_dir: /kaggle/working/runs
 seed: 2026
 n_folds: 3
 stream_mode: best
+input_mode: 2d
+triplet_gap: 1
+backbone: resnet18
+target_attention: false
+slice_pooling: attention
+topk_fraction: 0.25
+
 n_slices: 16
 image_size: 224
 batch_size: 2
 num_workers: 2
+persistent_workers: true
+prefetch_factor: 2
 pretrained: false
 dropout: 0.25
 lr: 0.0002
 weight_decay: 0.0001
 epochs: 10
 patience: 3
+
+calibrate_teacher: true
+calibration_alpha: 5.0
+min_calibration_studies: 8
 gold_weight: 8.0
+rank_loss_weight: 0.0
+rank_pairs_per_target: 32
+
 noise_std: 0.02
 slice_dropout: 0.08
+
+preflight_before_train: true
+preflight_sample_size: 24
+preflight_max_failure_rate: 0.05
+strict_dicom: false
+strict_dicom_inference: true
+
+n_bootstrap: 2000
+device: auto
+precision: auto
+data_parallel: true
+allow_test_report_fusion: false
