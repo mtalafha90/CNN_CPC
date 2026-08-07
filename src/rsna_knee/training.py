@@ -13,7 +13,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from .calibration import calibration_split_mask, fit_calibration
+from .calibration import fit_calibration
 from .constants import DUAL_STREAMS, TARGETS
 from .data import (
     add_report_groups,
@@ -120,15 +120,41 @@ def _model_spec(config: dict) -> dict:
     }
 
 
+def _build_model(spec: dict, config: dict, device: torch.device) -> KneeMILNet:
+    return KneeMILNet(
+        spec["n_streams"],
+        spec["n_slices"],
+        in_channels=spec["in_channels"],
+        pretrained_weights=bool(config.get("pretrained", True)),
+        normalize_input=spec["normalize_input"],
+        dropout=spec["dropout"],
+        encoder_batch_size=spec["encoder_batch_size"],
+        gradient_checkpointing=spec["gradient_checkpointing"],
+    ).to(device)
+
+
 def train_fold(config: dict, fold: int) -> Path:
+    """Train one outer fold with a separate inner model-selection fold.
+
+    The outer fold is never inspected while epochs are being selected. With the
+    default three folds, ``(fold + 1) % 3`` is the inner selection fold and the
+    remaining gold fold supplies trusted training examples. Weakly supervised
+    studies remain available unless their normalized report duplicates either
+    held-out gold set.
+    """
     start_time = time.time()
     seed = int(config.get("seed", 2026))
     n_folds = int(config.get("n_folds", 3))
+    if n_folds < 3:
+        raise ValueError("nested outer/inner selection requires n_folds >= 3")
     if fold < 0 or fold >= n_folds:
         raise ValueError(f"fold must be in [0,{n_folds - 1}]")
+    inner_fold = int(config.get("inner_selection_fold", (fold + 1) % n_folds))
+    if inner_fold == fold or not 0 <= inner_fold < n_folds:
+        raise ValueError("inner selection fold must differ from the outer validation fold")
+
     seed_everything(seed + fold)
     root = Path(config["data_root"])
-
     df = load_train_csv(root / config.get("train_csv", "train.csv"))
     series_path = root / config.get("train_series_csv", "train_series.csv")
 
@@ -154,39 +180,45 @@ def train_fold(config: dict, fold: int) -> Path:
 
     df = add_report_groups(df)
     df["fold"] = make_balanced_gold_folds(df, n_folds, seed)
-    val_mask = df["fold"].eq(fold) & gold_mask(df)
-    if not val_mask.any():
-        raise ValueError(f"fold {fold} contains no gold validation studies")
+    gold = gold_mask(df)
+    outer_mask = df["fold"].eq(fold) & gold
+    inner_mask = df["fold"].eq(inner_fold) & gold
+    if not outer_mask.any() or not inner_mask.any():
+        raise ValueError("outer and inner selection folds must both contain gold studies")
 
-    val_groups = set(df.loc[val_mask, "report_group"].astype(str))
-    train_mask = ~df["report_group"].astype(str).isin(val_groups)
+    heldout_groups = set(df.loc[outer_mask | inner_mask, "report_group"].astype(str))
+    train_mask = ~df["report_group"].astype(str).isin(heldout_groups)
 
     states = state_dataframe(df)
     calibration = None
-    if bool(config.get("calibrate_teacher", True)):
-        calib_mask = calibration_split_mask(gold_mask(df).to_numpy(), df["fold"].to_numpy(), fold)
-        if calib_mask.sum() >= int(config.get("min_calibration_studies", 8)):
-            calibration = fit_calibration(
-                states[calib_mask],
-                df.loc[calib_mask, TARGETS].to_numpy(dtype=np.float64),
-                alpha=float(config.get("calibration_alpha", 5.0)),
-            )
-            pseudo = calibration.apply(states)
-            confidence = calibration.confidence(states)
-            print(f"[fold {fold}] teacher calibrated on {int(calib_mask.sum())} out-of-fold gold studies")
-        else:
-            pseudo, confidence = label_dataframe(df)
-            print(f"[fold {fold}] insufficient gold calibration studies; using fixed report rules")
+    calibration_mask = gold.to_numpy() & train_mask.to_numpy()
+    if bool(config.get("calibrate_teacher", True)) and calibration_mask.sum() >= int(
+        config.get("min_calibration_studies", 8)
+    ):
+        calibration = fit_calibration(
+            states[calibration_mask],
+            df.loc[calibration_mask, TARGETS].to_numpy(dtype=np.float64),
+            alpha=float(config.get("calibration_alpha", 5.0)),
+        )
+        pseudo = calibration.apply(states)
+        confidence = calibration.confidence(
+            states,
+            unmentioned_weight=float(config.get("unmentioned_weight", 0.0)),
+            uncertain_weight_cap=float(config.get("uncertain_weight_cap", 0.10)),
+        )
+        print(f"[fold {fold}] teacher calibrated on {int(calibration_mask.sum())} training-only gold studies")
     else:
         pseudo, confidence = label_dataframe(df)
+        # Fixed-rule silence is also PU/unlabeled.
+        confidence[states == "unmentioned"] = float(config.get("unmentioned_weight", 0.0))
 
     train_targets, train_weights = combine_gold_and_pseudo(
         df, pseudo, confidence, float(config.get("gold_weight", 8.0))
     )
-
     series_index = build_series_index(series, df["StudyInstanceUID"], mode="dual")
     ti = np.flatnonzero(train_mask.to_numpy())
-    vi = np.flatnonzero(val_mask.to_numpy())
+    ii = np.flatnonzero(inner_mask.to_numpy())
+    oi = np.flatnonzero(outer_mask.to_numpy())
 
     train_ds = KneeStudyDataset(
         df.iloc[ti]["StudyInstanceUID"].tolist(),
@@ -196,39 +228,38 @@ def train_fold(config: dict, fold: int) -> Path:
         train_weights[ti],
         True,
     )
-    val_ds = KneeStudyDataset(
-        df.iloc[vi]["StudyInstanceUID"].tolist(),
+    inner_ds = KneeStudyDataset(
+        df.iloc[ii]["StudyInstanceUID"].tolist(),
         series_index,
         _dataset_config(config, root, train=False),
-        df.iloc[vi][TARGETS].to_numpy(dtype=np.float32),
+        df.iloc[ii][TARGETS].to_numpy(dtype=np.float32),
+        None,
+        False,
+    )
+    outer_ds = KneeStudyDataset(
+        df.iloc[oi]["StudyInstanceUID"].tolist(),
+        series_index,
+        _dataset_config(config, root, train=False),
+        df.iloc[oi][TARGETS].to_numpy(dtype=np.float32),
         None,
         False,
     )
 
     runtime = resolve_runtime(config)
-    print(f"[fold {fold}] {runtime.describe()}")
+    print(f"[fold {fold}] outer={fold} inner={inner_fold} | {runtime.describe()}")
     if runtime.device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(runtime.device)
 
     loader_kwargs = runtime.loader_kwargs()
     batch_size = int(config.get("batch_size", 2))
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **loader_kwargs)
-    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
+    inner_loader = DataLoader(inner_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
+    outer_loader = DataLoader(outer_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
     spec = _model_spec(config)
     if train_ds.stream_names != DUAL_STREAMS:
         raise RuntimeError("dataset stream contract does not match canonical DUAL_STREAMS")
-    model = KneeMILNet(
-        spec["n_streams"],
-        spec["n_slices"],
-        in_channels=spec["in_channels"],
-        pretrained_weights=bool(config.get("pretrained", True)),
-        normalize_input=spec["normalize_input"],
-        dropout=spec["dropout"],
-        encoder_batch_size=spec["encoder_batch_size"],
-        gradient_checkpointing=spec["gradient_checkpointing"],
-    ).to(runtime.device)
-
+    model = _build_model(spec, config, runtime.device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(config.get("lr", 1e-4)),
@@ -242,18 +273,24 @@ def train_fold(config: dict, fold: int) -> Path:
 
     outdir = Path(config.get("output_dir", "runs/model")) / f"fold{fold}"
     outdir.mkdir(parents=True, exist_ok=True)
-    df[["StudyInstanceUID", "report_group", "fold"]].to_csv(outdir / "fold_assignments.csv", index=False)
+    assignments = df[["StudyInstanceUID", "report_group", "fold"]].copy()
+    assignments["role"] = "weak_train"
+    assignments.loc[train_mask & gold, "role"] = "gold_train"
+    assignments.loc[inner_mask, "role"] = "inner_selection"
+    assignments.loc[outer_mask, "role"] = "outer_oof"
+    assignments.to_csv(outdir / "fold_assignments.csv", index=False)
     (outdir / "metadata_repair.json").write_text(json.dumps(metadata_stats, indent=2), encoding="utf-8")
     if preflight_payload is not None:
         (outdir / "preflight.json").write_text(json.dumps(preflight_payload, indent=2), encoding="utf-8")
     if calibration is not None:
         (outdir / "calibration.json").write_text(json.dumps(calibration.to_dict(), indent=2), encoding="utf-8")
 
-    best_score = -np.inf
+    best_inner = -np.inf
+    best_epoch = 0
     bad_epochs = 0
     history: list[dict] = []
-    best_predictions = best_targets = None
     rank_weight = float(config.get("rank_loss_weight", 0.10))
+    checkpoint_path = outdir / "best.pt"
 
     for epoch in range(epochs):
         model.train()
@@ -265,7 +302,6 @@ def train_fold(config: dict, fold: int) -> Path:
             present = batch["present"].to(runtime.device, non_blocking=True)
             target = batch["target"].to(runtime.device, non_blocking=True)
             weight = batch["weight"].to(runtime.device, non_blocking=True)
-
             with autocast(runtime):
                 logits = model(volumes, present)
                 bce = weighted_bce(logits, target, weight)
@@ -283,7 +319,6 @@ def train_fold(config: dict, fold: int) -> Path:
                     else logits.new_zeros(())
                 )
                 loss = bce + rank_weight * rank
-
             scaler.scale(loss).backward()
             grad_clip = float(config.get("grad_clip", 1.0))
             if grad_clip > 0:
@@ -295,19 +330,20 @@ def train_fold(config: dict, fold: int) -> Path:
             seen += len(target)
 
         scheduler.step()
-        uids, probabilities, y_val = predict(model, val_loader, runtime.device, runtime)
-        score = macro_auc_from_arrays(y_val, probabilities)[0] if y_val is not None else float("nan")
+        _, inner_prob, inner_true = predict(model, inner_loader, runtime.device, runtime)
+        inner_score = macro_auc_from_arrays(inner_true, inner_prob)[0]
         row = {
             "epoch": epoch + 1,
             "train_loss": running / max(seen, 1),
-            "macro_auc": score,
+            "inner_macro_auc": inner_score,
             "lr": optimizer.param_groups[0]["lr"],
         }
         history.append(row)
         print(row)
 
-        if np.isfinite(score) and score > best_score:
-            best_score = score
+        if np.isfinite(inner_score) and inner_score > best_inner:
+            best_inner = float(inner_score)
+            best_epoch = epoch + 1
             bad_epochs = 0
             torch.save(
                 {
@@ -316,32 +352,46 @@ def train_fold(config: dict, fold: int) -> Path:
                     "config": config,
                     "stream_names": train_ds.stream_names,
                     "fold": fold,
-                    "score": float(score),
+                    "inner_fold": inner_fold,
+                    "selected_epoch": best_epoch,
+                    "inner_score": best_inner,
                 },
-                outdir / "best.pt",
+                checkpoint_path,
             )
-            oof = pd.DataFrame(probabilities, columns=TARGETS)
-            oof.insert(0, "StudyInstanceUID", uids)
-            oof.to_csv(outdir / "oof.csv", index=False)
-            best_predictions, best_targets = probabilities, y_val
         else:
             bad_epochs += 1
             if bad_epochs >= int(config.get("patience", 5)):
                 break
 
+    if best_epoch == 0:
+        raise RuntimeError(f"fold {fold} never produced a finite inner-selection macro AUC")
+
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    model.load_state_dict(payload["model"], strict=True)
+    outer_uids, outer_prob, outer_true = predict(model, outer_loader, runtime.device, runtime)
+    outer_score = macro_auc_from_arrays(outer_true, outer_prob)[0]
+
+    oof = pd.DataFrame(outer_prob, columns=TARGETS)
+    oof.insert(0, "StudyInstanceUID", outer_uids)
+    oof.to_csv(outdir / "oof.csv", index=False)
     pd.DataFrame(history).to_csv(outdir / "history.csv", index=False)
     (outdir / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
-
-    if best_predictions is None or best_targets is None:
-        raise RuntimeError(f"fold {fold} never produced a finite validation macro AUC")
+    selection = {
+        "outer_fold": fold,
+        "inner_fold": inner_fold,
+        "selected_epoch": best_epoch,
+        "inner_macro_auc": best_inner,
+        "outer_macro_auc": float(outer_score),
+    }
+    (outdir / "selection.json").write_text(json.dumps(selection, indent=2), encoding="utf-8")
 
     bootstrap = bootstrap_macro_auc(
-        best_targets,
-        best_predictions,
+        outer_true,
+        outer_prob,
         n_bootstrap=int(config.get("n_bootstrap", 2000)),
         seed=seed + fold,
     )
-    print(f"[fold {fold}] {bootstrap.summary()}")
+    print(f"[fold {fold}] untouched outer OOF: {bootstrap.summary()}")
     (outdir / "bootstrap.json").write_text(json.dumps(bootstrap.to_dict(), indent=2), encoding="utf-8")
 
     runtime_payload = {
@@ -356,4 +406,4 @@ def train_fold(config: dict, fold: int) -> Path:
         "git_sha_env": os.environ.get("GITHUB_SHA") or os.environ.get("GIT_COMMIT"),
     }
     (outdir / "runtime.json").write_text(json.dumps(runtime_payload, indent=2), encoding="utf-8")
-    return outdir / "best.pt"
+    return checkpoint_path
