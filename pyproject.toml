@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rsna-knee-cnn-cpc"
-version = "0.1.0"
-description = "Multimodal/semi-supervised baseline for the 2026 RSNA Knee MRI AI Challenge"
+version = "0.2.0"
+description = "Leakage-safe weakly supervised knee MRI pipeline for the 2026 RSNA AI Challenge"
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.26",
@@ -15,7 +15,6 @@ dependencies = [
   "PyYAML>=6.0",
   "torch>=2.2",
   "torchvision>=0.17",
-  "timm>=1.0",
 ]
 
 [project.scripts]
@@ -27,3 +26,4 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+addopts = "-ra"
