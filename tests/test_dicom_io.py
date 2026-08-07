@@ -13,7 +13,6 @@ pytest.importorskip("torch", reason="rsna_knee.dicom imports torch")
 
 
 def _dataset(rows: int = 8, cols: int = 8, frames: int | None = None, value: int = 1):
-    import pydicom
     from pydicom.dataset import Dataset, FileMetaDataset
     from pydicom.uid import ExplicitVRLittleEndian, generate_uid
 
@@ -50,45 +49,42 @@ def _write(ds, path: Path):
 
 
 def test_reads_files_without_a_dcm_suffix(tmp_path: Path):
-    """Some sites export instances with no extension at all."""
     for index in range(3):
         ds = _dataset(value=index + 1)
         ds.ImagePositionPatient = [0.0, float(index * 4), 0.0]
         ds.InstanceNumber = index + 1
         _write(ds, tmp_path / f"IM_{index:04d}")
+    assert read_dicom_series(tmp_path).shape == (3, 8, 8)
 
-    volume = read_dicom_series(tmp_path)
 
-    assert volume.shape == (3, 8, 8)
+def test_reads_mixed_supported_suffixes_in_one_series(tmp_path: Path):
+    suffixes = [".dcm", "", ".ima"]
+    for index, suffix in enumerate(suffixes):
+        ds = _dataset(value=index + 1)
+        ds.ImagePositionPatient = [0.0, float(index * 4), 0.0]
+        ds.InstanceNumber = index + 1
+        _write(ds, tmp_path / f"IM_{index:04d}{suffix}")
+    assert read_dicom_series(tmp_path).shape == (3, 8, 8)
 
 
 def test_reads_an_enhanced_multiframe_instance(tmp_path: Path):
-    """One file holding the whole series must expand into slices, not stay 3D."""
     _write(_dataset(frames=5), tmp_path / "multiframe.dcm")
-
     volume = read_dicom_series(tmp_path)
-
     assert volume.shape == (5, 8, 8)
-    # Frame order is preserved.
     assert volume[0].mean() < volume[-1].mean()
 
 
 def test_mixed_slice_sizes_are_normalised(tmp_path: Path):
-    """A localiser stored beside the series must not make np.stack raise."""
     big = _dataset(rows=16, cols=16, value=2)
     big.ImagePositionPatient = [0.0, 0.0, 0.0]
     _write(big, tmp_path / "a.dcm")
     small = _dataset(rows=8, cols=8, value=3)
     small.ImagePositionPatient = [0.0, 4.0, 0.0]
     _write(small, tmp_path / "b.dcm")
-
-    volume = read_dicom_series(tmp_path)
-
-    assert volume.shape == (2, 16, 16)
+    assert read_dicom_series(tmp_path).shape == (2, 16, 16)
 
 
 def test_monochrome1_is_inverted(tmp_path: Path):
-    """MONOCHROME1 stores inverted greyscale; bright fluid must stay bright."""
     ds = _dataset(value=5)
     ds.PhotometricInterpretation = "MONOCHROME1"
     pixels = np.zeros((8, 8), dtype=np.uint16)
@@ -96,9 +92,7 @@ def test_monochrome1_is_inverted(tmp_path: Path):
     ds.PixelData = pixels.tobytes()
     ds.ImagePositionPatient = [0.0, 0.0, 0.0]
     _write(ds, tmp_path / "a.dcm")
-
     volume = read_dicom_series(tmp_path)
-
     assert volume[0, 0, 0] == 0
     assert volume[0, 1, 1] == 100
 
