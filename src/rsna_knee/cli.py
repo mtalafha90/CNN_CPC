@@ -10,6 +10,7 @@ import yaml
 
 from .constants import TARGETS
 from .data import gold_mask, load_series_csv, load_train_csv
+from .ensemble import ensemble_predictions
 from .evaluation import bootstrap_macro_auc, compare_runs, load_oof
 from .fusion import tune_alpha
 from .inference import infer_checkpoints, validate_submission
@@ -52,6 +53,11 @@ def main():
     p.add_argument("--train-csv", required=True)
     p.add_argument("--oof", nargs="+", required=True)
     p.add_argument("--out", default="fusion.json")
+
+    p = sub.add_parser("ensemble", help="rank-average or mean multiple aligned prediction files")
+    p.add_argument("--predictions", nargs="+", required=True)
+    p.add_argument("--method", choices=["rank", "mean"], default="rank")
+    p.add_argument("--out", required=True)
 
     p = sub.add_parser("infer")
     p.add_argument("--config", required=True)
@@ -112,6 +118,11 @@ def main():
         best = tune_alpha(args.train_csv, args.oof)
         Path(args.out).write_text(json.dumps(best, indent=2), encoding="utf-8")
         print(best)
+
+    elif args.cmd == "ensemble":
+        out = ensemble_predictions(args.predictions, method=args.method)
+        out.to_csv(args.out, index=False)
+        print(args.out)
 
     elif args.cmd == "evaluate":
         y_true, predictions, uids = load_oof(args.train_csv, args.oof)
