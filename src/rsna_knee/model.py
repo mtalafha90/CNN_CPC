@@ -10,22 +10,17 @@ from torchvision.models import (
 )
 
 from .constants import N_TARGETS
+from .model3d import SharedVolumeEncoder
 
 
 class SliceEncoder(nn.Module):
     """Shared 2D encoder for grayscale slices or 2.5D triplets.
 
     Built-in backbones are ``resnet18`` and ``convnext_tiny``. Any timm model
-    that supports ``num_classes=0`` can be requested as ``timm:<model_name>``;
-    this includes DINOv2 models in timm releases that expose them.
+    that supports ``num_classes=0`` can be requested as ``timm:<model_name>``.
     """
 
-    def __init__(
-        self,
-        pretrained: bool = False,
-        in_channels: int = 1,
-        backbone: str = "resnet18",
-    ):
+    def __init__(self, pretrained: bool = False, in_channels: int = 1, backbone: str = "resnet18"):
         super().__init__()
         backbone = str(backbone)
         self.backbone_name = backbone
@@ -36,12 +31,8 @@ class SliceEncoder(nn.Module):
             old = net.conv1
             if in_channels != 3:
                 net.conv1 = nn.Conv2d(
-                    in_channels,
-                    old.out_channels,
-                    kernel_size=old.kernel_size,
-                    stride=old.stride,
-                    padding=old.padding,
-                    bias=False,
+                    in_channels, old.out_channels, kernel_size=old.kernel_size,
+                    stride=old.stride, padding=old.padding, bias=False,
                 )
                 if pretrained:
                     with torch.no_grad():
@@ -60,11 +51,8 @@ class SliceEncoder(nn.Module):
             first = net.features[0][0]
             if in_channels != 3:
                 replacement = nn.Conv2d(
-                    in_channels,
-                    first.out_channels,
-                    kernel_size=first.kernel_size,
-                    stride=first.stride,
-                    padding=first.padding,
+                    in_channels, first.out_channels, kernel_size=first.kernel_size,
+                    stride=first.stride, padding=first.padding,
                     bias=first.bias is not None,
                 )
                 if pretrained:
@@ -86,14 +74,10 @@ class SliceEncoder(nn.Module):
 
         elif backbone.lower().startswith("timm:"):
             import timm
-
             model_name = backbone.split(":", 1)[1]
             self.timm_model = timm.create_model(
-                model_name,
-                pretrained=pretrained,
-                in_chans=in_channels,
-                num_classes=0,
-                global_pool="avg",
+                model_name, pretrained=pretrained, in_chans=in_channels,
+                num_classes=0, global_pool="avg",
             )
             self.out_dim = int(self.timm_model.num_features)
             self._forward_impl = self._forward_timm
@@ -104,9 +88,7 @@ class SliceEncoder(nn.Module):
         return self.features(x).flatten(1)
 
     def _forward_convnext(self, x):
-        x = self.features(x)
-        x = self.pool(x)
-        return self.pre_classifier(x)
+        return self.pre_classifier(self.pool(self.features(x)))
 
     def _forward_timm(self, x):
         return self.timm_model(x)
@@ -127,7 +109,7 @@ class AttentionPool(nn.Module):
 
 
 class TopKAttentionPool(nn.Module):
-    """Learn a cheap slice score, keep only the highest-scoring fraction."""
+    """After slice encoding, retain the highest-scoring feature fraction."""
 
     def __init__(self, dim: int, fraction: float = 0.25):
         super().__init__()
@@ -172,7 +154,12 @@ def build_slice_pooling(name: str, dim: int, topk_fraction: float = 0.25) -> nn.
 
 
 class MultiSeriesKneeNet(nn.Module):
-    """Multi-series MIL network with configurable slice and target attention."""
+    """Multi-series MRI model for 2D/2.5D MIL or a compact 3D arm.
+
+    Use ``backbone: 3d`` with ``input_mode: 2d`` for the volumetric arm. It
+    encodes each complete sampled stream with shared 3D convolutions, then uses
+    the same stream-fusion logic as the 2D/2.5D family.
+    """
 
     def __init__(
         self,
@@ -184,12 +171,23 @@ class MultiSeriesKneeNet(nn.Module):
         target_attention: bool = False,
         slice_pooling: str = "attention",
         topk_fraction: float = 0.25,
+        base_channels_3d: int = 16,
     ):
         super().__init__()
         self.target_attention = bool(target_attention)
-        self.encoder = SliceEncoder(pretrained, in_channels=in_channels, backbone=backbone)
-        d = self.encoder.out_dim
-        self.slice_pool = build_slice_pooling(slice_pooling, d, topk_fraction)
+        self.is_3d = str(backbone).lower() == "3d"
+
+        if self.is_3d:
+            if in_channels != 1:
+                raise ValueError("backbone=3d requires grayscale input_mode=2d")
+            self.volume_encoder = SharedVolumeEncoder(base_channels_3d)
+            d = self.volume_encoder.out_dim
+            self.slice_pool = None
+        else:
+            self.encoder = SliceEncoder(pretrained, in_channels=in_channels, backbone=backbone)
+            d = self.encoder.out_dim
+            self.slice_pool = build_slice_pooling(slice_pooling, d, topk_fraction)
+
         self.stream_embeddings = nn.Parameter(torch.randn(n_streams, d) * 0.02)
 
         if self.target_attention:
@@ -210,6 +208,14 @@ class MultiSeriesKneeNet(nn.Module):
             )
 
     def _encode_streams(self, volumes):
+        if self.is_3d:
+            if volumes.ndim != 5:
+                raise ValueError("3D backbone expects [B,K,S,H,W]")
+            b, k, s, h, w = volumes.shape
+            x = volumes.view(b * k, 1, s, h, w)
+            feat = self.volume_encoder(x).view(b, k, -1)
+            return feat + self.stream_embeddings[:k].unsqueeze(0)
+
         if volumes.ndim == 5:
             b, k, s, h, w = volumes.shape
             x = volumes.view(b * k * s, 1, h, w)
@@ -237,7 +243,6 @@ class MultiSeriesKneeNet(nn.Module):
         series = self._encode_streams(volumes)
         if self.target_attention:
             return self._target_specific_forward(series, present)
-
         score = self.stream_score(series).squeeze(-1).masked_fill(present <= 0, -1e4)
         pooled = torch.sum(series * torch.softmax(score, dim=1).unsqueeze(-1), dim=1)
         pooled[present.sum(dim=1) <= 0] = 0
