@@ -4,18 +4,13 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from rsna_knee.runtime import (  # noqa: E402
-    RuntimeConfig,
-    default_workers,
-    make_scaler,
-    resolve_runtime,
-)
+from rsna_knee.runtime import RuntimeConfig, default_workers, make_scaler, resolve_runtime
 
 
 def test_auto_device_matches_availability():
     runtime = resolve_runtime({})
-    expected = "cuda" if torch.cuda.is_available() else "cpu"
-    assert runtime.device.type == expected
+    assert runtime.device.type == ("cuda" if torch.cuda.is_available() else "cpu")
+    assert runtime.world_size == 1 and runtime.rank == 0 and not runtime.distributed
 
 
 def test_requesting_cuda_without_a_gpu_fails_loudly():
@@ -27,9 +22,7 @@ def test_requesting_cuda_without_a_gpu_fails_loudly():
 
 def test_cpu_runs_in_fp32():
     runtime = resolve_runtime({"device": "cpu"})
-    assert runtime.amp_dtype is None
-    assert runtime.use_scaler is False
-    assert runtime.pin_memory is False
+    assert runtime.amp_dtype is None and runtime.use_scaler is False and runtime.pin_memory is False
 
 
 def test_invalid_device_is_rejected():
@@ -38,8 +31,7 @@ def test_invalid_device_is_rejected():
 
 
 def test_worker_count_defaults_to_sensible_range():
-    workers = default_workers(None)
-    assert 1 <= workers <= 16
+    assert 1 <= default_workers(None) <= 16
 
 
 def test_explicit_worker_count_is_respected():
@@ -50,18 +42,13 @@ def test_explicit_worker_count_is_respected():
 
 
 def test_loader_kwargs_omit_prefetch_when_single_process():
-    runtime = resolve_runtime({"device": "cpu", "num_workers": 0})
-    kwargs = runtime.loader_kwargs()
-    assert kwargs["num_workers"] == 0
-    assert "prefetch_factor" not in kwargs
-    assert kwargs["persistent_workers"] is False
+    kwargs = resolve_runtime({"device": "cpu", "num_workers": 0}).loader_kwargs()
+    assert kwargs["num_workers"] == 0 and "prefetch_factor" not in kwargs and kwargs["persistent_workers"] is False
 
 
 def test_loader_kwargs_include_prefetch_when_parallel_cpu_loading():
-    runtime = resolve_runtime({"device": "cpu", "num_workers": 4, "prefetch_factor": 2})
-    kwargs = runtime.loader_kwargs()
-    assert kwargs["prefetch_factor"] == 2
-    assert kwargs["persistent_workers"] is True
+    kwargs = resolve_runtime({"device": "cpu", "num_workers": 4, "prefetch_factor": 2}).loader_kwargs()
+    assert kwargs["prefetch_factor"] == 2 and kwargs["persistent_workers"] is True
 
 
 def test_loader_kwargs_are_accepted_by_dataloader():
@@ -73,13 +60,12 @@ def test_loader_kwargs_are_accepted_by_dataloader():
 
 
 def test_scaler_is_disabled_without_fp16():
-    runtime = resolve_runtime({"device": "cpu"})
-    assert make_scaler(runtime).is_enabled() is False
+    assert make_scaler(resolve_runtime({"device": "cpu"})).is_enabled() is False
 
 
-def test_describe_mentions_visible_gpu_count():
+def test_describe_mentions_distributed_state():
     text = resolve_runtime({"device": "cpu", "num_workers": 5}).describe()
-    assert "fp32" in text and "workers=5" in text and "visible_gpus=" in text
+    assert "fp32" in text and "workers=5" in text and "single" in text
 
 
 def test_runtime_config_is_constructible_directly():
@@ -93,5 +79,9 @@ def test_runtime_config_is_constructible_directly():
         prefetch_factor=2,
         visible_gpus=0,
         device_name="cpu",
+        distributed=False,
+        rank=0,
+        local_rank=0,
+        world_size=1,
     )
-    assert runtime.loader_kwargs()["num_workers"] == 2
+    assert runtime.is_main and runtime.loader_kwargs()["num_workers"] == 2
