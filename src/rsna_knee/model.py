@@ -11,12 +11,11 @@ from .constants import N_TARGETS
 
 
 class ConvNeXtSliceEncoder(nn.Module):
-    """ConvNeXt-Tiny encoder for grayscale slices or 2.5D triplets.
+    """ConvNeXt-Tiny encoder for 2.5D neighboring MRI slices.
 
-    ``pretrained_weights`` controls whether ImageNet weights are loaded.
-    ``normalize_input`` is independent so inference can rebuild a trained model
-    without downloading weights while still applying the exact normalization
-    used during training.
+    ``pretrained_weights`` controls weight initialization. ``normalize_input``
+    is independent, allowing checkpoint inference to preserve the training-time
+    ImageNet normalization without downloading pretrained weights again.
     """
 
     def __init__(
@@ -73,14 +72,15 @@ class ConvNeXtSliceEncoder(nn.Module):
 class KneeMILNet(nn.Module):
     """Hierarchical target-specific MIL model for multi-sequence knee MRI.
 
-    Each 2.5D slice triplet is encoded by a shared ConvNeXt-Tiny. Every target
-    gets its own attention over slice positions within each MRI stream and its
-    own attention over the available streams.
+    Active 2.5D slice triplets are encoded by a shared ConvNeXt-Tiny. Every
+    target gets independent attention over slice positions inside each stream
+    and independent attention over MRI streams. Missing streams are masked
+    *before* the backbone and therefore consume no ConvNeXt compute.
 
     Encoder work is split into bounded micro-batches. During training, optional
-    gradient checkpointing recomputes ConvNeXt activations in backward rather
-    than retaining all slice activations simultaneously, substantially reducing
-    peak memory before multi-GPU parallelism is introduced.
+    gradient checkpointing reduces activation memory by recomputing ConvNeXt in
+    backward. These choices provide a memory-stable single-GPU reference before
+    DistributedDataParallel is introduced.
     """
 
     def __init__(
@@ -103,6 +103,7 @@ class KneeMILNet(nn.Module):
 
         self.n_streams = int(n_streams)
         self.n_slices = int(n_slices)
+        self.in_channels = int(in_channels)
         self.encoder_batch_size = int(encoder_batch_size)
         self.gradient_checkpointing = bool(gradient_checkpointing)
         self.encoder = ConvNeXtSliceEncoder(
@@ -114,12 +115,10 @@ class KneeMILNet(nn.Module):
 
         self.slice_position = nn.Parameter(torch.randn(n_slices, d) * 0.02)
         self.stream_embedding = nn.Parameter(torch.randn(n_streams, d) * 0.02)
-
         self.slice_key = nn.Linear(d, d, bias=False)
         self.slice_query = nn.Parameter(torch.randn(N_TARGETS, d) * 0.02)
         self.stream_key = nn.Linear(d, d, bias=False)
         self.stream_query = nn.Parameter(torch.randn(N_TARGETS, d) * 0.02)
-
         self.norm = nn.LayerNorm(d)
         self.dropout = nn.Dropout(dropout)
         self.target_weight = nn.Parameter(torch.empty(N_TARGETS, d))
@@ -131,28 +130,51 @@ class KneeMILNet(nn.Module):
             return checkpoint(self.encoder, chunk, use_reentrant=False)
         return self.encoder(chunk)
 
-    def _encode_slices(self, volumes: torch.Tensor) -> torch.Tensor:
+    def _reshape_streams(self, volumes: torch.Tensor) -> tuple[torch.Tensor, int, int, int]:
         if volumes.ndim == 5:
             b, k, s, h, w = volumes.shape
-            flat = volumes.reshape(b * k * s, 1, h, w)
+            stream_volumes = volumes.reshape(b * k, s, 1, h, w)
+            channels = 1
         elif volumes.ndim == 6:
-            b, k, s, c, h, w = volumes.shape
-            flat = volumes.reshape(b * k * s, c, h, w)
+            b, k, s, channels, h, w = volumes.shape
+            stream_volumes = volumes.reshape(b * k, s, channels, h, w)
         else:
             raise ValueError(f"expected [B,K,S,H,W] or [B,K,S,C,H,W], got {tuple(volumes.shape)}")
         if k != self.n_streams:
             raise ValueError(f"model expects {self.n_streams} streams, received {k}")
         if s != self.n_slices:
             raise ValueError(f"model expects {self.n_slices} sampled slices, received {s}")
+        if channels != self.in_channels:
+            raise ValueError(f"model expects {self.in_channels} channels, received {channels}")
+        return stream_volumes, b, k, s
 
-        encoded = [self._encode_chunk(chunk) for chunk in flat.split(self.encoder_batch_size, dim=0)]
-        features = torch.cat(encoded, dim=0).reshape(b, k, s, -1)
-        return features + self.slice_position[None, None, :, :]
+    def _encode_slices(self, volumes: torch.Tensor, present: torch.Tensor) -> torch.Tensor:
+        stream_volumes, b, k, s = self._reshape_streams(volumes)
+        active_indices = torch.nonzero(present.reshape(-1) > 0, as_tuple=False).flatten()
+        d = self.encoder.out_dim
+
+        if active_indices.numel() == 0:
+            return volumes.new_zeros((b, k, s, d))
+
+        active = stream_volumes.index_select(0, active_indices)
+        flat = active.reshape(-1, *active.shape[2:])
+        encoded = torch.cat(
+            [self._encode_chunk(chunk) for chunk in flat.split(self.encoder_batch_size, dim=0)],
+            dim=0,
+        ).reshape(active.shape[0], s, d)
+
+        all_features = encoded.new_zeros((b * k, s, d)).index_copy(0, active_indices, encoded)
+        features = all_features.reshape(b, k, s, d)
+        active_mask = present[:, :, None, None].to(dtype=features.dtype)
+        return (features + self.slice_position[None, None, :, :]) * active_mask
 
     def forward(self, volumes: torch.Tensor, present: torch.Tensor) -> torch.Tensor:
         if present.ndim != 2:
             raise ValueError(f"present mask must be [B,K], got {tuple(present.shape)}")
-        features = self._encode_slices(volumes)
+        if present.shape[1] != self.n_streams:
+            raise ValueError(f"present mask has {present.shape[1]} streams, expected {self.n_streams}")
+
+        features = self._encode_slices(volumes, present)
         d = features.shape[-1]
         scale = math.sqrt(d)
 
@@ -160,7 +182,9 @@ class KneeMILNet(nn.Module):
         slice_scores = torch.einsum("bksd,td->bkts", slice_keys, self.slice_query) / scale
         slice_weights = torch.softmax(slice_scores, dim=-1)
         series = torch.einsum("bkts,bksd->bktd", slice_weights, features)
-        series = series + self.stream_embedding[None, :, None, :]
+        series = (
+            series + self.stream_embedding[None, :, None, :]
+        ) * present[:, :, None, None].to(dtype=series.dtype)
 
         stream_keys = self.stream_key(series)
         stream_scores = torch.einsum("bktd,td->btk", stream_keys, self.stream_query) / scale
