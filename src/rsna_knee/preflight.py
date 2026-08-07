@@ -4,9 +4,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
+import torch
 
+from .constants import DUAL_STREAMS
 from .data import backfill_series_metadata, build_series_index, load_series_csv
-from .dicom import find_series_dir, preprocess_volume, read_dicom_series
+from .dicom import find_series_dir, preprocess_triplets, read_dicom_series
 
 
 @dataclass
@@ -49,23 +51,25 @@ def run_preflight(
     sample_size: int = 24,
     stream_mode: str = "dual",
     image_size: int = 96,
+    triplet_gap: int = 1,
     seed: int = 2026,
     max_decode_failure_rate: float = 0.05,
     strict: bool = True,
 ) -> PreflightResult:
-    """Decode a representative sample before any expensive training run.
+    """Decode selected MRI series and run the real 2.5D preprocessing path."""
+    if sample_size < 1 or image_size < 1 or triplet_gap < 1:
+        raise ValueError("sample_size, image_size and triplet_gap must be positive")
+    if not 0 <= max_decode_failure_rate <= 1:
+        raise ValueError("max_decode_failure_rate must be in [0,1]")
+    if stream_mode not in {"best", "dual"}:
+        raise ValueError("stream_mode must be best or dual")
 
-    Missing anatomical streams are reported separately from actual failures.
-    The strict gate applies only to streams that were selected from metadata but
-    could not be found/decoded. A legitimate absent sequence therefore does not
-    make preflight fail by itself.
-    """
     root = Path(data_root)
     csv_path = Path(series_csv) if series_csv else root / f"{split}_series.csv"
     series = load_series_csv(csv_path)
     series, repair = backfill_series_metadata(series, root, split=split)
 
-    available = sorted(series["StudyInstanceUID"].astype(str).unique().tolist())
+    available = sorted(series["StudyInstanceUID"].unique().tolist())
     if study_uids is not None:
         wanted = set(map(str, study_uids))
         available = [uid for uid in available if uid in wanted]
@@ -80,24 +84,29 @@ def run_preflight(
     )
 
     index = build_series_index(series, chosen, stream_mode)
-    stream_names = sorted(next(iter(index.values())).keys()) if index else []
+    stream_names = list(DUAL_STREAMS) if stream_mode == "dual" else ["sagittal", "coronal", "axial"]
     possible = len(chosen) * len(stream_names)
     selected = found = decoded = candidate_files = file_failures = frames = 0
 
     for uid in chosen:
-        for stream in stream_names:
-            series_uid = index.get(uid, {}).get(stream)
+        for stream_name in stream_names:
+            series_uid = index.get(uid, {}).get(stream_name)
             if not series_uid:
                 continue
             selected += 1
-            path = find_series_dir(root, split, uid, str(series_uid))
+            path = find_series_dir(root, split, uid, series_uid)
             if path is None:
                 continue
             found += 1
             try:
                 volume, stats = read_dicom_series(path, return_stats=True)
-                tensor = preprocess_volume(volume, n_slices=min(4, len(volume)), image_size=image_size)
-                if tensor.numel() == 0 or not np.isfinite(tensor.numpy()).all():
+                tensor = preprocess_triplets(
+                    volume,
+                    n_slices=min(4, max(1, len(volume))),
+                    image_size=image_size,
+                    gap=triplet_gap,
+                )
+                if tensor.numel() == 0 or not torch.isfinite(tensor).all():
                     raise RuntimeError("non-finite or empty preprocessed tensor")
                 decoded += 1
                 candidate_files += int(stats["candidate_files"])
