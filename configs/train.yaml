@@ -5,7 +5,6 @@ train_series_csv: train_series.csv
 test_csv: test.csv
 test_series_csv: test_series.csv
 output_dir: runs/model
-
 seed: 2026
 n_folds: 3
 
@@ -20,8 +19,7 @@ pretrained: true
 normalize_input: true
 dropout: 0.25
 
-# Optional in-domain SSL initialization. First run:
-# rsna-knee pretrain --config configs/train.yaml
+# In-domain SSL
 ssl_encoder_checkpoint: null
 ssl_output_dir: runs/ssl
 ssl_epochs: 10
@@ -42,7 +40,7 @@ epochs: 20
 patience: 5
 grad_clip: 1.0
 
-# Weak supervision: report silence is PU/unlabeled.
+# Weak supervision / PU
 calibrate_teacher: true
 calibration_alpha: 5.0
 min_calibration_studies: 8
@@ -55,13 +53,17 @@ rank_min_confidence: 0.35
 rank_positive_threshold: 0.75
 rank_negative_threshold: 0.25
 
-# Two-pool sampling
+# Balanced study sampling
 trusted_fraction: 0.30
 trusted_pseudo_threshold: 0.60
 
-# MRI augmentation
+# MRI augmentation. Dataset production defaults additionally use gap {1,2},
+# center jitter ±2, ±5° rotation, 3% translation, 5% scale, gamma and bias field.
 noise_std: 0.02
 slice_dropout: 0.08
+
+# Deterministic inference TTA over slice-center offsets.
+tta_center_offsets: [-1, 0, 1]
 
 # DICOM safety
 preflight_before_train: true
@@ -73,8 +75,7 @@ strict_dicom_inference: true
 # Evaluation
 n_bootstrap: 2000
 
-# Runtime. Multi-GPU:
-# torchrun --standalone --nproc_per_node=<N> -m rsna_knee.cli train --config configs/train.yaml --fold 0
+# Runtime / DDP
 device: auto
 precision: auto
 ddp_backend: nccl
