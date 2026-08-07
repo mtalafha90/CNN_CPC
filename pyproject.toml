@@ -15,6 +15,7 @@ dependencies = [
   "PyYAML>=6.0",
   "torch>=2.2",
   "torchvision>=0.17",
+  "timm>=1.0",
 ]
 
 [project.scripts]
@@ -24,7 +25,5 @@ rsna-knee = "rsna_knee.cli:main"
 where = ["src"]
 
 [tool.pytest.ini_options]
-# Without this, running `pytest` from the repo root cannot import the package
-# unless it has first been pip-installed.
 pythonpath = ["src"]
 testpaths = ["tests"]
