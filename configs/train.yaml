@@ -19,7 +19,9 @@ pretrained: true
 normalize_input: true
 dropout: 0.25
 
-# In-domain SSL
+# In-domain SSL. Recommended first stage:
+#   rsna-knee pretrain --config configs/train.yaml
+# then set ssl_encoder_checkpoint: runs/ssl/ssl_encoder.pt
 ssl_encoder_checkpoint: null
 ssl_output_dir: runs/ssl
 ssl_epochs: 10
@@ -53,6 +55,19 @@ rank_min_confidence: 0.35
 rank_positive_threshold: 0.75
 rank_negative_threshold: 0.25
 
+# Cross-fitted image/report co-training.
+# Stage 1: leave null and train all folds. Each fold writes weak_oof.csv for the
+# non-gold report groups that fold never trained on.
+# Stage 2: set this to the three stage-1 weak_oof.csv files, change output_dir
+# (for example runs/cotrain), and train all folds again. The stage-2 teacher is
+# the fold-calibrated report teacher blended with independent image predictions.
+cotrain_image_oof: null
+cotrain_positive_threshold: 0.80
+cotrain_negative_threshold: 0.20
+cotrain_agreement_weight: 0.90
+cotrain_disagreement_weight: 0.05
+cotrain_blend: 0.50
+
 # Balanced study sampling
 trusted_fraction: 0.30
 trusted_pseudo_threshold: 0.60
@@ -76,6 +91,7 @@ strict_dicom_inference: true
 n_bootstrap: 2000
 
 # Runtime / DDP
+# torchrun --standalone --nproc_per_node=<N> -m rsna_knee.cli train --config configs/train.yaml --fold 0
 device: auto
 precision: auto
 ddp_backend: nccl
