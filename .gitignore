@@ -1,18 +1,31 @@
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
+venv/
 *.egg-info/
 .pytest_cache/
+.env
+.kaggle/
 
-# run outputs
-runs/
-*_output.csv
-
-# RSNA knee pipeline: cached volumes, checkpoints and submissions
+# Competition data and medical images
+data/
 cache/
+*.dcm
+*.zip
+
+# Model/training outputs
+runs/
+checkpoints/
 *.npy
 *.pt
-submission.csv
+*.pth
+*.ckpt
+*_output.csv
+submission*.csv
+pseudo_labels*.csv
+
+.ipynb_checkpoints/
+.DS_Store
 
 # LaTeX build artefacts
 *.aux
