@@ -1,6 +1,13 @@
-"""RSNA 2026 Knee MRI abnormality detection toolkit."""
+"""RSNA 2026 knee MRI abnormality detection pipeline."""
 
-from .constants import N_TARGETS, SUBMISSION_COLUMNS, TARGETS, TARGET_SLUGS
+from .constants import DUAL_STREAMS, N_STREAMS, N_TARGETS, SUBMISSION_COLUMNS, TARGETS, TARGET_SLUGS
 
-__all__ = ["TARGETS", "TARGET_SLUGS", "SUBMISSION_COLUMNS", "N_TARGETS"]
-__version__ = "0.1.0"
+__all__ = [
+    "TARGETS",
+    "TARGET_SLUGS",
+    "SUBMISSION_COLUMNS",
+    "N_TARGETS",
+    "DUAL_STREAMS",
+    "N_STREAMS",
+]
+__version__ = "0.2.0"
