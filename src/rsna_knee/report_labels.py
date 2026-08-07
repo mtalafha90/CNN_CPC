@@ -27,11 +27,22 @@ LEXICON = {
     "Fracture": ["fracture", "fractura", "fraktur", "breuk", "kirik", "prijelom"],
 }
 
+# The four states the rule engine can assign. They are the unit that
+# `calibration.fit_calibration` maps to an empirical P(y=1), so they are part
+# of the public interface rather than an implementation detail.
+STATE_POSITIVE = "positive"
+STATE_NEGATED = "negated"
+STATE_UNCERTAIN = "uncertain"
+STATE_UNMENTIONED = "unmentioned"
+STATES = (STATE_POSITIVE, STATE_NEGATED, STATE_UNCERTAIN, STATE_UNMENTIONED)
+
+
 @dataclass
 class RulePrediction:
     probability: float
     confidence: float
     mentioned: bool
+    state: str = STATE_UNMENTIONED
 
 
 def predict_target(text: str, target: str) -> RulePrediction:
@@ -51,12 +62,12 @@ def predict_target(text: str, target: str) -> RulePrediction:
             else:
                 positive = True
     if positive:
-        return RulePrediction(0.92, 0.80, True)
+        return RulePrediction(0.92, 0.80, True, STATE_POSITIVE)
     if any_mention and negated:
-        return RulePrediction(0.06, 0.80, True)
+        return RulePrediction(0.06, 0.80, True, STATE_NEGATED)
     if any_mention:
-        return RulePrediction(0.50, 0.12, True)
-    return RulePrediction(0.50, 0.03, False)
+        return RulePrediction(0.50, 0.12, True, STATE_UNCERTAIN)
+    return RulePrediction(0.50, 0.03, False, STATE_UNMENTIONED)
 
 
 def predict_report(text: str) -> tuple[np.ndarray, np.ndarray]:
@@ -70,6 +81,20 @@ def label_dataframe(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     for i, text in enumerate(df["Report"].fillna("").astype(str)):
         probs[i], conf[i] = predict_report(text)
     return probs, conf
+
+
+def state_dataframe(df: pd.DataFrame) -> np.ndarray:
+    """Return the rule state per study and target as an ``[n, 12]`` array.
+
+    States, rather than the hard-coded probabilities, are what
+    :func:`rsna_knee.calibration.fit_calibration` converts into empirical
+    probabilities using the gold labels of a training fold.
+    """
+    states = np.empty((len(df), len(TARGETS)), dtype=object)
+    for i, text in enumerate(df["Report"].fillna("").astype(str)):
+        for j, target in enumerate(TARGETS):
+            states[i, j] = predict_target(text, target).state
+    return states
 
 
 def combine_gold_and_pseudo(df: pd.DataFrame, pseudo_probs: np.ndarray, pseudo_conf: np.ndarray, gold_weight: float = 8.0):

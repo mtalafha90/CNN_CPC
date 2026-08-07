@@ -1,0 +1,64 @@
+# Local workstation training. Point data_root at your copy of the competition
+# data; everything else is tuned for a single machine with one or more GPUs.
+#
+#   rsna-knee runtime                       # check what will be used
+#   rsna-knee train --config configs/local_gpu.yaml --fold 0
+
+data_root: /data/rsna-knee-abnormality-detection
+train_csv: train.csv
+train_series_csv: train_series.csv
+test_csv: test.csv
+test_series_csv: test_series.csv
+output_dir: runs/local
+
+seed: 2026
+n_folds: 3
+stream_mode: best
+
+# --- Hardware -------------------------------------------------------------
+# device:      auto | cpu | cuda
+# precision:   auto | bf16 | fp16 | fp32
+#              auto picks bf16 on Ampere or newer (RTX 30xx/40xx/50xx, A100,
+#              H100) and fp16 on older cards. bf16 needs no gradient scaler.
+# num_workers: omit or set null to use (CPU cores - 1), capped at 16.
+#              DICOM decoding is the bottleneck, so this matters more than the
+#              model size — one worker will starve any modern GPU.
+device: auto
+precision: auto
+num_workers: null
+persistent_workers: true
+prefetch_factor: 4
+# Split each batch across every visible GPU. batch_size must be at least the
+# number of GPUs for all of them to receive work.
+data_parallel: true
+
+# --- Model and optimisation ----------------------------------------------
+n_slices: 16
+image_size: 224
+batch_size: 8
+pretrained: true
+dropout: 0.25
+lr: 0.0002
+weight_decay: 0.0001
+epochs: 15
+patience: 4
+
+# --- Supervision ----------------------------------------------------------
+# calibrate_teacher: learn P(y=1 | rule state) from the gold studies OUTSIDE
+#   the validation fold, instead of using the rule engine's fixed 0.92 / 0.06.
+#   Never calibrate on the fold being scored — that is circular validation.
+# calibration_alpha: smoothing towards each target's prevalence. Higher values
+#   trust the prior more, which suits cells holding only a few studies.
+calibrate_teacher: true
+calibration_alpha: 5.0
+min_calibration_studies: 8
+gold_weight: 8.0
+
+# --- Augmentation ---------------------------------------------------------
+noise_std: 0.02
+slice_dropout: 0.08
+
+# --- Evaluation -----------------------------------------------------------
+# Bootstrap replicates behind the gold macro-AUC interval. With 58 gold
+# studies the interval is roughly +/- 0.04, so treat small gains with care.
+n_bootstrap: 2000
