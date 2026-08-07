@@ -9,7 +9,7 @@ output_dir: runs/model
 seed: 2026
 n_folds: 3
 
-# Fixed MRI/model path: dual-sequence 2.5D + hierarchical ConvNeXt-Tiny MIL.
+# MRI/model
 n_slices: 16
 image_size: 224
 triplet_gap: 1
@@ -28,16 +28,22 @@ epochs: 20
 patience: 5
 grad_clip: 1.0
 
-# Weak supervision
+# Weak supervision: report silence is PU/unlabeled.
 calibrate_teacher: true
 calibration_alpha: 5.0
 min_calibration_studies: 8
 gold_weight: 8.0
+unmentioned_weight: 0.0
+uncertain_weight_cap: 0.10
 rank_loss_weight: 0.10
 rank_pairs_per_target: 32
 rank_min_confidence: 0.35
 rank_positive_threshold: 0.75
 rank_negative_threshold: 0.25
+
+# Two-pool sampling. Gold + very reliable pseudo rows form the trusted pool.
+trusted_fraction: 0.30
+trusted_pseudo_threshold: 0.60
 
 # MRI augmentation
 noise_std: 0.02
@@ -53,9 +59,11 @@ strict_dicom_inference: true
 # Evaluation
 n_bootstrap: 2000
 
-# Runtime. Proper multi-GPU DDP is intentionally the next development step.
+# Runtime. Launch multi-GPU training with:
+# torchrun --standalone --nproc_per_node=<N> -m rsna_knee.cli train --config configs/train.yaml --fold 0
 device: auto
 precision: auto
+ddp_backend: nccl
 num_workers: null
 persistent_workers: true
 prefetch_factor: 4
