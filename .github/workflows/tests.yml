@@ -14,10 +14,14 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - name: Install package and test tools
+      - name: Install package and tests
         run: |
           python -m pip install --upgrade pip
           pip install -e .
           pip install pytest
+      - name: Compile Python sources
+        run: python -m compileall -q src tests kaggle
+      - name: Verify dependencies
+        run: pip check
       - name: Run tests
         run: pytest -q
