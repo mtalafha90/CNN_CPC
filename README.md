@@ -1,117 +1,71 @@
 # CNN_CPC — RSNA Knee Abnormality Detection
 
-Reproducible PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** Kaggle competition.
+Clean PyTorch pipeline for the **2026 RSNA Knee Abnormality Detection** challenge.
 
-> **Competition status (snapshot: 2026-08-07):** the competition is still open. This repository avoids winner claims and records only measured OOF/leaderboard results.
+The repository now exposes one production path only. Historical model branches and runnable experiment configs were removed so training, validation and submission use the same data/model contract.
 
-## Documentation
-
-- [Public competition methodology review](README_KAGGLE_METHODS.md)
-- [Current repository technical review](docs/REPO_REVIEW_2026-08-07.md)
-- [Competition notes](docs/competition.md)
-- [Dataset handling](docs/data.md)
-- [Experiment strategy](docs/strategy.md)
-- [References](docs/references.md)
-
-## Core problem
-
-Each MRI study contains multiple DICOM series and must receive 12 probabilities:
-
-`ACL, MCL, Medial Meniscus, Lateral Meniscus, Medial OA, Lateral OA, PF OA, Effusion, Synovitis, Baker's, Contusion, Fracture`.
-
-The metric is **macro ROC-AUC across the 12 targets**.
-
-The supervision structure is unusual:
-
-- 4,407 training studies;
-- only 58 studies with explicit gold labels;
-- 4,349 report-supervised studies;
-- multi-plane/multi-sequence MRI metadata in `train_series.csv`.
-
-Radiology reports are therefore a **training teacher**. Validation is gold-only and final inference is image-only by default.
-
-## Current architecture and capabilities
+## Production design
 
 ```text
-Radiology report (training only)
+training report
   -> multilingual rule states
   -> fold-safe empirical calibration
-  -> soft targets + per-target confidence
+  -> soft target + confidence
 
 MRI study
-  -> DICOM metadata repair
-  -> physical slice ordering
-  -> 3-stream or 6-stream sequence routing
-  -> 2D slices OR 2.5D [z-gap,z,z+gap] triplets
-  -> ResNet18 / ConvNeXt-Tiny / timm-DINOv2-compatible / compact 3D encoder
-  -> mean / max / attention / Top-K feature pooling
-  -> shared stream attention OR 12 target-specific queries
-  -> 12 logits
+  -> metadata repair
+  -> physical DICOM ordering
+  -> sagittal/coronal/axial × fluid/structural routing (up to six streams)
+  -> uniformly sampled 2.5D [z-1,z,z+1] triplets
+  -> shared pretrained ConvNeXt-Tiny
+  -> target-specific attention over slices
+  -> target-specific attention over MRI streams
+  -> 12 study-level logits
 
-Loss
+objective
   -> confidence-weighted BCE
-  -> optional pairwise ranking loss
+  -> small confidence-gated pairwise ranking term
 
-Validation
-  -> gold-only OOF
-  -> per-target AUC
-  -> macro AUC
-  -> bootstrap interval
-  -> paired bootstrap run comparison
+validation
+  -> official gold cells only
+  -> NaNs preserved for unannotated cells
+  -> macro ROC AUC + per-target AUC
+  -> study bootstrap confidence interval
 ```
 
-## DICOM safety
+Radiology reports are used **only to create training supervision**. Submission inference is MRI-only.
 
-Long training runs should begin with a real pixel-decode audit:
+This architecture is the repository's best-current engineering/methodology choice; it is not claimed to be leaderboard-optimal until real OOF experiments establish that.
 
-```bash
-rsna-knee preflight \
-  --data-root /path/to/rsna-knee-abnormality-detection \
-  --split train \
-  --sample-size 24
+## Repository layout
+
+```text
+configs/train.yaml                 single supported configuration
+src/rsna_knee/
+  calibration.py                   fold-safe report-teacher calibration
+  cli.py                           command line interface
+  constants.py                     targets/submission schema
+  data.py                          CSV validation, folds, series routing
+  dataset.py                       study-level DICOM dataset
+  dicom.py                         DICOM decoding + 2.5D preprocessing
+  dicom_meta.py                    metadata fallback inference
+  evaluation.py                    NaN-safe AUC/bootstrap comparisons
+  inference.py                     checkpoint-driven MRI-only inference
+  model.py                         hierarchical ConvNeXt-Tiny MIL model
+  preflight.py                     real-pixel DICOM audit
+  report_labels.py                 multilingual rule teacher
+  runtime.py                       single-device AMP/DataLoader runtime
+  training.py                      leakage-safe fold training
+kaggle/
+  train_template.py
+  submit_template.py
+tests/
+docs/
 ```
 
-The preflight checks selected streams, path resolution, actual pixel decoding, frame counts, preprocessing, and metadata repair. Training runs this gate automatically by default and refuses to start if the sampled stream failure rate exceeds the configured threshold.
+`docs/competition.md` is the preserved competition-description document. The public-code research review remains in `README_KAGGLE_METHODS.md` as background methodology, not as runnable architecture choices.
 
-DICOM handling includes:
-
-- physical ordering from `ImageOrientationPatient` + `ImagePositionPatient`;
-- `InstanceNumber` fallback;
-- suffix-less/`.ima`/`.dicom` instances;
-- enhanced multi-frame DICOM;
-- rescale slope/intercept;
-- `MONOCHROME1` inversion;
-- mixed in-plane size normalization;
-- robust percentile intensity normalization;
-- decode/file statistics for preflight.
-
-## Frozen experiment configs
-
-Use the frozen configs instead of manually changing several knobs at once:
-
-| Experiment | Main change |
-|---|---|
-| `configs/e01_baseline.yaml` | 2D ResNet18, 3 streams, shared attention |
-| `configs/e02_2p5d_resnet18.yaml` | E01 + true neighboring-slice 2.5D input |
-| `configs/e03_target_attention.yaml` | E02 + per-target stream queries |
-| `configs/e04_dual_stream.yaml` | E03 + six fluid/structural streams |
-| `configs/e05_convnext_tiny.yaml` | E04 + ConvNeXt-Tiny backbone |
-| `configs/e06_rank_loss.yaml` | E05 + pairwise AUC-surrogate ranking loss |
-| `configs/e07_topk_mil.yaml` | E05 + Top-K feature pooling, ranking loss off |
-| `configs/e08_dinov2_timm.yaml` | DINOv2 ViT-S/14 through timm |
-| `configs/e09_small3d.yaml` | compact 3D complementary arm |
-
-The model layer also supports generic timm backbones:
-
-```yaml
-backbone: timm:<model_name>
-```
-
-The DINOv2 config uses `timm:vit_small_patch14_dinov2.lvd142m`. Check that this exact name exists in the installed timm release and verify the current competition rules before enabling pretrained external weights. Kaggle submission notebooks have Internet disabled, so allowed pretrained weights must be available offline.
-
-The 3D arm is deliberately small. Its purpose is to test **complementary inter-slice signal**, not to assume that 3D is automatically superior to 2.5D.
-
-## Installation
+## Install
 
 ```bash
 git clone https://github.com/mtalafha90/CNN_CPC.git
@@ -123,119 +77,100 @@ pip install pytest
 pytest -q
 ```
 
-GitHub Actions runs the test suite on pushes to `main` and on pull requests.
+## Configure
 
-## Expected data layout
+Edit only the machine-specific paths in:
 
 ```text
-DATA_ROOT/
-├── train.csv
-├── train_series.csv
-├── test.csv
-├── test_series.csv
-├── train_series/<StudyInstanceUID>/<SeriesInstanceUID>/*
-└── test_series/<StudyInstanceUID>/<SeriesInstanceUID>/*
+configs/train.yaml
 ```
 
-## Inspect data
+The default model settings are deliberately explicit and checkpointed. Inference reconstructs preprocessing/model settings from each checkpoint, preventing a stale YAML from changing the trained input contract.
+
+## Inspect and preflight
 
 ```bash
-rsna-knee inspect --data-root DATA_ROOT
+rsna-knee inspect --data-root /path/to/rsna-knee-abnormality-detection
+
+rsna-knee preflight \
+  --data-root /path/to/rsna-knee-abnormality-detection \
+  --split train \
+  --sample-size 24
 ```
 
-## Train E01
+Preflight performs actual pixel decoding. It reports legitimate missing MRI streams separately from selected-stream path/decode failures; only the latter trip the strict failure threshold.
 
-Change only `data_root` in the experiment config, then run:
+## Train all folds
 
 ```bash
 for fold in 0 1 2; do
-  rsna-knee train --config configs/e01_baseline.yaml --fold "$fold"
+  rsna-knee train --config configs/train.yaml --fold "$fold"
 done
 ```
 
 Each fold writes:
 
-- `best.pt`
-- `oof.csv`
-- `history.csv`
-- `config.json`
-- `fold_assignments.csv`
-- `calibration.json` when calibration is active
-- `metadata_repair.json`
-- `preflight.json`
-- `bootstrap.json`
-- `runtime.json` with elapsed time, device, workers, and peak GPU memory
+- `best.pt` — self-describing model checkpoint;
+- `oof.csv` — gold-fold predictions;
+- `history.csv`;
+- `config.json`;
+- `fold_assignments.csv`;
+- `calibration.json` when calibration is active;
+- `metadata_repair.json`;
+- `preflight.json`;
+- `bootstrap.json`;
+- `runtime.json`.
 
-## Evaluate the full OOF baseline
-
-```bash
-rsna-knee evaluate \
-  --train-csv DATA_ROOT/train.csv \
-  --oof runs/e01_baseline/fold0/oof.csv \
-        runs/e01_baseline/fold1/oof.csv \
-        runs/e01_baseline/fold2/oof.csv \
-  --out runs/e01_baseline/evaluation.json
-```
-
-## Compare E02 against E01
+## Evaluate OOF
 
 ```bash
 rsna-knee evaluate \
-  --train-csv DATA_ROOT/train.csv \
-  --oof runs/e01_baseline/fold0/oof.csv \
-        runs/e01_baseline/fold1/oof.csv \
-        runs/e01_baseline/fold2/oof.csv \
-  --compare-oof runs/e02_2p5d_resnet18/fold0/oof.csv \
-                runs/e02_2p5d_resnet18/fold1/oof.csv \
-                runs/e02_2p5d_resnet18/fold2/oof.csv
+  --train-csv /path/to/train.csv \
+  --oof runs/model/fold0/oof.csv \
+        runs/model/fold1/oof.csv \
+        runs/model/fold2/oof.csv \
+  --out runs/model/evaluation.json
 ```
 
-The paired bootstrap estimates the median macro-AUC difference, an interval for that difference, and how often the second run wins under study resampling.
+For a future controlled alternative, pass its OOF files with `--compare-oof` to obtain a paired bootstrap difference.
 
-## Heterogeneous model ensemble
-
-After producing aligned prediction files from different model families, rank-average them:
-
-```bash
-rsna-knee ensemble \
-  --predictions submission_2p5d.csv submission_3d.csv \
-  --method rank \
-  --out submission_ensemble.csv
-```
-
-Rank averaging is useful for an AUC competition because it reduces probability-scale differences between heterogeneous models. Use OOF predictions first to decide whether an ensemble actually helps before submitting it.
-
-## Inference and submission
-
-Inference is **image-only by default**:
+## Inference
 
 ```bash
 rsna-knee infer \
-  --config configs/e01_baseline.yaml \
-  --checkpoints /path/fold0.pt /path/fold1.pt /path/fold2.pt \
-  --alpha 1.0 \
+  --config configs/train.yaml \
+  --checkpoints runs/model/fold0/best.pt \
+                runs/model/fold1/best.pt \
+                runs/model/fold2/best.pt \
   --out submission.csv
 ```
 
-Report fusion is rejected unless `allow_test_report_fusion: true` is explicitly set after verifying that a test-like dataset genuinely contains report text.
+Inference fails loudly for missing/incompatible checkpoints, mismatched stream ordering, duplicate IDs, unreadable required DICOM series, non-finite predictions or an invalid submission schema.
 
-Submission columns are exactly:
+## Runtime and memory
 
-```text
-StudyInstanceUID,ACL,MCL,Medial Meniscus,Lateral Meniscus,Medial OA,Lateral OA,PF OA,Effusion,Synovitis,Baker's,Contusion,Fracture
+```bash
+rsna-knee runtime --config configs/train.yaml
 ```
 
-## Development policy
+The current runtime is intentionally **single-device**. It uses BF16 where natively supported, otherwise FP16 on CUDA, optimized DICOM DataLoader workers, TF32, bounded ConvNeXt encoder micro-batches, and gradient checkpointing to control memory.
 
-1. Freeze folds and preserve OOF predictions.
-2. Change one major factor per experiment.
-3. Validate only on official gold labels.
-4. Use paired bootstrap before accepting small improvements.
-5. Treat pretrained/external models as rule-dependent features, not assumptions.
-6. Do not commit competition DICOMs, credentials, or large checkpoints.
-7. Do not report synthetic, teacher-only, or README demonstration metrics as competition results.
-8. Keep the 3D arm only if it improves OOF itself or improves a 2.5D+3D ensemble beyond validation noise.
+`nn.DataParallel` was deliberately removed. **The next implementation step is proper multi-GPU DistributedDataParallel (DDP)** so data sharding, synchronization and validation aggregation are explicit and scalable.
 
-## What remains data-dependent
+## Correctness guarantees enforced in code
 
-The code-side recommendations are implemented. What cannot be completed without the mounted competition data and suitable GPU is the **actual E01-E09 experiment campaign**: training the folds, collecting OOF predictions/runtime/memory, comparing runs with paired bootstrap, and retaining only the methods supported by measured results.
+- Unlabeled target cells are never converted to negatives.
+- Official gold cells override pseudo-labels target-by-target.
+- Report-teacher calibration never uses the validation fold.
+- Duplicate normalized reports cannot cross the fold's train/validation boundary.
+- Validation uses raw official target cells with NaNs preserved.
+- Test-time report fusion does not exist in the production path.
+- Dual routing avoids duplicate fluid/structural series when alternatives exist.
+- DICOM preflight distinguishes absent sequences from decode failures.
+- Pretrained input normalization is preserved at checkpoint inference without re-downloading weights.
+
+## Competition-rule caution
+
+Before competition submission, verify the current Kaggle rules for pretrained/external weights and package availability. Do not upload competition DICOMs, reports, credentials or private data to this repository.
+
+See `docs/data.md`, `docs/strategy.md`, `docs/references.md`, and the preserved `docs/competition.md` for supporting documentation.
