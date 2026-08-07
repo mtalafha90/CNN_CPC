@@ -23,8 +23,8 @@ class PreflightResult:
     candidate_files: int
     file_decode_failures: int
     decoded_frames: int
-    metadata_missing: int
-    metadata_repaired: int
+    metadata_fields_missing: int
+    metadata_fields_repaired: int
     decode_failure_rate: float
     missing_stream_rate: float
 
@@ -38,7 +38,7 @@ class PreflightResult:
             f"decoded={self.streams_decoded}/{self.streams_selected} "
             f"decode_failure_rate={self.decode_failure_rate:.1%} "
             f"missing_stream_rate={self.missing_stream_rate:.1%} "
-            f"metadata_repaired={self.metadata_repaired}/{self.metadata_missing}"
+            f"metadata_fields_repaired={self.metadata_fields_repaired}/{self.metadata_fields_missing}"
         )
 
 
@@ -56,7 +56,6 @@ def run_preflight(
     max_decode_failure_rate: float = 0.05,
     strict: bool = True,
 ) -> PreflightResult:
-    """Decode selected MRI series and run the real 2.5D preprocessing path."""
     if sample_size < 1 or image_size < 1 or triplet_gap < 1:
         raise ValueError("sample_size, image_size and triplet_gap must be positive")
     if not 0 <= max_decode_failure_rate <= 1:
@@ -82,7 +81,6 @@ def run_preflight(
         if len(available) > sample_size
         else available
     )
-
     index = build_series_index(series, chosen, stream_mode)
     stream_names = list(DUAL_STREAMS) if stream_mode == "dual" else ["sagittal", "coronal", "axial"]
     possible = len(chosen) * len(stream_names)
@@ -116,8 +114,12 @@ def run_preflight(
                 continue
 
     missing = possible - selected
-    decode_failure_rate = 1.0 - decoded / max(selected, 1)
-    missing_stream_rate = missing / max(possible, 1)
+    metadata_fields_missing = int(
+        repair["missing_plane"] + repair["missing_fluid"] + repair["missing_fat_suppression"]
+    )
+    metadata_fields_repaired = int(
+        repair["repaired_plane"] + repair["repaired_fluid"] + repair["repaired_fat_suppression"]
+    )
     result = PreflightResult(
         split=split,
         studies_sampled=len(chosen),
@@ -129,17 +131,16 @@ def run_preflight(
         candidate_files=candidate_files,
         file_decode_failures=file_failures,
         decoded_frames=frames,
-        metadata_missing=int(repair["missing"]),
-        metadata_repaired=int(repair["repaired"]),
-        decode_failure_rate=float(decode_failure_rate),
-        missing_stream_rate=float(missing_stream_rate),
+        metadata_fields_missing=metadata_fields_missing,
+        metadata_fields_repaired=metadata_fields_repaired,
+        decode_failure_rate=float(1.0 - decoded / max(selected, 1)),
+        missing_stream_rate=float(missing / max(possible, 1)),
     )
     if selected == 0:
         raise RuntimeError(result.summary() + "; no MRI streams were selectable")
-    if strict and decode_failure_rate > max_decode_failure_rate:
+    if strict and result.decode_failure_rate > max_decode_failure_rate:
         raise RuntimeError(
             result.summary()
-            + f" exceeds max_decode_failure_rate={max_decode_failure_rate:.1%}; "
-            "fix DICOM/path/codec issues before training"
+            + f" exceeds max_decode_failure_rate={max_decode_failure_rate:.1%}; fix DICOM/path/codec issues before training"
         )
     return result
