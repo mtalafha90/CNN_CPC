@@ -1,0 +1,23 @@
+data_root: /kaggle/input/rsna-knee-abnormality-detection
+train_csv: train.csv
+train_series_csv: train_series.csv
+test_csv: test.csv
+test_series_csv: test_series.csv
+output_dir: /kaggle/working/runs
+
+seed: 2026
+n_folds: 3
+stream_mode: best
+n_slices: 16
+image_size: 224
+batch_size: 2
+num_workers: 2
+pretrained: false
+dropout: 0.25
+lr: 0.0002
+weight_decay: 0.0001
+epochs: 10
+patience: 3
+gold_weight: 8.0
+noise_std: 0.02
+slice_dropout: 0.08
