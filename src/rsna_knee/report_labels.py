@@ -27,9 +27,6 @@ LEXICON = {
     "Fracture": ["fracture", "fractura", "fraktur", "breuk", "kirik", "prijelom"],
 }
 
-# The four states the rule engine can assign. They are the unit that
-# `calibration.fit_calibration` maps to an empirical P(y=1), so they are part
-# of the public interface rather than an implementation detail.
 STATE_POSITIVE = "positive"
 STATE_NEGATED = "negated"
 STATE_UNCERTAIN = "uncertain"
@@ -72,7 +69,10 @@ def predict_target(text: str, target: str) -> RulePrediction:
 
 def predict_report(text: str) -> tuple[np.ndarray, np.ndarray]:
     pred = [predict_target(text, t) for t in TARGETS]
-    return np.array([x.probability for x in pred], np.float32), np.array([x.confidence for x in pred], np.float32)
+    return (
+        np.array([x.probability for x in pred], np.float32),
+        np.array([x.confidence for x in pred], np.float32),
+    )
 
 
 def label_dataframe(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
@@ -84,12 +84,7 @@ def label_dataframe(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
 
 
 def state_dataframe(df: pd.DataFrame) -> np.ndarray:
-    """Return the rule state per study and target as an ``[n, 12]`` array.
-
-    States, rather than the hard-coded probabilities, are what
-    :func:`rsna_knee.calibration.fit_calibration` converts into empirical
-    probabilities using the gold labels of a training fold.
-    """
+    """Return the rule state per study and target as an ``[n, 12]`` array."""
     states = np.empty((len(df), len(TARGETS)), dtype=object)
     for i, text in enumerate(df["Report"].fillna("").astype(str)):
         for j, target in enumerate(TARGETS):
@@ -97,11 +92,22 @@ def state_dataframe(df: pd.DataFrame) -> np.ndarray:
     return states
 
 
-def combine_gold_and_pseudo(df: pd.DataFrame, pseudo_probs: np.ndarray, pseudo_conf: np.ndarray, gold_weight: float = 8.0):
+def combine_gold_and_pseudo(
+    df: pd.DataFrame,
+    pseudo_probs: np.ndarray,
+    pseudo_conf: np.ndarray,
+    gold_weight: float = 8.0,
+):
+    """Combine pseudo-labels with official labels at the target-cell level.
+
+    A partially annotated row must not turn every missing target into a negative.
+    Only finite official target cells override the teacher and receive the gold
+    weight; all other cells retain their pseudo-label and confidence.
+    """
     targets = pseudo_probs.astype(np.float32).copy()
     weights = pseudo_conf.astype(np.float32).copy()
-    mask = df[TARGETS].notna().any(axis=1).to_numpy()
-    if mask.any():
-        targets[mask] = df.loc[mask, TARGETS].fillna(0).astype(np.float32).to_numpy()
-        weights[mask] = gold_weight
+    gold = df[TARGETS].to_numpy(dtype=np.float32)
+    mask = np.isfinite(gold)
+    targets[mask] = gold[mask]
+    weights[mask] = float(gold_weight)
     return targets, weights
