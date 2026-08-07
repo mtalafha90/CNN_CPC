@@ -4,6 +4,14 @@ Reproducible PyTorch research baseline for the **2026 RSNA Knee Abnormality Dete
 
 > **Competition status (snapshot: 2026-08-07):** the competition is still open, so there are no winning solutions to reproduce yet. This repository therefore documents the current challenge, reviews public early approaches and the MRNet literature, and implements an honest baseline that can be trained and submitted through Kaggle.
 
+## Public Kaggle/code methodology review
+
+A detailed review of the currently discoverable public competition code, methodology, and recurring techniques is now available in:
+
+**[README_KAGGLE_METHODS.md](README_KAGGLE_METHODS.md)**
+
+It covers weak supervision from reports, multilingual/LLM pseudo-labeling, DICOM geometry, sequence routing, 2.5D triplets, DINOv2, ConvNeXt/EfficientNet, target-specific MIL, ranking loss, leakage-safe validation, efficiency engineering, 3D complementary models, and a prioritized experiment matrix for `CNN_CPC`.
+
 ## What the challenge asks
 
 Given a knee MRI study containing multiple DICOM series, predict 12 binary abnormalities:
