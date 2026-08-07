@@ -1,27 +1,25 @@
-"""Kaggle Code Competition image-only inference template.
+"""Kaggle image-only submission template for the production CNN_CPC model.
 
-Attach the code repository plus a Kaggle Dataset containing the checkpoints for
-ONE frozen experiment. The notebook should run with Internet OFF and write
-`/kaggle/working/submission.csv`. Report text is not required at inference.
+Attach the code repository and a Kaggle Dataset containing `fold*/best.pt`.
+Checkpoint metadata defines the MRI preprocessing/model contract, so the runtime
+config only supplies the competition data location and hardware settings.
 """
 from pathlib import Path
+
 import yaml
-from rsna_knee.inference import infer_checkpoints, validate_submission
+
+from rsna_knee.inference import infer_checkpoints
 
 CODE_ROOT = Path("/kaggle/input/<your-code-dataset>/CNN_CPC")
-MODEL_ROOT = Path("/kaggle/input/<your-model-dataset>/runs/e01_baseline")
-EXPERIMENT = "e01_baseline"
+MODEL_ROOT = Path("/kaggle/input/<your-model-dataset>/runs/model")
 
-config = yaml.safe_load((CODE_ROOT / "configs" / f"{EXPERIMENT}.yaml").read_text())
+config = yaml.safe_load((CODE_ROOT / "configs/train.yaml").read_text())
 config["data_root"] = "/kaggle/input/rsna-knee-abnormality-detection"
-config["allow_test_report_fusion"] = False
+
 checkpoints = sorted(MODEL_ROOT.glob("fold*/best.pt"))
 if not checkpoints:
     raise FileNotFoundError(f"no fold checkpoints found under {MODEL_ROOT}")
 
-sub = infer_checkpoints(
-    config["data_root"], checkpoints, config, fusion_alpha=1.0
-)
-validate_submission(sub)
-sub.to_csv("/kaggle/working/submission.csv", index=False)
-print(sub.head())
+submission = infer_checkpoints(config["data_root"], checkpoints, config)
+submission.to_csv("/kaggle/working/submission.csv", index=False)
+print(submission.head())
