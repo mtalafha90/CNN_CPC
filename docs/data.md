@@ -2,21 +2,23 @@
 
 ## CSV contracts
 
-`train.csv` must contain `StudyInstanceUID`, `Report`, and all 12 target columns. `test.csv` must contain `StudyInstanceUID`; report text is not required for inference.
+`train.csv` contains `StudyInstanceUID`, `Report`, and the 12 target columns. `test.csv` requires `StudyInstanceUID`; reports are not required at inference.
 
-`train_series.csv` / `test_series.csv` must contain:
+Series CSVs require `StudyInstanceUID`, `SeriesInstanceUID`, `Fluid_Sensitive`, `Fat_Suppression`, and `Anatomical_Plane`. Duplicate study/series rows and missing UIDs are rejected.
 
-- `StudyInstanceUID`
-- `SeriesInstanceUID`
-- `Fluid_Sensitive`
-- `Fat_Suppression`
-- `Anatomical_Plane`
+## Nullable sequence metadata
 
-UIDs are normalized to strings on load and duplicate study/series rows are rejected.
+Missing `Fluid_Sensitive` and `Fat_Suppression` values remain **unknown** when the CSV is loaded. They are not converted to `False`. DICOM backfill independently repairs three fields:
 
-## Production series routing
+- anatomical plane from image orientation;
+- fluid sensitivity from sequence timing/weighting;
+- fat suppression from acquisition metadata.
 
-The production model always builds up to six semantic MRI streams:
+A populated CSV field remains authoritative. If a field is still unknown after repair, routing uses a conservative `False` fallback only at the final scoring step.
+
+## Six-stream routing
+
+The production study contract is:
 
 ```text
 sagittal_fluid       sagittal_structural
@@ -24,65 +26,59 @@ coronal_fluid        coronal_structural
 axial_fluid          axial_structural
 ```
 
-The routing table is built with a single `groupby` over the series CSV rather than repeatedly scanning the full table for every study. Within each plane, fluid/fat-suppressed metadata ranks the fluid candidate while non-fat-suppressed/non-fluid metadata ranks the structural candidate. When multiple candidates exist, the router avoids placing the same series in both semantic slots.
+Routing is built with one grouped pass over the series table. Fluid/fat-suppressed candidates rank toward the fluid slot; non-fluid/non-fat-suppressed candidates rank toward the structural slot. When alternatives exist, the same MRI series is not placed in both slots. Missing streams remain absent and are masked before ConvNeXt, so they consume no backbone compute.
 
-Missing streams remain explicitly absent and are masked by the model; they are never replaced with a fabricated MRI signal.
+## DICOM decoding
 
-## Metadata repair
+The reader supports `.dcm`, `.dicom`, `.ima`, suffix-less, mixed-suffix, and enhanced multi-frame layouts. It applies rescale slope/intercept and `MONOCHROME1` inversion, normalizes mixed in-plane dimensions, and sorts slices using physical orientation/position with deterministic fallback.
 
-The series CSV is authoritative when `Anatomical_Plane` is populated. Blank plane entries are repaired from DICOM headers before routing:
+## 2.5D sampling
 
-- plane from `ImageOrientationPatient` geometry;
-- sequence hints from TE/TR/TI when available.
-
-Boolean metadata is parsed explicitly; string values such as `"False"` are never interpreted with Python's generic truthiness.
-
-## DICOM discovery and ordering
-
-`read_dicom_series` supports mixed layouts containing `.dcm`, `.dicom`, `.ima`, and suffix-less instances in the same series directory.
-
-Slices are ordered from `ImageOrientationPatient` + `ImagePositionPatient` when possible, with `InstanceNumber` fallback. Enhanced multi-frame instances are expanded while preserving frame order.
-
-The reader also applies:
-
-- `RescaleSlope` / `RescaleIntercept`;
-- `MONOCHROME1` inversion;
-- center crop/pad normalization for mixed in-plane dimensions;
-- finite-value validation.
-
-## MRI preprocessing
-
-Each selected series is normalized globally using its finite 1st/99th intensity percentiles, clipped to that interval, and mapped to `[0,1]`.
-
-The production representation is 2.5D. Uniformly distributed center slices are selected over the original series and each sample becomes:
+A series is globally normalized with finite 1st/99th percentiles and mapped to `[0,1]`. A triplet is:
 
 ```text
-[z - gap, z, z + gap]
+[z-gap, z, z+gap]
 ```
 
-with edge indices clipped to the valid range. The three neighboring slices become the three ConvNeXt input channels.
+Centers are distributed across the valid depth range. Training defaults to gaps `{1,2}` and center jitter of ±2 slices. Inference is deterministic and averages center offsets `[-1,0,+1]`.
+
+## MRI-specific augmentation
+
+Training applies mild series-consistent perturbations rather than generic natural-image augmentation:
+
+- small rotation;
+- small translation and scale;
+- gamma variation;
+- low-frequency multiplicative bias field;
+- Gaussian noise;
+- slice dropout.
+
+Validation and inference disable stochastic augmentation.
 
 ## Preflight
-
-Run before expensive training:
 
 ```bash
 rsna-knee preflight --data-root DATA_ROOT --split train --sample-size 24
 ```
 
-Preflight performs real pixel decoding and reports two different quantities:
+Preflight executes real DICOM decoding and the production 2.5D transform. It distinguishes legitimate missing semantic streams from selected-stream path/decode failures. It also reports missing versus repaired metadata fields independently.
 
-- **missing-stream rate** — semantic stream slots that legitimately have no selected series;
-- **decode-failure rate** — selected series that cannot be found or decoded.
+## Gold, inner, outer, and weak cross-fit roles
 
-Only decode failures are used by the strict training gate. This prevents normal protocol variability from being mistaken for corrupted data.
+For fold `k`, studies can have these roles:
 
-## Leakage control
+- `outer_oof`: official gold studies used only for final fold evaluation;
+- `inner_selection`: gold studies used only to choose training duration in phase A;
+- `gold_train_selection`: trusted gold used in phase-A training;
+- `weak_oof`: non-gold report groups withheld from the fold so image predictions are cross-fitted;
+- `weak_train`: report-supervised training rows.
 
-Gold folds group identical normalized reports together. For a validation fold, every training study sharing a validation report hash is removed from the fold's training set.
+After epoch selection, phase B retrains a fresh model using all non-outer gold studies while continuing to exclude the fold's `weak_oof` report groups.
 
-Report-teacher calibration uses only gold studies outside the current validation fold. Validation targets are the raw official target cells; NaNs remain NaNs and are ignored by the AUC calculation rather than converted to negatives or pseudo-labels.
+## Self-supervised data scope
+
+`rsna-knee pretrain` uses non-gold studies only by default. This learns same-knee cross-sequence anatomy representations without exposing the outer gold images to SSL.
 
 ## Training versus inference
 
-Reports are used only during training to generate weak supervision. Final inference depends only on MRI data and self-describing model checkpoints.
+Reports, report calibration, and co-training consensus are training-only. Final submission inference uses MRI images plus self-describing checkpoints and deterministic TTA.
