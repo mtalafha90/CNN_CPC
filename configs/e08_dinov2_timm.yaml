@@ -1,6 +1,6 @@
 # E08: DINOv2 ViT-S/14 representation through timm.
-# Verify the current competition rules for external/pretrained weights before running.
-# The exact timm model name is pinned here and should be checked in the installed timm release.
+# Verify current competition rules for external/pretrained weights before running.
+# The official timm model config is fixed at 518x518 input.
 data_root: /data/rsna-knee-abnormality-detection
 train_csv: train.csv
 train_series_csv: train_series.csv
@@ -16,9 +16,9 @@ backbone: timm:vit_small_patch14_dinov2.lvd142m
 target_attention: true
 slice_pooling: attention
 topk_fraction: 0.25
-n_slices: 12
-image_size: 224
-batch_size: 2
+n_slices: 6
+image_size: 518
+batch_size: 1
 pretrained: true
 dropout: 0.25
 lr: 0.00005
@@ -42,6 +42,6 @@ device: auto
 precision: auto
 num_workers: null
 persistent_workers: true
-prefetch_factor: 4
+prefetch_factor: 2
 data_parallel: true
 allow_test_report_fusion: false
