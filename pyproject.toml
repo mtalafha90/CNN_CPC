@@ -22,3 +22,9 @@ rsna-knee = "rsna_knee.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# Without this, running `pytest` from the repo root cannot import the package
+# unless it has first been pip-installed.
+pythonpath = ["src"]
+testpaths = ["tests"]

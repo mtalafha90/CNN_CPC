@@ -41,10 +41,51 @@ def load_series_csv(path: str | Path) -> pd.DataFrame:
     if missing:
         raise ValueError(f"series CSV missing columns: {missing}")
     df = df.copy()
-    df["Fluid_Sensitive"] = df["Fluid_Sensitive"].astype(bool)
-    df["Fat_Suppression"] = df["Fat_Suppression"].astype(bool)
-    df["Anatomical_Plane"] = df["Anatomical_Plane"].astype(str).str.capitalize()
+    df["Fluid_Sensitive"] = coerce_bool(df["Fluid_Sensitive"])
+    df["Fat_Suppression"] = coerce_bool(df["Fat_Suppression"])
+    df["Anatomical_Plane"] = normalise_plane(df["Anatomical_Plane"])
     return df
+
+
+TRUE_TOKENS = {"true", "t", "yes", "y", "1", "1.0"}
+FALSE_TOKENS = {"false", "f", "no", "n", "0", "0.0"}
+
+
+def coerce_bool(values: pd.Series) -> pd.Series:
+    """Interpret a flag column as booleans, treating missing values as False.
+
+    ``Series.astype(bool)`` is wrong here in two ways: NaN becomes True, and so
+    does the *string* ``"False"``, because any non-empty string is truthy. Both
+    would silently mark structural series as fluid sensitive and corrupt the
+    routing in :func:`select_series`.
+    """
+    if pd.api.types.is_bool_dtype(values):
+        return values.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(values):
+        return values.fillna(0).astype(float).ne(0.0)
+    text = values.astype(str).str.strip().str.lower()
+    result = pd.Series(False, index=values.index, dtype=bool)
+    result[text.isin(TRUE_TOKENS)] = True
+    # Anything that is neither a recognised true nor false token — including
+    # blanks and "nan" — stays False, which is the safe default for routing.
+    return result
+
+
+def normalise_plane(values: pd.Series) -> pd.Series:
+    """Normalise plane names to Sagittal / Coronal / Axial, else empty.
+
+    Missing entries become ``""`` rather than the string ``"Nan"`` that
+    ``astype(str)`` would produce, so :func:`backfill_series_metadata` can
+    recognise them as gaps to fill.
+    """
+    text = values.astype(str).str.strip().str.lower()
+    mapping = {
+        "sagittal": "Sagittal", "sag": "Sagittal", "sagital": "Sagittal",
+        "coronal": "Coronal", "cor": "Coronal",
+        "axial": "Axial", "ax": "Axial", "transverse": "Axial",
+    }
+    normalised = text.map(mapping)
+    return normalised.fillna("").astype(str)
 
 
 def normalize_report(text: str) -> str:
@@ -121,3 +162,55 @@ def select_series(series_df: pd.DataFrame, study_uid: str, mode: str = "best") -
 
 def build_series_index(series_df: pd.DataFrame, studies: Iterable[str], mode: str = "best") -> dict[str, dict[str, str | None]]:
     return {str(uid): select_series(series_df, str(uid), mode=mode) for uid in studies}
+
+
+def backfill_series_metadata(
+    series_df: pd.DataFrame,
+    data_root: str | Path,
+    split: str = "train",
+    limit: int | None = None,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Fill blank plane and sequence flags from the DICOM headers.
+
+    `train_series.csv` is authoritative wherever it is populated, so only rows
+    with a blank `Anatomical_Plane` are touched. Such a row is invisible to
+    :func:`select_series`, which then returns ``None`` for that plane and hands
+    the model a stream of zeros — a silent loss rather than an error, which is
+    why it is worth repairing.
+
+    Reads one DICOM per affected series. Returns the repaired frame and a count
+    of what changed, so the caller can log how much was missing.
+    """
+    # Imported lazily: `dicom` pulls in torch, and `data` is otherwise usable
+    # without it (the CLI loads CSVs long before any model is built).
+    from .dicom import find_series_dir
+    from .dicom_meta import read_series_metadata
+
+    df = series_df.copy()
+    if "Anatomical_Plane" not in df.columns:
+        df["Anatomical_Plane"] = ""
+
+    blank = df["Anatomical_Plane"].astype(str).str.strip().eq("")
+    targets = df.index[blank]
+    if limit is not None:
+        targets = targets[:limit]
+
+    stats = {"missing": int(blank.sum()), "inspected": len(targets), "repaired": 0}
+    for index in targets:
+        row = df.loc[index]
+        series_dir = find_series_dir(
+            data_root, split, str(row["StudyInstanceUID"]), str(row["SeriesInstanceUID"])
+        )
+        if series_dir is None:
+            continue
+        metadata = read_series_metadata(series_dir)
+        if metadata["Anatomical_Plane"] is None:
+            continue
+        df.at[index, "Anatomical_Plane"] = metadata["Anatomical_Plane"]
+        if metadata["Fluid_Sensitive"] is not None:
+            df.at[index, "Fluid_Sensitive"] = bool(metadata["Fluid_Sensitive"])
+        if metadata["Fat_Suppression"] is not None:
+            df.at[index, "Fat_Suppression"] = bool(metadata["Fat_Suppression"])
+        stats["repaired"] += 1
+
+    return df, stats
