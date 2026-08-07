@@ -14,7 +14,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from .calibration import calibration_split_mask, fit_calibration
-from .constants import TARGETS
+from .constants import DUAL_STREAMS, TARGETS
 from .data import (
     add_report_groups,
     backfill_series_metadata,
@@ -55,7 +55,6 @@ def confidence_gated_ranking_loss(
     positive_threshold: float = 0.75,
     negative_threshold: float = 0.25,
 ) -> torch.Tensor:
-    """Pairwise AUC surrogate using only trustworthy training cells."""
     losses: list[torch.Tensor] = []
     for j in range(logits.shape[1]):
         trusted = weight[:, j] >= float(min_confidence)
@@ -101,15 +100,14 @@ def _dataset_config(config: dict, root: Path, *, train: bool) -> DatasetConfig:
         image_size=int(config.get("image_size", 224)),
         noise_std=float(config.get("noise_std", 0.02)) if train else 0.0,
         slice_dropout=float(config.get("slice_dropout", 0.08)) if train else 0.0,
-        input_mode="2p5d",
         triplet_gap=int(config.get("triplet_gap", 1)),
         strict_dicom=bool(config.get("strict_dicom", False)),
     )
 
 
-def _model_spec(config: dict, n_streams: int) -> dict:
+def _model_spec(config: dict) -> dict:
     return {
-        "n_streams": int(n_streams),
+        "n_streams": len(DUAL_STREAMS),
         "n_slices": int(config.get("n_slices", 16)),
         "in_channels": 3,
         "image_size": int(config.get("image_size", 224)),
@@ -125,6 +123,9 @@ def _model_spec(config: dict, n_streams: int) -> dict:
 def train_fold(config: dict, fold: int) -> Path:
     start_time = time.time()
     seed = int(config.get("seed", 2026))
+    n_folds = int(config.get("n_folds", 3))
+    if fold < 0 or fold >= n_folds:
+        raise ValueError(f"fold must be in [0,{n_folds - 1}]")
     seed_everything(seed + fold)
     root = Path(config["data_root"])
 
@@ -152,7 +153,7 @@ def train_fold(config: dict, fold: int) -> Path:
     print(f"[metadata] {metadata_stats}")
 
     df = add_report_groups(df)
-    df["fold"] = make_balanced_gold_folds(df, int(config.get("n_folds", 3)), seed)
+    df["fold"] = make_balanced_gold_folds(df, n_folds, seed)
     val_mask = df["fold"].eq(fold) & gold_mask(df)
     if not val_mask.any():
         raise ValueError(f"fold {fold} contains no gold validation studies")
@@ -195,12 +196,11 @@ def train_fold(config: dict, fold: int) -> Path:
         train_weights[ti],
         True,
     )
-    val_gold = df.iloc[vi][TARGETS].to_numpy(dtype=np.float32)
     val_ds = KneeStudyDataset(
         df.iloc[vi]["StudyInstanceUID"].tolist(),
         series_index,
         _dataset_config(config, root, train=False),
-        val_gold,
+        df.iloc[vi][TARGETS].to_numpy(dtype=np.float32),
         None,
         False,
     )
@@ -215,7 +215,9 @@ def train_fold(config: dict, fold: int) -> Path:
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
-    spec = _model_spec(config, len(train_ds.stream_names))
+    spec = _model_spec(config)
+    if train_ds.stream_names != DUAL_STREAMS:
+        raise RuntimeError("dataset stream contract does not match canonical DUAL_STREAMS")
     model = KneeMILNet(
         spec["n_streams"],
         spec["n_slices"],
