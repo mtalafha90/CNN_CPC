@@ -12,12 +12,21 @@ import pandas as pd
 from .constants import N_TARGETS, TARGETS
 
 
-def load_train_csv(path: str | Path) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    required = {"StudyInstanceUID", "Report", *TARGETS}
+TRUE_TOKENS = {"true", "t", "yes", "y", "1", "1.0"}
+PLANES = ("Sagittal", "Coronal", "Axial")
+
+
+def _require_columns(df: pd.DataFrame, required: set[str], name: str) -> None:
     missing = sorted(required.difference(df.columns))
     if missing:
-        raise ValueError(f"train.csv missing columns: {missing}")
+        raise ValueError(f"{name} missing columns: {missing}")
+
+
+def load_train_csv(path: str | Path) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    _require_columns(df, {"StudyInstanceUID", "Report", *TARGETS}, "train.csv")
+    if df["StudyInstanceUID"].isna().any():
+        raise ValueError("train.csv contains missing StudyInstanceUID values")
     df = df.copy()
     df["StudyInstanceUID"] = df["StudyInstanceUID"].astype(str)
     if df["StudyInstanceUID"].duplicated().any():
@@ -27,8 +36,9 @@ def load_train_csv(path: str | Path) -> pd.DataFrame:
 
 def load_test_csv(path: str | Path) -> pd.DataFrame:
     df = pd.read_csv(path)
-    if "StudyInstanceUID" not in df.columns:
-        raise ValueError("test.csv must contain StudyInstanceUID")
+    _require_columns(df, {"StudyInstanceUID"}, "test.csv")
+    if df["StudyInstanceUID"].isna().any():
+        raise ValueError("test.csv contains missing StudyInstanceUID values")
     df = df.copy()
     df["StudyInstanceUID"] = df["StudyInstanceUID"].astype(str)
     if df["StudyInstanceUID"].duplicated().any():
@@ -42,21 +52,16 @@ def gold_mask(df: pd.DataFrame) -> pd.Series:
     return df[TARGETS].notna().any(axis=1)
 
 
-TRUE_TOKENS = {"true", "t", "yes", "y", "1", "1.0"}
-
-
 def coerce_bool(values: pd.Series) -> pd.Series:
-    """Interpret metadata flags without Python's unsafe string truthiness."""
+    """Parse metadata flags without unsafe generic string truthiness."""
     if pd.api.types.is_bool_dtype(values):
         return values.fillna(False).astype(bool)
     if pd.api.types.is_numeric_dtype(values):
         return values.fillna(0).astype(float).ne(0.0)
-    text = values.astype(str).str.strip().str.lower()
-    return text.isin(TRUE_TOKENS)
+    return values.astype(str).str.strip().str.lower().isin(TRUE_TOKENS)
 
 
 def normalise_plane(values: pd.Series) -> pd.Series:
-    text = values.astype(str).str.strip().str.lower()
     mapping = {
         "sagittal": "Sagittal",
         "sag": "Sagittal",
@@ -67,6 +72,7 @@ def normalise_plane(values: pd.Series) -> pd.Series:
         "ax": "Axial",
         "transverse": "Axial",
     }
+    text = values.astype(str).str.strip().str.lower()
     return text.map(mapping).fillna("").astype(str)
 
 
@@ -79,9 +85,9 @@ def load_series_csv(path: str | Path) -> pd.DataFrame:
         "Fat_Suppression",
         "Anatomical_Plane",
     }
-    missing = sorted(required.difference(df.columns))
-    if missing:
-        raise ValueError(f"series CSV missing columns: {missing}")
+    _require_columns(df, required, "series CSV")
+    if df[["StudyInstanceUID", "SeriesInstanceUID"]].isna().any().any():
+        raise ValueError("series CSV contains missing study/series UID values")
     df = df.copy()
     df["StudyInstanceUID"] = df["StudyInstanceUID"].astype(str)
     df["SeriesInstanceUID"] = df["SeriesInstanceUID"].astype(str)
@@ -149,7 +155,6 @@ def make_balanced_gold_folds(df: pd.DataFrame, n_splits: int = 3, seed: int = 20
 
 
 def _rank_indices(score: np.ndarray) -> list[int]:
-    # Stable ordering makes ties deterministic across platforms.
     return np.argsort(-score, kind="mergesort").astype(int).tolist()
 
 
@@ -158,7 +163,7 @@ def _select_from_study(part: pd.DataFrame, mode: str) -> dict[str, str | None]:
         raise ValueError("stream mode must be 'best' or 'dual'")
 
     result: dict[str, str | None] = {}
-    for plane in ("Sagittal", "Coronal", "Axial"):
+    for plane in PLANES:
         p = part.loc[part["Anatomical_Plane"].eq(plane)].reset_index(drop=True)
         key = plane.lower()
         if p.empty:
@@ -179,16 +184,26 @@ def _select_from_study(part: pd.DataFrame, mode: str) -> dict[str, str | None]:
         )
 
         if mode == "best":
-            score = fluid_score + 0.25 * structural_score
-            idx = _rank_indices(score)[0]
+            idx = _rank_indices(fluid_score + 0.25 * structural_score)[0]
             result[key] = p.at[idx, "SeriesInstanceUID"]
+            continue
+
+        # If only one sequence exists in a plane, put it in the semantic slot
+        # it best matches instead of decoding/encoding the exact same MRI twice.
+        if len(p) == 1:
+            uid = p.at[0, "SeriesInstanceUID"]
+            if fluid_score[0] >= structural_score[0]:
+                result[f"{key}_fluid"] = uid
+                result[f"{key}_structural"] = None
+            else:
+                result[f"{key}_fluid"] = None
+                result[f"{key}_structural"] = uid
             continue
 
         fluid_idx = _rank_indices(fluid_score)[0]
         fluid_uid = p.at[fluid_idx, "SeriesInstanceUID"]
         structural_idx = _rank_indices(structural_score)[0]
-        if len(p) > 1 and p.at[structural_idx, "SeriesInstanceUID"] == fluid_uid:
-            # Avoid feeding the same MRI twice when another candidate exists.
+        if p.at[structural_idx, "SeriesInstanceUID"] == fluid_uid:
             for candidate in _rank_indices(structural_score)[1:]:
                 if p.at[candidate, "SeriesInstanceUID"] != fluid_uid:
                     structural_idx = candidate
@@ -199,9 +214,10 @@ def _select_from_study(part: pd.DataFrame, mode: str) -> dict[str, str | None]:
     return result
 
 
-def select_series(series_df: pd.DataFrame, study_uid: str, mode: str = "dual") -> dict[str, str | None]:
+def select_series(series_df: pd.DataFrame, study_uid: str, mode: str = "best") -> dict[str, str | None]:
+    """Select one study's series. `best` remains the stable public default."""
     uid = str(study_uid)
-    part = series_df.loc[series_df["StudyInstanceUID"].eq(uid)]
+    part = series_df.loc[series_df["StudyInstanceUID"].astype(str).eq(uid)]
     return _select_from_study(part, mode)
 
 
@@ -210,14 +226,13 @@ def build_series_index(
     studies: Iterable[str],
     mode: str = "dual",
 ) -> dict[str, dict[str, str | None]]:
-    """Build the study routing table with one groupby, not one full scan/study."""
+    """Build routing with one groupby instead of one full-table scan per study."""
     if mode not in {"best", "dual"}:
         raise ValueError("stream mode must be 'best' or 'dual'")
-    grouped = {
-        str(uid): part
-        for uid, part in series_df.groupby("StudyInstanceUID", sort=False, observed=True)
-    }
-    empty = series_df.iloc[0:0]
+    work = series_df.copy()
+    work["StudyInstanceUID"] = work["StudyInstanceUID"].astype(str)
+    grouped = {uid: part for uid, part in work.groupby("StudyInstanceUID", sort=False)}
+    empty = work.iloc[0:0]
     return {
         str(uid): _select_from_study(grouped.get(str(uid), empty), mode)
         for uid in studies
@@ -246,8 +261,8 @@ def backfill_series_metadata(
         series_dir = find_series_dir(
             data_root,
             split,
-            row["StudyInstanceUID"],
-            row["SeriesInstanceUID"],
+            str(row["StudyInstanceUID"]),
+            str(row["SeriesInstanceUID"]),
         )
         if series_dir is None:
             continue
