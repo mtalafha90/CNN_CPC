@@ -16,16 +16,37 @@ from .model3d import SharedVolumeEncoder
 class SliceEncoder(nn.Module):
     """Shared 2D encoder for grayscale slices or 2.5D triplets.
 
-    Built-in backbones are ``resnet18`` and ``convnext_tiny``. Any timm model
-    that supports ``num_classes=0`` can be requested as ``timm:<model_name>``.
+    Built-ins: ``resnet18`` and ``convnext_tiny``.
+    Generic timm models: ``timm:<name>``.
+    Frozen pretrained timm models: ``timm_frozen:<name>``.
     """
 
     def __init__(self, pretrained: bool = False, in_channels: int = 1, backbone: str = "resnet18"):
         super().__init__()
         backbone = str(backbone)
+        low = backbone.lower()
         self.backbone_name = backbone
+        self.pretrained_input = bool(pretrained)
+        self.timm_frozen = False
 
-        if backbone.lower() == "resnet18":
+        # ImageNet normalization used by the torchvision backbones and the
+        # reviewed DINOv2 timm checkpoint. For grayscale, collapse the RGB
+        # statistics to a single channel after adapting the first convolution.
+        rgb_mean = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32)
+        rgb_std = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32)
+        if in_channels == 1:
+            mean = rgb_mean.mean().view(1, 1, 1, 1)
+            std = rgb_std.mean().view(1, 1, 1, 1)
+        elif in_channels == 3:
+            mean = rgb_mean.view(1, 3, 1, 1)
+            std = rgb_std.view(1, 3, 1, 1)
+        else:
+            mean = rgb_mean.mean().repeat(in_channels).view(1, in_channels, 1, 1)
+            std = rgb_std.mean().repeat(in_channels).view(1, in_channels, 1, 1)
+        self.register_buffer("input_mean", mean, persistent=False)
+        self.register_buffer("input_std", std, persistent=False)
+
+        if low == "resnet18":
             weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
             net = resnet18(weights=weights)
             old = net.conv1
@@ -39,13 +60,13 @@ class SliceEncoder(nn.Module):
                         if in_channels == 1:
                             net.conv1.weight.copy_(old.weight.mean(dim=1, keepdim=True))
                         else:
-                            mean = old.weight.mean(dim=1, keepdim=True)
-                            net.conv1.weight.copy_(mean.repeat(1, in_channels, 1, 1))
+                            mean_w = old.weight.mean(dim=1, keepdim=True)
+                            net.conv1.weight.copy_(mean_w.repeat(1, in_channels, 1, 1))
             self.features = nn.Sequential(*list(net.children())[:-1])
             self.out_dim = int(net.fc.in_features)
             self._forward_impl = self._forward_resnet
 
-        elif backbone.lower() == "convnext_tiny":
+        elif low == "convnext_tiny":
             weights = ConvNeXt_Tiny_Weights.IMAGENET1K_V1 if pretrained else None
             net = convnext_tiny(weights=weights)
             first = net.features[0][0]
@@ -72,14 +93,19 @@ class SliceEncoder(nn.Module):
             self.out_dim = int(net.classifier[-1].in_features)
             self._forward_impl = self._forward_convnext
 
-        elif backbone.lower().startswith("timm:"):
+        elif low.startswith("timm:") or low.startswith("timm_frozen:"):
             import timm
+            self.timm_frozen = low.startswith("timm_frozen:")
             model_name = backbone.split(":", 1)[1]
             self.timm_model = timm.create_model(
                 model_name, pretrained=pretrained, in_chans=in_channels,
                 num_classes=0, global_pool="avg",
             )
             self.out_dim = int(self.timm_model.num_features)
+            if self.timm_frozen:
+                for parameter in self.timm_model.parameters():
+                    parameter.requires_grad = False
+                self.timm_model.eval()
             self._forward_impl = self._forward_timm
         else:
             raise ValueError(f"unsupported backbone: {backbone}")
@@ -91,9 +117,13 @@ class SliceEncoder(nn.Module):
         return self.pre_classifier(self.pool(self.features(x)))
 
     def _forward_timm(self, x):
+        if self.timm_frozen:
+            self.timm_model.eval()
         return self.timm_model(x)
 
     def forward(self, x):
+        if self.pretrained_input:
+            x = (x - self.input_mean.to(dtype=x.dtype)) / self.input_std.to(dtype=x.dtype)
         return self._forward_impl(x)
 
 
@@ -154,12 +184,7 @@ def build_slice_pooling(name: str, dim: int, topk_fraction: float = 0.25) -> nn.
 
 
 class MultiSeriesKneeNet(nn.Module):
-    """Multi-series MRI model for 2D/2.5D MIL or a compact 3D arm.
-
-    Use ``backbone: 3d`` with ``input_mode: 2d`` for the volumetric arm. It
-    encodes each complete sampled stream with shared 3D convolutions, then uses
-    the same stream-fusion logic as the 2D/2.5D family.
-    """
+    """Multi-series MRI model for 2D/2.5D MIL or a compact 3D arm."""
 
     def __init__(
         self,
