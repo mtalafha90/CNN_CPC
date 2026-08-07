@@ -1,9 +1,5 @@
-# Local workstation training. Point data_root at your copy of the competition
-# data; everything else is tuned for a single machine with one or more GPUs.
-#
-#   rsna-knee runtime                       # check what will be used
-#   rsna-knee train --config configs/local_gpu.yaml --fold 0
-
+# Local workstation training. Point data_root at your competition data.
+# For frozen experiment comparisons prefer configs/e01_... through e06_....
 data_root: /data/rsna-knee-abnormality-detection
 train_csv: train.csv
 train_series_csv: train_series.csv
@@ -14,25 +10,22 @@ output_dir: runs/local
 seed: 2026
 n_folds: 3
 stream_mode: best
+input_mode: 2d
+triplet_gap: 1
+backbone: resnet18
+target_attention: false
+slice_pooling: attention
+topk_fraction: 0.25
 
-# --- Hardware -------------------------------------------------------------
-# device:      auto | cpu | cuda
-# precision:   auto | bf16 | fp16 | fp32
-#              auto picks bf16 on Ampere or newer (RTX 30xx/40xx/50xx, A100,
-#              H100) and fp16 on older cards. bf16 needs no gradient scaler.
-# num_workers: omit or set null to use (CPU cores - 1), capped at 16.
-#              DICOM decoding is the bottleneck, so this matters more than the
-#              model size — one worker will starve any modern GPU.
+# Hardware
 device: auto
 precision: auto
 num_workers: null
 persistent_workers: true
 prefetch_factor: 4
-# Split each batch across every visible GPU. batch_size must be at least the
-# number of GPUs for all of them to receive work.
 data_parallel: true
 
-# --- Model and optimisation ----------------------------------------------
+# Model / optimization
 n_slices: 16
 image_size: 224
 batch_size: 8
@@ -43,22 +36,25 @@ weight_decay: 0.0001
 epochs: 15
 patience: 4
 
-# --- Supervision ----------------------------------------------------------
-# calibrate_teacher: learn P(y=1 | rule state) from the gold studies OUTSIDE
-#   the validation fold, instead of using the rule engine's fixed 0.92 / 0.06.
-#   Never calibrate on the fold being scored — that is circular validation.
-# calibration_alpha: smoothing towards each target's prevalence. Higher values
-#   trust the prior more, which suits cells holding only a few studies.
+# Supervision
 calibrate_teacher: true
 calibration_alpha: 5.0
 min_calibration_studies: 8
 gold_weight: 8.0
+rank_loss_weight: 0.0
+rank_pairs_per_target: 32
 
-# --- Augmentation ---------------------------------------------------------
+# Augmentation
 noise_std: 0.02
 slice_dropout: 0.08
 
-# --- Evaluation -----------------------------------------------------------
-# Bootstrap replicates behind the gold macro-AUC interval. With 58 gold
-# studies the interval is roughly +/- 0.04, so treat small gains with care.
+# DICOM safety
+preflight_before_train: true
+preflight_sample_size: 24
+preflight_max_failure_rate: 0.05
+strict_dicom: false
+strict_dicom_inference: true
+
+# Evaluation / inference
 n_bootstrap: 2000
+allow_test_report_fusion: false
