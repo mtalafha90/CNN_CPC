@@ -13,7 +13,12 @@ from .constants import N_TARGETS
 
 
 class SliceEncoder(nn.Module):
-    """Shared 2D encoder for either grayscale slices or 2.5D triplets."""
+    """Shared 2D encoder for grayscale slices or 2.5D triplets.
+
+    Built-in backbones are ``resnet18`` and ``convnext_tiny``. Any timm model
+    that supports ``num_classes=0`` can be requested as ``timm:<model_name>``;
+    this includes DINOv2 models in timm releases that expose them.
+    """
 
     def __init__(
         self,
@@ -22,10 +27,10 @@ class SliceEncoder(nn.Module):
         backbone: str = "resnet18",
     ):
         super().__init__()
-        backbone = str(backbone).lower()
+        backbone = str(backbone)
         self.backbone_name = backbone
 
-        if backbone == "resnet18":
+        if backbone.lower() == "resnet18":
             weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
             net = resnet18(weights=weights)
             old = net.conv1
@@ -49,7 +54,7 @@ class SliceEncoder(nn.Module):
             self.out_dim = int(net.fc.in_features)
             self._forward_impl = self._forward_resnet
 
-        elif backbone == "convnext_tiny":
+        elif backbone.lower() == "convnext_tiny":
             weights = ConvNeXt_Tiny_Weights.IMAGENET1K_V1 if pretrained else None
             net = convnext_tiny(weights=weights)
             first = net.features[0][0]
@@ -78,6 +83,20 @@ class SliceEncoder(nn.Module):
             self.pre_classifier = nn.Sequential(*list(net.classifier.children())[:-1])
             self.out_dim = int(net.classifier[-1].in_features)
             self._forward_impl = self._forward_convnext
+
+        elif backbone.lower().startswith("timm:"):
+            import timm
+
+            model_name = backbone.split(":", 1)[1]
+            self.timm_model = timm.create_model(
+                model_name,
+                pretrained=pretrained,
+                in_chans=in_channels,
+                num_classes=0,
+                global_pool="avg",
+            )
+            self.out_dim = int(self.timm_model.num_features)
+            self._forward_impl = self._forward_timm
         else:
             raise ValueError(f"unsupported backbone: {backbone}")
 
@@ -89,6 +108,9 @@ class SliceEncoder(nn.Module):
         x = self.pool(x)
         return self.pre_classifier(x)
 
+    def _forward_timm(self, x):
+        return self.timm_model(x)
+
     def forward(self, x):
         return self._forward_impl(x)
 
@@ -96,25 +118,61 @@ class SliceEncoder(nn.Module):
 class AttentionPool(nn.Module):
     def __init__(self, dim: int):
         super().__init__()
-        self.score = nn.Sequential(
-            nn.Linear(dim, max(16, dim // 4)),
-            nn.Tanh(),
-            nn.Linear(max(16, dim // 4), 1),
-        )
+        hidden = max(16, dim // 4)
+        self.score = nn.Sequential(nn.Linear(dim, hidden), nn.Tanh(), nn.Linear(hidden, 1))
 
     def forward(self, x):
         a = torch.softmax(self.score(x).squeeze(-1), dim=1)
         return torch.sum(x * a.unsqueeze(-1), dim=1)
 
 
-class MultiSeriesKneeNet(nn.Module):
-    """Multi-series MIL network with optional target-specific stream attention.
+class TopKAttentionPool(nn.Module):
+    """Learn a cheap slice score, keep only the highest-scoring fraction."""
 
-    ``target_attention=False`` reproduces the original shared-attention baseline.
-    ``target_attention=True`` gives each of the 12 diagnoses an independent query
-    over the MRI streams, which is useful because different abnormalities prefer
-    different planes/sequences.
-    """
+    def __init__(self, dim: int, fraction: float = 0.25):
+        super().__init__()
+        if not 0 < fraction <= 1:
+            raise ValueError("topk_fraction must be in (0, 1]")
+        self.fraction = float(fraction)
+        hidden = max(16, dim // 4)
+        self.score = nn.Sequential(nn.Linear(dim, hidden), nn.Tanh(), nn.Linear(hidden, 1))
+
+    def forward(self, x):
+        scores = self.score(x).squeeze(-1)
+        k = max(1, int(round(x.shape[1] * self.fraction)))
+        top = torch.topk(scores, k=k, dim=1).indices
+        gather = top.unsqueeze(-1).expand(-1, -1, x.shape[-1])
+        selected = torch.gather(x, 1, gather)
+        selected_scores = torch.gather(scores, 1, top)
+        weights = torch.softmax(selected_scores, dim=1)
+        return torch.sum(selected * weights.unsqueeze(-1), dim=1)
+
+
+class MeanPool(nn.Module):
+    def forward(self, x):
+        return x.mean(dim=1)
+
+
+class MaxPool(nn.Module):
+    def forward(self, x):
+        return x.amax(dim=1)
+
+
+def build_slice_pooling(name: str, dim: int, topk_fraction: float = 0.25) -> nn.Module:
+    name = str(name).lower()
+    if name == "attention":
+        return AttentionPool(dim)
+    if name == "topk":
+        return TopKAttentionPool(dim, topk_fraction)
+    if name == "mean":
+        return MeanPool()
+    if name == "max":
+        return MaxPool()
+    raise ValueError(f"unsupported slice_pooling: {name}")
+
+
+class MultiSeriesKneeNet(nn.Module):
+    """Multi-series MIL network with configurable slice and target attention."""
 
     def __init__(
         self,
@@ -124,12 +182,14 @@ class MultiSeriesKneeNet(nn.Module):
         in_channels: int = 1,
         backbone: str = "resnet18",
         target_attention: bool = False,
+        slice_pooling: str = "attention",
+        topk_fraction: float = 0.25,
     ):
         super().__init__()
         self.target_attention = bool(target_attention)
         self.encoder = SliceEncoder(pretrained, in_channels=in_channels, backbone=backbone)
         d = self.encoder.out_dim
-        self.slice_pool = AttentionPool(d)
+        self.slice_pool = build_slice_pooling(slice_pooling, d, topk_fraction)
         self.stream_embeddings = nn.Parameter(torch.randn(n_streams, d) * 0.02)
 
         if self.target_attention:
@@ -141,10 +201,9 @@ class MultiSeriesKneeNet(nn.Module):
             self.target_bias = nn.Parameter(torch.zeros(N_TARGETS))
             nn.init.xavier_uniform_(self.target_weight)
         else:
+            hidden = max(16, d // 4)
             self.stream_score = nn.Sequential(
-                nn.Linear(d, max(16, d // 4)),
-                nn.Tanh(),
-                nn.Linear(max(16, d // 4), 1),
+                nn.Linear(d, hidden), nn.Tanh(), nn.Linear(hidden, 1)
             )
             self.head = nn.Sequential(
                 nn.LayerNorm(d), nn.Dropout(dropout), nn.Linear(d, N_TARGETS)
