@@ -1,29 +1,12 @@
 """Fold-safe calibration of the report teacher.
 
-The rule engine emits fixed probabilities — 0.92 for a positive mention, 0.06
-for a negated one, 0.50 otherwise. Those numbers are guesses. The gold studies
-can tell us what each state is actually worth: how often is a study with a
-"positive ACL mention" really ACL positive?
+Report-derived targets are weak supervision. Calibration is fitted only on gold
+studies outside the current validation fold, and supervision confidence reflects
+both how much calibration evidence exists and how informative a report state is
+relative to the target prevalence.
 
-The catch, and the reason this module exists, is *which* gold studies are
-allowed to answer that question. Calibrating on all 58 and then validating on
-a subset of the same 58 makes validation optimistic — the teacher has already
-seen the answers. `docs/strategy.md` and the public-code review both flag this
-as one of the easiest ways to fool yourself here.
-
-So calibration is fitted per fold, on the gold studies **outside** the
-validation fold:
-
-    for each fold k:
-        calibrate on gold studies not in fold k
-        build soft labels for every study
-        train
-        score only on the gold studies in fold k
-
-With so few studies per cell, raw frequencies are unusable — a state seen
-three times would give 0.0 or 1.0. Estimates are therefore smoothed towards
-the target's own prevalence, which is the standard empirical-Bayes shrinkage
-and degrades gracefully to "we learned nothing, keep the prior".
+Crucially, an *unmentioned* finding is treated as unlabeled by default. Report
+silence is not a negative label: radiologists routinely omit incidental findings.
 """
 
 from __future__ import annotations
@@ -33,20 +16,15 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .constants import TARGETS
-from .report_labels import STATE_UNMENTIONED, STATES
+from .report_labels import STATE_UNCERTAIN, STATE_UNMENTIONED, STATES
 
-# Pseudo-count controlling how hard estimates are pulled towards the prior.
-# At alpha = 5, a state needs about five gold examples before its own evidence
-# outweighs the prior, which suits cells holding a handful of studies.
 DEFAULT_ALPHA = 5.0
-
-# Fallback prevalence when a target has no positive gold example at all.
 FALLBACK_PRIOR = 0.1
 
 
 @dataclass
 class TeacherCalibration:
-    """Maps ``(target, rule state)`` to an empirical probability."""
+    """Maps ``(target, rule state)`` to fold-safe empirical probabilities."""
 
     table: dict[tuple[str, str], float] = field(default_factory=dict)
     prior: dict[str, float] = field(default_factory=dict)
@@ -60,10 +38,8 @@ class TeacherCalibration:
         return self.prior.get(target, FALLBACK_PRIOR)
 
     def apply(self, states: np.ndarray) -> np.ndarray:
-        """Convert an ``[n, 12]`` state array into calibrated probabilities."""
         out = np.zeros(states.shape, dtype=np.float32)
         for j, target in enumerate(TARGETS):
-            # One lookup per (target, state) rather than per cell.
             for state in STATES:
                 mask = states[:, j] == state
                 if mask.any():
@@ -73,26 +49,50 @@ class TeacherCalibration:
                 out[unknown, j] = self.prior.get(target, FALLBACK_PRIOR)
         return out
 
-    def confidence(self, states: np.ndarray, floor: float = 0.05) -> np.ndarray:
-        """Weight each pseudo-label by how much evidence backs its state.
+    def confidence(
+        self,
+        states: np.ndarray,
+        *,
+        unmentioned_weight: float = 0.0,
+        uncertain_weight_cap: float = 0.10,
+        floor: float = 0.0,
+    ) -> np.ndarray:
+        """Return per-cell weak-label reliability weights.
 
-        A cell calibrated from many gold studies is trusted more than one
-        resting entirely on the prior. `unmentioned` is additionally damped:
-        silence in a report is weak evidence, since radiologists routinely omit
-        incidental findings.
+        Reliability combines two quantities:
+
+        1. evidence certainty ``n/(n+alpha)``;
+        2. informativeness, measured by how far ``P(y|state)`` lies from the
+           target prevalence.
+
+        A frequent but uninformative state therefore does not become highly
+        weighted merely because it was observed many times. ``unmentioned`` is
+        capped at zero by default and behaves as positive-unlabeled data rather
+        than a weak negative.
         """
-        out = np.full(states.shape, floor, dtype=np.float32)
+        if not 0.0 <= unmentioned_weight <= 1.0:
+            raise ValueError("unmentioned_weight must be in [0,1]")
+        if not 0.0 <= uncertain_weight_cap <= 1.0:
+            raise ValueError("uncertain_weight_cap must be in [0,1]")
+
+        out = np.full(states.shape, float(floor), dtype=np.float32)
         for j, target in enumerate(TARGETS):
+            prior = float(self.prior.get(target, FALLBACK_PRIOR))
+            scale = max(prior, 1.0 - prior, 1e-6)
             for state in STATES:
                 mask = states[:, j] == state
                 if not mask.any():
                     continue
                 n = self.counts.get((target, state), 0)
-                # Shrinkage factor: 0 with no evidence, approaching 1 with lots.
-                weight = n / (n + self.alpha)
-                if state == STATE_UNMENTIONED:
-                    weight *= 0.25
-                out[mask, j] = max(floor, float(weight))
+                evidence = n / (n + self.alpha) if n > 0 else 0.0
+                probability = self.probability(target, state)
+                information = min(1.0, abs(probability - prior) / scale)
+                weight = float(evidence * information)
+                if state == STATE_UNCERTAIN:
+                    weight = min(weight, float(uncertain_weight_cap))
+                elif state == STATE_UNMENTIONED:
+                    weight = min(weight, float(unmentioned_weight))
+                out[mask, j] = max(float(floor), weight)
         return out
 
     def to_dict(self) -> dict:
@@ -124,36 +124,19 @@ def fit_calibration(
     gold: np.ndarray,
     alpha: float = DEFAULT_ALPHA,
 ) -> TeacherCalibration:
-    """Learn ``P(y = 1 | target, state)`` from gold labels.
-
-    Parameters
-    ----------
-    states:
-        ``[n, 12]`` array of rule states, from
-        :func:`rsna_knee.report_labels.state_dataframe`.
-    gold:
-        ``[n, 12]`` array of gold labels. ``NaN`` marks "not annotated" and is
-        excluded from the counts — it must never be read as a negative.
-    alpha:
-        Smoothing strength towards the per-target prior.
-
-    Pass only the calibration split. Feeding this the validation gold labels is
-    exactly the leak the module exists to prevent.
-    """
+    """Learn ``P(y=1 | target,state)`` from out-of-fold gold labels."""
     states = np.asarray(states, dtype=object)
     gold = np.asarray(gold, dtype=np.float64)
     if states.shape != gold.shape:
         raise ValueError(f"states {states.shape} and gold {gold.shape} must match")
 
     calibration = TeacherCalibration(alpha=alpha, n_calibration=int(states.shape[0]))
-
     for j, target in enumerate(TARGETS):
         labelled = np.isfinite(gold[:, j])
         if labelled.sum() == 0:
             calibration.prior[target] = FALLBACK_PRIOR
             continue
         prior = float(gold[labelled, j].mean())
-        # A prior of exactly 0 or 1 would make every cell degenerate.
         calibration.prior[target] = float(np.clip(prior, 0.01, 0.99))
 
         for state in STATES:
@@ -165,7 +148,6 @@ def fit_calibration(
             positives = float(gold[cell, j].sum())
             smoothed = (positives + alpha * calibration.prior[target]) / (n + alpha)
             calibration.table[(target, state)] = float(np.clip(smoothed, 0.005, 0.995))
-
     return calibration
 
 
@@ -174,11 +156,6 @@ def calibration_split_mask(
     folds: np.ndarray,
     validation_fold: int,
 ) -> np.ndarray:
-    """Select the gold studies that may be used to calibrate for one fold.
-
-    Returns a boolean mask over all studies: those carrying gold labels and
-    sitting outside the validation fold.
-    """
     gold_present = np.asarray(gold_present, dtype=bool)
     folds = np.asarray(folds)
     return gold_present & (folds != validation_fold)
