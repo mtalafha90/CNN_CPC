@@ -9,6 +9,7 @@ import pandas as pd
 import yaml
 
 from .constants import TARGETS
+from .cotrain import build_consensus_labels
 from .data import gold_mask, load_series_csv, load_train_csv
 from .evaluation import bootstrap_macro_auc, compare_runs, load_oof
 from .inference import infer_checkpoints
@@ -19,7 +20,7 @@ from .ssl import pretrain_ssl
 from .training import train_fold
 
 
-def read_config(path: str | Path) -> dict:
+def read_config(path:str|Path)->dict:
     payload=yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(payload,dict):raise ValueError(f"config must be a YAML mapping: {path}")
     return payload
@@ -30,8 +31,9 @@ def main()->None:
     p=sub.add_parser("inspect"); p.add_argument("--data-root",required=True)
     p=sub.add_parser("preflight"); p.add_argument("--data-root",required=True); p.add_argument("--split",choices=["train","test"],default="train"); p.add_argument("--series-csv",default=None); p.add_argument("--sample-size",type=int,default=24); p.add_argument("--max-decode-failure-rate",type=float,default=0.05); p.add_argument("--no-strict",action="store_true"); p.add_argument("--out",default=None)
     p=sub.add_parser("pseudo-label"); p.add_argument("--train-csv",required=True); p.add_argument("--out",required=True)
-    p=sub.add_parser("pretrain",help="self-supervised MRI pretraining on non-gold studies"); p.add_argument("--config",required=True)
+    p=sub.add_parser("pretrain"); p.add_argument("--config",required=True)
     p=sub.add_parser("train"); p.add_argument("--config",required=True); p.add_argument("--fold",type=int,required=True)
+    p=sub.add_parser("cotrain-labels",help="build image/report consensus pseudo labels from cross-fitted predictions"); p.add_argument("--train-csv",required=True); p.add_argument("--image-oof",nargs="+",required=True); p.add_argument("--out",required=True); p.add_argument("--positive-threshold",type=float,default=0.80); p.add_argument("--negative-threshold",type=float,default=0.20); p.add_argument("--agreement-weight",type=float,default=0.90); p.add_argument("--disagreement-weight",type=float,default=0.05)
     p=sub.add_parser("evaluate"); p.add_argument("--train-csv",required=True); p.add_argument("--oof",nargs="+",required=True); p.add_argument("--compare-oof",nargs="+",default=None); p.add_argument("--n-bootstrap",type=int,default=2000); p.add_argument("--out",default=None)
     p=sub.add_parser("infer"); p.add_argument("--config",required=True); p.add_argument("--checkpoints",nargs="+",required=True); p.add_argument("--out",default="submission.csv")
     p=sub.add_parser("runtime"); p.add_argument("--config",default=None)
@@ -46,8 +48,10 @@ def main()->None:
         df=load_train_csv(args.train_csv); probabilities,confidence=label_dataframe(df); out=pd.DataFrame({"StudyInstanceUID":df["StudyInstanceUID"].astype(str)})
         for j,target in enumerate(TARGETS):out[target]=probabilities[:,j]; out[f"{target}__confidence"]=confidence[:,j]
         out.to_csv(args.out,index=False); print(args.out); return
-    if args.cmd=="pretrain": print(pretrain_ssl(read_config(args.config))); return
-    if args.cmd=="train": print(train_fold(read_config(args.config),args.fold)); return
+    if args.cmd=="pretrain":print(pretrain_ssl(read_config(args.config))); return
+    if args.cmd=="train":print(train_fold(read_config(args.config),args.fold)); return
+    if args.cmd=="cotrain-labels":
+        print(build_consensus_labels(args.train_csv,args.image_oof,args.out,positive_threshold=args.positive_threshold,negative_threshold=args.negative_threshold,agreement_weight=args.agreement_weight,disagreement_weight=args.disagreement_weight)); return
     if args.cmd=="evaluate":
         y_true,predictions,uids=load_oof(args.train_csv,args.oof); result=bootstrap_macro_auc(y_true,predictions,n_bootstrap=args.n_bootstrap); print(f"scored {len(uids)} gold studies from {len(args.oof)} OOF file(s)"); print(result.summary()); payload=result.to_dict()
         if args.compare_oof:
@@ -58,7 +62,7 @@ def main()->None:
         return
     if args.cmd=="infer":
         config=read_config(args.config); submission=infer_checkpoints(config["data_root"],args.checkpoints,config); submission.to_csv(args.out,index=False); print(args.out); return
-    if args.cmd=="runtime": print(resolve_runtime(read_config(args.config) if args.config else {}).describe()); return
+    if args.cmd=="runtime":print(resolve_runtime(read_config(args.config) if args.config else {}).describe()); return
 
 
 if __name__=="__main__":main()
