@@ -75,7 +75,7 @@ class SliceEncoder(nn.Module):
                 net.features[0][0] = replacement
             self.features = net.features
             self.pool = net.avgpool
-            self.norm = net.classifier[0]
+            self.pre_classifier = nn.Sequential(*list(net.classifier.children())[:-1])
             self.out_dim = int(net.classifier[-1].in_features)
             self._forward_impl = self._forward_convnext
         else:
@@ -86,8 +86,8 @@ class SliceEncoder(nn.Module):
 
     def _forward_convnext(self, x):
         x = self.features(x)
-        x = self.pool(x).flatten(1)
-        return self.norm(x)
+        x = self.pool(x)
+        return self.pre_classifier(x)
 
     def forward(self, x):
         return self._forward_impl(x)
@@ -152,11 +152,9 @@ class MultiSeriesKneeNet(nn.Module):
 
     def _encode_streams(self, volumes):
         if volumes.ndim == 5:
-            # [B,K,S,H,W] grayscale
             b, k, s, h, w = volumes.shape
             x = volumes.view(b * k * s, 1, h, w)
         elif volumes.ndim == 6:
-            # [B,K,S,C,H,W] 2.5D
             b, k, s, c, h, w = volumes.shape
             x = volumes.view(b * k * s, c, h, w)
         else:
