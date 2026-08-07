@@ -1,0 +1,36 @@
+# Configuration for the efficiency prize track: a single small model, fewer
+# slices and no test-time augmentation. Expect roughly a tenth of the inference
+# cost of the five-fold ensemble for a modest drop in accuracy.
+
+paths:
+  data_dir: data
+  cache_dir: cache/train
+  output_dir: runs/efficiency
+
+data:
+  image_size: 192
+  depth: 16
+  max_series: 3
+  n_folds: 5
+  num_workers: 8
+
+model:
+  backbone: tf_efficientnetv2_b0
+  embed_dim: 384
+  slice_layers: 1
+  slice_heads: 6
+  drop_path: 0.05
+
+train:
+  epochs: 15
+  batch_size: 8
+  accumulate: 1
+  learning_rate: 0.0004
+  amp_dtype: bf16
+  aux_weight: 0.3
+  distil_weight: 1.0                   # distillation matters more at low capacity
+
+inference:
+  batch_size: 8
+  tta_slice_shift: false
+  half: true

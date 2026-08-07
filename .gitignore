@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# run outputs
+runs/
+*_output.csv
+
+# RSNA knee pipeline: cached volumes, checkpoints and submissions
+cache/
+*.npy
+*.pt
+submission.csv
+
+# LaTeX build artefacts
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+*.toc
