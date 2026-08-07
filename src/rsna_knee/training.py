@@ -13,7 +13,6 @@ import torch
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 
 from .calibration import fit_calibration
 from .constants import DUAL_STREAMS, TARGETS
@@ -24,6 +23,7 @@ from .model import KneeMILNet
 from .preflight import run_preflight
 from .report_labels import combine_gold_and_pseudo, label_dataframe, state_dataframe
 from .runtime import autocast, barrier, global_loss_batch, make_scaler, resolve_runtime
+from .sampling import TwoPoolBatchSampler, trusted_study_mask
 
 
 def seed_everything(seed: int) -> None:
@@ -68,12 +68,8 @@ def _build_model(spec,config,device):
     return KneeMILNet(spec["n_streams"],spec["n_slices"],in_channels=spec["in_channels"],pretrained_weights=bool(config.get("pretrained",True)),normalize_input=spec["normalize_input"],dropout=spec["dropout"],encoder_batch_size=spec["encoder_batch_size"],gradient_checkpointing=spec["gradient_checkpointing"]).to(device)
 
 
-def _state_dict(model):
-    return model.module.state_dict() if isinstance(model,DDP) else model.state_dict()
-
-
-def _load_state_dict(model,state):
-    (model.module if isinstance(model,DDP) else model).load_state_dict(state,strict=True)
+def _state_dict(model): return model.module.state_dict() if isinstance(model,DDP) else model.state_dict()
+def _load_state_dict(model,state): (model.module if isinstance(model,DDP) else model).load_state_dict(state,strict=True)
 
 
 def train_fold(config:dict,fold:int)->Path:
@@ -100,22 +96,22 @@ def train_fold(config:dict,fold:int)->Path:
     train_targets,train_weights=combine_gold_and_pseudo(df,pseudo,confidence,float(config.get("gold_weight",8.0)))
     index=build_series_index(series,df["StudyInstanceUID"],mode="dual"); ti=np.flatnonzero(train_mask.to_numpy()); ii=np.flatnonzero(inner_mask.to_numpy()); oi=np.flatnonzero(outer_mask.to_numpy())
     train_ds=KneeStudyDataset(df.iloc[ti]["StudyInstanceUID"].tolist(),index,_dataset_config(config,root,train=True),train_targets[ti],train_weights[ti],True); inner_ds=KneeStudyDataset(df.iloc[ii]["StudyInstanceUID"].tolist(),index,_dataset_config(config,root,train=False),df.iloc[ii][TARGETS].to_numpy(dtype=np.float32),None,False); outer_ds=KneeStudyDataset(df.iloc[oi]["StudyInstanceUID"].tolist(),index,_dataset_config(config,root,train=False),df.iloc[oi][TARGETS].to_numpy(dtype=np.float32),None,False)
-    kwargs=runtime.loader_kwargs(); bs=int(config.get("batch_size",2)); sampler=DistributedSampler(train_ds,num_replicas=runtime.world_size,rank=runtime.rank,shuffle=True,seed=seed+fold) if runtime.distributed else None
-    train_loader=DataLoader(train_ds,batch_size=bs,shuffle=sampler is None,sampler=sampler,**kwargs); inner_loader=DataLoader(inner_ds,batch_size=bs,shuffle=False,**kwargs); outer_loader=DataLoader(outer_ds,batch_size=bs,shuffle=False,**kwargs)
+
+    bs=int(config.get("batch_size",2)); trusted=trusted_study_mask(gold.iloc[ti].to_numpy(),train_weights[ti],float(config.get("trusted_pseudo_threshold",0.60))); batch_sampler=TwoPoolBatchSampler(trusted,bs,trusted_fraction=float(config.get("trusted_fraction",0.30)),seed=seed+fold,rank=runtime.rank,world_size=runtime.world_size,drop_last=True)
+    kwargs=runtime.loader_kwargs(); train_loader=DataLoader(train_ds,batch_sampler=batch_sampler,**kwargs); inner_loader=DataLoader(inner_ds,batch_size=bs,shuffle=False,**kwargs); outer_loader=DataLoader(outer_ds,batch_size=bs,shuffle=False,**kwargs)
     spec=_model_spec(config); model=_build_model(spec,config,runtime.device)
     if runtime.distributed: model=DDP(model,device_ids=[runtime.local_rank],output_device=runtime.local_rank,find_unused_parameters=False,broadcast_buffers=False)
     optimizer=torch.optim.AdamW(model.parameters(),lr=float(config.get("lr",1e-4)),weight_decay=float(config.get("weight_decay",1e-4))); epochs=int(config.get("epochs",20)); scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=max(1,epochs),eta_min=float(config.get("min_lr",1e-6))); scaler=make_scaler(runtime)
     outdir=Path(config.get("output_dir","runs/model"))/f"fold{fold}"; checkpoint=outdir/"best.pt"
     if runtime.is_main:
-        outdir.mkdir(parents=True,exist_ok=True); assignments=df[["StudyInstanceUID","report_group","fold"]].copy(); assignments["role"]="weak_train"; assignments.loc[train_mask&gold,"role"]="gold_train"; assignments.loc[inner_mask,"role"]="inner_selection"; assignments.loc[outer_mask,"role"]="outer_oof"; assignments.to_csv(outdir/"fold_assignments.csv",index=False); (outdir/"metadata_repair.json").write_text(json.dumps(metadata_stats,indent=2),encoding="utf-8")
+        outdir.mkdir(parents=True,exist_ok=True); assignments=df[["StudyInstanceUID","report_group","fold"]].copy(); assignments["role"]="weak_train"; assignments.loc[train_mask&gold,"role"]="gold_train"; assignments.loc[inner_mask,"role"]="inner_selection"; assignments.loc[outer_mask,"role"]="outer_oof"; assignments.to_csv(outdir/"fold_assignments.csv",index=False); (outdir/"metadata_repair.json").write_text(json.dumps(metadata_stats,indent=2),encoding="utf-8"); (outdir/"sampling.json").write_text(json.dumps({"trusted_fraction":float(config.get("trusted_fraction",0.30)),"trusted_pseudo_threshold":float(config.get("trusted_pseudo_threshold",0.60)),"trusted_studies":int(trusted.sum()),"general_studies":int((~trusted).sum())},indent=2),encoding="utf-8")
         if preflight_payload is not None:(outdir/"preflight.json").write_text(json.dumps(preflight_payload,indent=2),encoding="utf-8")
         if calibration is not None:(outdir/"calibration.json").write_text(json.dumps(calibration.to_dict(),indent=2),encoding="utf-8")
     barrier(runtime)
 
     best=-np.inf; best_epoch=0; bad=0; history=[]; rank_weight=float(config.get("rank_loss_weight",0.10))
     for epoch in range(epochs):
-        if sampler is not None: sampler.set_epoch(epoch)
-        model.train(); total=0.0; seen=0
+        batch_sampler.set_epoch(epoch); model.train(); total=0.0; seen=0
         for batch in train_loader:
             optimizer.zero_grad(set_to_none=True); volumes=batch["volumes"].to(runtime.device,non_blocking=True); present=batch["present"].to(runtime.device,non_blocking=True); target=batch["target"].to(runtime.device,non_blocking=True); weight=batch["weight"].to(runtime.device,non_blocking=True)
             with autocast(runtime):
@@ -128,8 +124,7 @@ def train_fold(config:dict,fold:int)->Path:
         if np.isfinite(score) and score>best:
             best=float(score); best_epoch=epoch+1; bad=0
             if runtime.is_main: torch.save({"model":_state_dict(model),"model_spec":spec,"config":config,"stream_names":train_ds.stream_names,"fold":fold,"inner_fold":inner_fold,"selected_epoch":best_epoch,"inner_score":best},checkpoint)
-        else:
-            bad+=1
+        else: bad+=1
         barrier(runtime)
         if bad>=int(config.get("patience",5)): break
     if best_epoch==0: raise RuntimeError("no finite inner selection score")
