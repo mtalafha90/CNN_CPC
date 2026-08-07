@@ -1,33 +1,79 @@
-# Modeling strategy and experiment roadmap
+# Modeling strategy
 
-## Baseline
-The implemented baseline is a multi-series MRNet-style model: shared ResNet18 slice encoder, attention over slices, learned stream embeddings, attention over MRI streams, and a 12-logit multi-label head. Training uses confidence-weighted report pseudo-labels plus higher weight for the 58 gold cases; model selection is gold-only macro AUC.
+## Current production model
 
-## Measuring a change honestly
+The repository now has one supported model rather than a runnable experiment matrix:
 
-Two pieces of machinery exist so that experiment comparisons mean something.
+```text
+fold-safe calibrated report teacher
+  -> confidence-weighted training labels
+  -> dual-sequence 2.5D knee MRI
+  -> pretrained ConvNeXt-Tiny slice encoder
+  -> per-target slice attention
+  -> per-target stream attention
+  -> 12 outputs
+```
 
-**Bootstrap intervals.** `rsna-knee evaluate --train-csv ... --oof runs/*/oof.csv` resamples the gold studies and reports a 95% interval alongside the macro AUC. At 58 studies that interval spans roughly 0.08, so a change of 0.01 is not a result. Add `--compare-oof` to compare two runs on the *same* resampled studies: pairing cancels the shared study-selection noise, so it detects real differences that two overlapping individual intervals would hide.
+The auxiliary ranking term is deliberately small and confidence-gated. It uses official gold cells and sufficiently confident/extreme calibrated pseudo-labels; low-confidence report silence does not create ranking pairs.
 
-**Fold-safe teacher calibration.** With `calibrate_teacher: true` the fixed rule probabilities are replaced by `P(y = 1 | rule state)` learned from the gold studies outside the validation fold, smoothed towards each target's prevalence. Calibrating on all 58 and then validating on a subset of the same 58 makes validation optimistic; `calibration_split_mask` enforces the split. Each fold writes a `calibration.json` so the learned mapping can be inspected — it is also the quickest way to audit the teacher, since it shows directly what a "positive mention" is worth per target.
+## Validation discipline
 
-## Running locally on a GPU
+The trusted surface is very small, so model development must remain conservative.
 
-`rsna-knee runtime` prints the resolved device, precision and worker count before you commit to a long run. Precision defaults to bf16 on Ampere or newer and fp16 on older cards; `num_workers` defaults to CPU cores minus one. DICOM decoding, not the GPU, is the bottleneck, so the worker count matters more than the backbone. With several GPUs, `data_parallel: true` splits each batch across them, and `batch_size` must be at least the number of cards. See `configs/local_gpu.yaml`.
+- Fold assignments are deterministic for a fixed seed.
+- Duplicate normalized gold reports stay together.
+- Validation-report duplicates are excluded from training.
+- Teacher calibration is fit only on out-of-fold gold studies.
+- Validation uses raw official cells with NaNs preserved.
+- Per-target AUC is undefined, rather than invented, when a target has only one class in a sample.
+- The reported macro AUC is accompanied by a study-level bootstrap interval.
+- Future alternatives should be compared on identical OOF studies with the paired bootstrap implementation.
 
-## Recommended experiment order
-1. **Audit the text teacher.** Measure per-class AUC and inspect errors against the 58 gold studies before trusting pseudo-labels.
-2. **Establish an honest image baseline.** Train three gold-validation folds and save OOF predictions.
-3. **Improve pseudo-labels.** If current competition rules permit, evaluate a stronger multilingual clinical-text teacher. Do not send restricted competition data to external APIs unless explicitly allowed.
-4. **Improve MRI representations.** Compare random initialization with permitted pretrained or self-supervised MRI encoders.
-5. **Compare sequence routing.** Test 3-stream best-series vs 6-stream fluid+structural routing and eventually target-specific routing.
-6. **Backbone diversity.** Compare ConvNeXt, EfficientNetV2, Swin, and 2.5D/3D networks after the pipeline is verified.
-7. **3D context.** Evaluate adjacent-slice 2.5D input before moving to more expensive full 3D networks.
-8. **Ensembling.** Mean/rank-average diverse folds and backbones. Because the metric is AUC, ordering matters more than perfect calibration.
+## Why this production architecture
 
-## Avoid
-- treating unlabeled target cells as negatives;
-- putting duplicate reports in both train and validation;
-- tuning dozens of hyperparameters on only 58 gold cases;
-- claiming unmeasured CV or leaderboard scores;
-- committing competition DICOMs, reports, Kaggle credentials, or API keys.
+The selected design incorporates the strongest low-complexity ideas from the public-methodology review without preserving a large amount of speculative code:
+
+- **2.5D** captures local through-plane context while retaining mature 2D pretrained encoders.
+- **Dual fluid/structural routing** preserves complementary MRI contrast information.
+- **ConvNeXt-Tiny** provides a stronger modern 2D encoder than the original ResNet18 baseline while remaining practical.
+- **Target-specific hierarchical attention** lets ACL, meniscus, OA, fluid, marrow and fracture targets use different slices and sequences.
+- **Fold-safe report supervision** uses the 4,349 non-gold studies without treating them as negatives.
+- **Confidence-gated ranking** nudges ordering for an AUC metric without trusting ambiguous pseudo-labels equally.
+
+None of these choices should be described as leaderboard-optimal until measured OOF results exist.
+
+## Memory strategy
+
+The model processes many images per study (`streams × sampled slices`). ConvNeXt encoding is therefore split into bounded encoder micro-batches. During training, gradient checkpointing recomputes encoder activations during backward instead of storing every slice activation simultaneously.
+
+This produces a clean single-GPU reference implementation before distributed execution is introduced.
+
+## Next development step: multi-GPU DDP
+
+The next code change should be proper PyTorch `DistributedDataParallel`, not `nn.DataParallel`.
+
+The DDP implementation should add:
+
+1. one process per GPU and explicit local-rank device binding;
+2. `DistributedSampler` for training data;
+3. deterministic epoch reseeding with `sampler.set_epoch(epoch)`;
+4. synchronized/aggregated validation predictions across ranks;
+5. rank-0-only checkpoint/CSV/JSON writes;
+6. global effective batch-size handling and learning-rate policy;
+7. clean single-GPU fallback through the same entry point;
+8. launch examples for `torchrun` and the target cluster/Kaggle environment.
+
+The current repository intentionally removes the previous `nn.DataParallel` path so DDP can be added without supporting two competing parallelization models.
+
+## Before changing the model again
+
+The immediate empirical step remains to train the current three folds and freeze their OOF predictions. Only after that should architecture changes be reintroduced, one at a time, against the same folds.
+
+Avoid:
+
+- treating unlabeled cells as negatives;
+- test-time report dependence;
+- tuning many hyperparameters against 58 gold studies;
+- introducing a new backbone without a controlled OOF comparison;
+- claiming CV/leaderboard improvements before running them;
+- committing competition data, reports, credentials or model artifacts.
