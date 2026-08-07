@@ -26,13 +26,13 @@ from .runtime import autocast, barrier, global_loss_batch, make_scaler, resolve_
 from .sampling import TwoPoolBatchSampler, trusted_study_mask
 
 
-def seed_everything(seed: int) -> None:
+def seed_everything(seed:int)->None:
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
 
 
-def macro_weighted_bce(logits: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
-    cell=nn.functional.binary_cross_entropy_with_logits(logits,target,reduction="none"); num=(cell*weight).sum(dim=0); den=weight.sum(dim=0); valid=den>0
+def macro_weighted_bce(logits,target,weight):
+    cell=nn.functional.binary_cross_entropy_with_logits(logits,target,reduction="none"); num=(cell*weight).sum(0); den=weight.sum(0); valid=den>0
     return (num[valid]/den[valid].clamp_min(1e-8)).mean() if valid.any() else logits.sum()*0.0
 
 
@@ -65,7 +65,14 @@ def _model_spec(config):
 
 
 def _build_model(spec,config,device):
-    return KneeMILNet(spec["n_streams"],spec["n_slices"],in_channels=spec["in_channels"],pretrained_weights=bool(config.get("pretrained",True)),normalize_input=spec["normalize_input"],dropout=spec["dropout"],encoder_batch_size=spec["encoder_batch_size"],gradient_checkpointing=spec["gradient_checkpointing"]).to(device)
+    model=KneeMILNet(spec["n_streams"],spec["n_slices"],in_channels=spec["in_channels"],pretrained_weights=bool(config.get("pretrained",True)),normalize_input=spec["normalize_input"],dropout=spec["dropout"],encoder_batch_size=spec["encoder_batch_size"],gradient_checkpointing=spec["gradient_checkpointing"])
+    ssl_path=config.get("ssl_encoder_checkpoint")
+    if ssl_path:
+        payload=torch.load(Path(ssl_path),map_location="cpu",weights_only=False)
+        state=payload.get("encoder",payload)
+        model.encoder.load_state_dict(state,strict=True)
+        print(f"loaded in-domain SSL encoder: {ssl_path}")
+    return model.to(device)
 
 
 def _state_dict(model): return model.module.state_dict() if isinstance(model,DDP) else model.state_dict()
@@ -79,12 +86,10 @@ def train_fold(config:dict,fold:int)->Path:
     inner_fold=int(config.get("inner_selection_fold",(fold+1)%n_folds));
     if inner_fold==fold or not 0<=inner_fold<n_folds: raise ValueError("inner selection fold must differ from outer validation fold")
     seed_everything(seed+fold+runtime.rank); root=Path(config["data_root"]); df=load_train_csv(root/config.get("train_csv","train.csv")); series_path=root/config.get("train_series_csv","train_series.csv")
-
     preflight_payload=None
     if runtime.is_main and bool(config.get("preflight_before_train",True)):
         result=run_preflight(root,split="train",series_csv=series_path,study_uids=df["StudyInstanceUID"].tolist(),sample_size=int(config.get("preflight_sample_size",24)),stream_mode="dual",seed=seed,max_decode_failure_rate=float(config.get("preflight_max_decode_failure_rate",0.05)),strict=True); preflight_payload=result.to_dict(); print(result.summary())
     barrier(runtime)
-
     series=load_series_csv(series_path); series,metadata_stats=backfill_series_metadata(series,root,split="train")
     df=add_report_groups(df); df["fold"]=make_balanced_gold_folds(df,n_folds,seed); gold=gold_mask(df); outer_mask=df["fold"].eq(fold)&gold; inner_mask=df["fold"].eq(inner_fold)&gold
     heldout_groups=set(df.loc[outer_mask|inner_mask,"report_group"].astype(str)); train_mask=~df["report_group"].astype(str).isin(heldout_groups)
@@ -96,11 +101,10 @@ def train_fold(config:dict,fold:int)->Path:
     train_targets,train_weights=combine_gold_and_pseudo(df,pseudo,confidence,float(config.get("gold_weight",8.0)))
     index=build_series_index(series,df["StudyInstanceUID"],mode="dual"); ti=np.flatnonzero(train_mask.to_numpy()); ii=np.flatnonzero(inner_mask.to_numpy()); oi=np.flatnonzero(outer_mask.to_numpy())
     train_ds=KneeStudyDataset(df.iloc[ti]["StudyInstanceUID"].tolist(),index,_dataset_config(config,root,train=True),train_targets[ti],train_weights[ti],True); inner_ds=KneeStudyDataset(df.iloc[ii]["StudyInstanceUID"].tolist(),index,_dataset_config(config,root,train=False),df.iloc[ii][TARGETS].to_numpy(dtype=np.float32),None,False); outer_ds=KneeStudyDataset(df.iloc[oi]["StudyInstanceUID"].tolist(),index,_dataset_config(config,root,train=False),df.iloc[oi][TARGETS].to_numpy(dtype=np.float32),None,False)
-
     bs=int(config.get("batch_size",2)); trusted=trusted_study_mask(gold.iloc[ti].to_numpy(),train_weights[ti],float(config.get("trusted_pseudo_threshold",0.60))); batch_sampler=TwoPoolBatchSampler(trusted,bs,trusted_fraction=float(config.get("trusted_fraction",0.30)),seed=seed+fold,rank=runtime.rank,world_size=runtime.world_size,drop_last=True)
     kwargs=runtime.loader_kwargs(); train_loader=DataLoader(train_ds,batch_sampler=batch_sampler,**kwargs); inner_loader=DataLoader(inner_ds,batch_size=bs,shuffle=False,**kwargs); outer_loader=DataLoader(outer_ds,batch_size=bs,shuffle=False,**kwargs)
     spec=_model_spec(config); model=_build_model(spec,config,runtime.device)
-    if runtime.distributed: model=DDP(model,device_ids=[runtime.local_rank],output_device=runtime.local_rank,find_unused_parameters=False,broadcast_buffers=False)
+    if runtime.distributed:model=DDP(model,device_ids=[runtime.local_rank],output_device=runtime.local_rank,find_unused_parameters=False,broadcast_buffers=False)
     optimizer=torch.optim.AdamW(model.parameters(),lr=float(config.get("lr",1e-4)),weight_decay=float(config.get("weight_decay",1e-4))); epochs=int(config.get("epochs",20)); scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=max(1,epochs),eta_min=float(config.get("min_lr",1e-6))); scaler=make_scaler(runtime)
     outdir=Path(config.get("output_dir","runs/model"))/f"fold{fold}"; checkpoint=outdir/"best.pt"
     if runtime.is_main:
@@ -108,7 +112,6 @@ def train_fold(config:dict,fold:int)->Path:
         if preflight_payload is not None:(outdir/"preflight.json").write_text(json.dumps(preflight_payload,indent=2),encoding="utf-8")
         if calibration is not None:(outdir/"calibration.json").write_text(json.dumps(calibration.to_dict(),indent=2),encoding="utf-8")
     barrier(runtime)
-
     best=-np.inf; best_epoch=0; bad=0; history=[]; rank_weight=float(config.get("rank_loss_weight",0.10))
     for epoch in range(epochs):
         batch_sampler.set_epoch(epoch); model.train(); total=0.0; seen=0
@@ -120,14 +123,14 @@ def train_fold(config:dict,fold:int)->Path:
             if clip>0: scaler.unscale_(optimizer); nn.utils.clip_grad_norm_(model.parameters(),clip)
             scaler.step(optimizer); scaler.update(); total+=float(loss.item())*len(target); seen+=len(target)
         scheduler.step(); _,ip,it=predict(model,inner_loader,runtime.device,runtime); score=macro_auc_from_arrays(it,ip)[0]; row={"epoch":epoch+1,"train_loss":total/max(seen,1),"inner_macro_auc":score,"lr":optimizer.param_groups[0]["lr"]}
-        if runtime.is_main: history.append(row); print(row)
+        if runtime.is_main:history.append(row); print(row)
         if np.isfinite(score) and score>best:
             best=float(score); best_epoch=epoch+1; bad=0
-            if runtime.is_main: torch.save({"model":_state_dict(model),"model_spec":spec,"config":config,"stream_names":train_ds.stream_names,"fold":fold,"inner_fold":inner_fold,"selected_epoch":best_epoch,"inner_score":best},checkpoint)
-        else: bad+=1
+            if runtime.is_main:torch.save({"model":_state_dict(model),"model_spec":spec,"config":config,"stream_names":train_ds.stream_names,"fold":fold,"inner_fold":inner_fold,"selected_epoch":best_epoch,"inner_score":best},checkpoint)
+        else:bad+=1
         barrier(runtime)
-        if bad>=int(config.get("patience",5)): break
-    if best_epoch==0: raise RuntimeError("no finite inner selection score")
+        if bad>=int(config.get("patience",5)):break
+    if best_epoch==0:raise RuntimeError("no finite inner selection score")
     barrier(runtime); payload=torch.load(checkpoint,map_location="cpu",weights_only=False); _load_state_dict(model,payload["model"]); ouids,op,ot=predict(model,outer_loader,runtime.device,runtime); oscore=macro_auc_from_arrays(ot,op)[0]
     if runtime.is_main:
         oof=pd.DataFrame(op,columns=TARGETS); oof.insert(0,"StudyInstanceUID",ouids); oof.to_csv(outdir/"oof.csv",index=False); pd.DataFrame(history).to_csv(outdir/"history.csv",index=False); (outdir/"config.json").write_text(json.dumps(config,indent=2),encoding="utf-8"); (outdir/"selection.json").write_text(json.dumps({"outer_fold":fold,"inner_fold":inner_fold,"selected_epoch":best_epoch,"inner_macro_auc":best,"outer_macro_auc":float(oscore)},indent=2),encoding="utf-8"); boot=bootstrap_macro_auc(ot,op,n_bootstrap=int(config.get("n_bootstrap",2000)),seed=seed+fold); (outdir/"bootstrap.json").write_text(json.dumps(boot.to_dict(),indent=2),encoding="utf-8"); (outdir/"runtime.json").write_text(json.dumps({"elapsed_seconds":float(time.time()-start_time),"device":runtime.device_name,"world_size":runtime.world_size,"runtime":runtime.describe(),"num_workers":runtime.num_workers,"peak_gpu_memory_bytes":int(torch.cuda.max_memory_allocated(runtime.device)) if runtime.device.type=="cuda" else 0,"git_sha_env":os.environ.get("GITHUB_SHA") or os.environ.get("GIT_COMMIT")},indent=2),encoding="utf-8")
