@@ -29,8 +29,16 @@ def _load_checkpoint_payload(path: str | Path) -> dict:
 
 def _same_model_spec(a: dict, b: dict) -> bool:
     keys = {
-        "n_streams", "n_slices", "in_channels", "image_size", "triplet_gap",
-        "stream_mode", "dropout", "normalize_input",
+        "n_streams",
+        "n_slices",
+        "in_channels",
+        "image_size",
+        "triplet_gap",
+        "stream_mode",
+        "dropout",
+        "normalize_input",
+        "encoder_batch_size",
+        "gradient_checkpointing",
     }
     return all(a.get(k) == b.get(k) for k in keys)
 
@@ -45,6 +53,8 @@ def load_checkpoint(path: str | Path, device: torch.device):
         pretrained_weights=False,
         normalize_input=bool(spec.get("normalize_input", True)),
         dropout=float(spec.get("dropout", 0.25)),
+        encoder_batch_size=int(spec.get("encoder_batch_size", 24)),
+        gradient_checkpointing=bool(spec.get("gradient_checkpointing", True)),
     )
     model.load_state_dict(payload["model"], strict=True)
     return model.to(device), payload
@@ -54,8 +64,7 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
     """Average aligned fold checkpoints using MRI images only.
 
     Model/preprocessing settings are recovered from the checkpoint. The runtime
-    YAML controls only data locations and hardware settings, so a stale config
-    cannot silently change slice count, triplet construction or normalization.
+    YAML controls data locations, DataLoader settings and device selection only.
     """
     paths = [Path(p) for p in checkpoint_paths]
     if not paths:
@@ -72,7 +81,7 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
 
     root = Path(data_root)
     test = load_test_csv(root / config.get("test_csv", "test.csv"))
-    if test["StudyInstanceUID"].astype(str).duplicated().any():
+    if test["StudyInstanceUID"].duplicated().any():
         raise ValueError("test.csv contains duplicate StudyInstanceUID values")
 
     series = load_series_csv(root / config.get("test_series_csv", "test_series.csv"))
@@ -80,7 +89,7 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
     print(f"[test metadata] {metadata_stats}")
 
     stream_mode = str(reference_spec.get("stream_mode", "dual"))
-    index = build_series_index(series, test["StudyInstanceUID"].astype(str), stream_mode)
+    index = build_series_index(series, test["StudyInstanceUID"], stream_mode)
     dataset_config = DatasetConfig(
         data_root=str(root),
         split="test",
@@ -92,7 +101,7 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
         triplet_gap=int(reference_spec.get("triplet_gap", 1)),
         strict_dicom=bool(config.get("strict_dicom_inference", True)),
     )
-    dataset = KneeStudyDataset(test["StudyInstanceUID"].astype(str).tolist(), index, dataset_config, train=False)
+    dataset = KneeStudyDataset(test["StudyInstanceUID"].tolist(), index, dataset_config, train=False)
     if dataset.stream_names != reference_stream_names:
         raise ValueError(
             f"test stream order {dataset.stream_names} does not match checkpoints {reference_stream_names}"
@@ -101,7 +110,7 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
     runtime = resolve_runtime(config)
     loader = DataLoader(
         dataset,
-        batch_size=max(1, int(config.get("batch_size", 4))),
+        batch_size=max(1, int(config.get("batch_size", 2))),
         shuffle=False,
         **runtime.loader_kwargs(),
     )
