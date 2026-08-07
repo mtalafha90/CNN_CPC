@@ -29,7 +29,7 @@ from .evaluation import bootstrap_macro_auc, macro_auc_from_arrays
 from .model import KneeMILNet
 from .preflight import run_preflight
 from .report_labels import combine_gold_and_pseudo, label_dataframe, state_dataframe
-from .runtime import autocast, make_scaler, resolve_runtime, unwrap, wrap_parallel
+from .runtime import autocast, make_scaler, resolve_runtime
 
 
 def seed_everything(seed: int) -> None:
@@ -55,13 +55,7 @@ def confidence_gated_ranking_loss(
     positive_threshold: float = 0.75,
     negative_threshold: float = 0.25,
 ) -> torch.Tensor:
-    """Pairwise AUC surrogate using only trustworthy training cells.
-
-    Official gold cells always qualify because their training weight is large.
-    Pseudo-labels qualify only when the calibrated teacher is both confident and
-    sufficiently far from 0.5. This prevents weak report silence from becoming
-    artificial ranking supervision.
-    """
+    """Pairwise AUC surrogate using only trustworthy training cells."""
     losses: list[torch.Tensor] = []
     for j in range(logits.shape[1]):
         trusted = weight[:, j] >= float(min_confidence)
@@ -123,6 +117,8 @@ def _model_spec(config: dict, n_streams: int) -> dict:
         "stream_mode": "dual",
         "dropout": float(config.get("dropout", 0.25)),
         "normalize_input": bool(config.get("normalize_input", True)),
+        "encoder_batch_size": int(config.get("encoder_batch_size", 24)),
+        "gradient_checkpointing": bool(config.get("gradient_checkpointing", True)),
     }
 
 
@@ -141,7 +137,7 @@ def train_fold(config: dict, fold: int) -> Path:
             root,
             split="train",
             series_csv=series_path,
-            study_uids=df["StudyInstanceUID"].astype(str).tolist(),
+            study_uids=df["StudyInstanceUID"].tolist(),
             sample_size=int(config.get("preflight_sample_size", 24)),
             stream_mode="dual",
             seed=seed,
@@ -187,23 +183,21 @@ def train_fold(config: dict, fold: int) -> Path:
         df, pseudo, confidence, float(config.get("gold_weight", 8.0))
     )
 
-    series_index = build_series_index(series, df["StudyInstanceUID"].astype(str), mode="dual")
+    series_index = build_series_index(series, df["StudyInstanceUID"], mode="dual")
     ti = np.flatnonzero(train_mask.to_numpy())
     vi = np.flatnonzero(val_mask.to_numpy())
 
     train_ds = KneeStudyDataset(
-        df.iloc[ti]["StudyInstanceUID"].astype(str).tolist(),
+        df.iloc[ti]["StudyInstanceUID"].tolist(),
         series_index,
         _dataset_config(config, root, train=True),
         train_targets[ti],
         train_weights[ti],
         True,
     )
-    # Validation targets are the official cells, including NaNs for any cell
-    # that is genuinely unannotated. Pseudo-labels never enter validation.
     val_gold = df.iloc[vi][TARGETS].to_numpy(dtype=np.float32)
     val_ds = KneeStudyDataset(
-        df.iloc[vi]["StudyInstanceUID"].astype(str).tolist(),
+        df.iloc[vi]["StudyInstanceUID"].tolist(),
         series_index,
         _dataset_config(config, root, train=False),
         val_gold,
@@ -214,10 +208,10 @@ def train_fold(config: dict, fold: int) -> Path:
     runtime = resolve_runtime(config)
     print(f"[fold {fold}] {runtime.describe()}")
     if runtime.device.type == "cuda":
-        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.reset_peak_memory_stats(runtime.device)
 
     loader_kwargs = runtime.loader_kwargs()
-    batch_size = int(config.get("batch_size", 4))
+    batch_size = int(config.get("batch_size", 2))
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
@@ -229,8 +223,9 @@ def train_fold(config: dict, fold: int) -> Path:
         pretrained_weights=bool(config.get("pretrained", True)),
         normalize_input=spec["normalize_input"],
         dropout=spec["dropout"],
+        encoder_batch_size=spec["encoder_batch_size"],
+        gradient_checkpointing=spec["gradient_checkpointing"],
     ).to(runtime.device)
-    model = wrap_parallel(model, runtime, bool(config.get("data_parallel", True)))
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -272,21 +267,26 @@ def train_fold(config: dict, fold: int) -> Path:
             with autocast(runtime):
                 logits = model(volumes, present)
                 bce = weighted_bce(logits, target, weight)
-                rank = confidence_gated_ranking_loss(
-                    logits,
-                    target,
-                    weight,
-                    pairs_per_target=int(config.get("rank_pairs_per_target", 32)),
-                    min_confidence=float(config.get("rank_min_confidence", 0.35)),
-                    positive_threshold=float(config.get("rank_positive_threshold", 0.75)),
-                    negative_threshold=float(config.get("rank_negative_threshold", 0.25)),
-                ) if rank_weight > 0 else logits.new_zeros(())
+                rank = (
+                    confidence_gated_ranking_loss(
+                        logits,
+                        target,
+                        weight,
+                        pairs_per_target=int(config.get("rank_pairs_per_target", 32)),
+                        min_confidence=float(config.get("rank_min_confidence", 0.35)),
+                        positive_threshold=float(config.get("rank_positive_threshold", 0.75)),
+                        negative_threshold=float(config.get("rank_negative_threshold", 0.25)),
+                    )
+                    if rank_weight > 0
+                    else logits.new_zeros(())
+                )
                 loss = bce + rank_weight * rank
 
             scaler.scale(loss).backward()
-            if float(config.get("grad_clip", 1.0)) > 0:
+            grad_clip = float(config.get("grad_clip", 1.0))
+            if grad_clip > 0:
                 scaler.unscale_(optimizer)
-                nn.utils.clip_grad_norm_(model.parameters(), float(config.get("grad_clip", 1.0)))
+                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             scaler.step(optimizer)
             scaler.update()
             running += float(loss.item()) * len(target)
@@ -307,15 +307,17 @@ def train_fold(config: dict, fold: int) -> Path:
         if np.isfinite(score) and score > best_score:
             best_score = score
             bad_epochs = 0
-            checkpoint = {
-                "model": unwrap(model).state_dict(),
-                "model_spec": spec,
-                "config": config,
-                "stream_names": train_ds.stream_names,
-                "fold": fold,
-                "score": float(score),
-            }
-            torch.save(checkpoint, outdir / "best.pt")
+            torch.save(
+                {
+                    "model": model.state_dict(),
+                    "model_spec": spec,
+                    "config": config,
+                    "stream_names": train_ds.stream_names,
+                    "fold": fold,
+                    "score": float(score),
+                },
+                outdir / "best.pt",
+            )
             oof = pd.DataFrame(probabilities, columns=TARGETS)
             oof.insert(0, "StudyInstanceUID", uids)
             oof.to_csv(outdir / "oof.csv", index=False)
@@ -343,10 +345,12 @@ def train_fold(config: dict, fold: int) -> Path:
     runtime_payload = {
         "elapsed_seconds": float(time.time() - start_time),
         "device": runtime.device_name,
-        "n_gpus": int(runtime.n_gpus),
+        "visible_gpus": int(runtime.visible_gpus),
         "runtime": runtime.describe(),
         "num_workers": int(runtime.num_workers),
-        "peak_gpu_memory_bytes": int(torch.cuda.max_memory_allocated()) if runtime.device.type == "cuda" else 0,
+        "peak_gpu_memory_bytes": (
+            int(torch.cuda.max_memory_allocated(runtime.device)) if runtime.device.type == "cuda" else 0
+        ),
         "git_sha_env": os.environ.get("GITHUB_SHA") or os.environ.get("GIT_COMMIT"),
     }
     (outdir / "runtime.json").write_text(json.dumps(runtime_payload, indent=2), encoding="utf-8")
