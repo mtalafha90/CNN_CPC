@@ -1,103 +1,111 @@
 # CNN_CPC — RSNA Knee Abnormality Detection
 
-Reproducible PyTorch research baseline for the **2026 RSNA Knee Abnormality Detection** Kaggle competition.
+Reproducible PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** Kaggle competition.
 
-> **Competition status (snapshot: 2026-08-07):** the competition is still open, so there are no winning solutions to reproduce yet. This repository therefore documents the current challenge, reviews public early approaches and the MRNet literature, and implements an honest baseline that can be trained and submitted through Kaggle.
+> **Competition status (snapshot: 2026-08-07):** the competition is still open. This repository therefore avoids winner claims and records only measured OOF/leaderboard results.
 
-## Public Kaggle/code methodology review
+## Documentation
 
-A detailed review of the currently discoverable public competition code, methodology, and recurring techniques is now available in:
+- [Public competition methodology review](README_KAGGLE_METHODS.md)
+- [Current repository technical review](docs/REPO_REVIEW_2026-08-07.md)
+- [Competition notes](docs/competition.md)
+- [Dataset handling](docs/data.md)
+- [Experiment strategy](docs/strategy.md)
+- [References](docs/references.md)
 
-**[README_KAGGLE_METHODS.md](README_KAGGLE_METHODS.md)**
+## Core problem
 
-It covers weak supervision from reports, multilingual/LLM pseudo-labeling, DICOM geometry, sequence routing, 2.5D triplets, DINOv2, ConvNeXt/EfficientNet, target-specific MIL, ranking loss, leakage-safe validation, efficiency engineering, 3D complementary models, and a prioritized experiment matrix for `CNN_CPC`.
+Each MRI study contains multiple DICOM series and must receive 12 probabilities:
 
-## What the challenge asks
+`ACL, MCL, Medial Meniscus, Lateral Meniscus, Medial OA, Lateral OA, PF OA, Effusion, Synovitis, Baker's, Contusion, Fracture`.
 
-Given a knee MRI study containing multiple DICOM series, predict 12 binary abnormalities:
+The metric is **macro ROC-AUC across the 12 targets**.
 
-1. ACL
-2. MCL
-3. Medial Meniscus
-4. Lateral Meniscus
-5. Medial OA
-6. Lateral OA
-7. PF OA
-8. Effusion
-9. Synovitis
-10. Baker's
-11. Contusion
-12. Fracture
+The important supervision structure is unusual:
 
-The score is the **macro-average ROC AUC across the 12 targets**, so every class contributes equally.
+- 4,407 training studies;
+- only 58 studies with explicit gold labels;
+- 4,349 report-supervised studies;
+- multi-plane/multi-sequence MRI metadata in `train_series.csv`.
 
-## The key data insight
+The pipeline therefore treats radiology reports as a **training teacher**, while validation is strictly gold-only and final inference is image-only by default.
 
-The public competition files have an unusual supervision structure:
+## Current architecture and capabilities
 
-- 4,407 training studies
-- only 58 studies with explicit gold 0/1 labels
-- 4,349 studies without gold labels
-- radiology report text is present for the training studies
-- `train_series.csv` identifies each series' anatomical plane and whether it is fluid-sensitive / fat-suppressed
-
-This makes the problem primarily **semi-supervised / weakly supervised**, not a conventional fully supervised CNN task. The baseline here therefore uses the reports to create soft pseudo-labels for the unlabeled MRI studies while keeping evaluation strictly on the gold-labeled studies.
-
-See [docs/competition.md](docs/competition.md) and [docs/data.md](docs/data.md) for the full breakdown.
-
-## Baseline architecture
+The baseline remains intentionally simple, but the same pipeline now supports controlled upgrades:
 
 ```text
-Radiology report ──> multilingual rule labels ─────────────┐
-                                                          │ soft targets
-Sagittal DICOM series ─> shared ResNet18 ─> slice attention│
-Coronal DICOM series  ─> shared ResNet18 ─> slice attention├─> series attention ─> 12 logits
-Axial DICOM series    ─> shared ResNet18 ─> slice attention│
-                                                          │
-Gold labels (58) ──────────────────────────────────────────┘ higher loss weight + validation only
+Radiology report (training only)
+  -> multilingual rule states
+  -> fold-safe empirical calibration
+  -> soft targets + per-target confidence
+
+MRI study
+  -> DICOM metadata repair
+  -> physical slice ordering
+  -> 3-stream or 6-stream sequence routing
+  -> 2D slices OR 2.5D [z-gap,z,z+gap] triplets
+  -> shared ResNet18 / ConvNeXt-Tiny / timm backbone
+  -> mean / max / attention / Top-K slice pooling
+  -> shared stream attention OR 12 target-specific queries
+  -> 12 logits
+
+Loss
+  -> confidence-weighted BCE
+  -> optional pairwise ranking loss
+
+Validation
+  -> gold-only OOF
+  -> per-target AUC
+  -> macro AUC
+  -> bootstrap interval
+  -> paired bootstrap run comparison
 ```
 
-The image model is deliberately MRNet-like: a 2D CNN encodes slices, attention pools slices into a series representation, and attention then fuses anatomical planes/series into one study-level prediction.
+## DICOM safety
 
-### Why this baseline
+Long training runs should begin with a real pixel-decode audit:
 
-- Uses the large unlabeled portion rather than pretending 58 labeled studies are enough.
-- Keeps duplicate normalized reports in the same validation group to reduce leakage.
-- Validates only against explicit gold labels.
-- Uses the competition-provided series metadata instead of guessing MRI planes from pixels.
-- Supports 3-stream (`best`) and 6-stream (`dual`) series selection.
-- Produces the exact 13-column Kaggle submission schema.
-- Does **not** claim an unmeasured leaderboard score.
-
-## Repository layout
-
-```text
-CNN_CPC/
-├── configs/baseline.yaml
-├── docs/
-│   ├── competition.md
-│   ├── data.md
-│   ├── strategy.md
-│   └── references.md
-├── kaggle/
-│   ├── train_template.py
-│   └── submit_template.py
-├── scripts/
-│   └── report_only_submission.py
-├── src/rsna_knee/
-│   ├── constants.py
-│   ├── data.py
-│   ├── dicom.py
-│   ├── dataset.py
-│   ├── report_labels.py
-│   ├── model.py
-│   ├── metrics.py
-│   ├── training.py
-│   ├── fusion.py
-│   ├── inference.py
-│   └── cli.py
-└── tests/
+```bash
+rsna-knee preflight \
+  --data-root /path/to/rsna-knee-abnormality-detection \
+  --split train \
+  --sample-size 24
 ```
+
+The preflight checks selected streams, path resolution, DICOM decoding, frame counts, preprocessing, and metadata repair. Training runs this automatically by default and refuses to start if the sampled stream failure rate exceeds the configured threshold.
+
+DICOM handling includes:
+
+- physical ordering from `ImageOrientationPatient` + `ImagePositionPatient`;
+- `InstanceNumber` fallback;
+- suffix-less/`.ima`/`.dicom` instances;
+- enhanced multi-frame DICOM;
+- rescale slope/intercept;
+- `MONOCHROME1` inversion;
+- mixed in-plane size normalization;
+- robust percentile intensity normalization.
+
+## Experiment configs
+
+Use the frozen configs instead of manually changing several knobs at once:
+
+| Experiment | Main change |
+|---|---|
+| `configs/e01_baseline.yaml` | 2D ResNet18, 3 streams, shared attention |
+| `configs/e02_2p5d_resnet18.yaml` | E01 + true neighboring-slice 2.5D input |
+| `configs/e03_target_attention.yaml` | E02 + per-target stream queries |
+| `configs/e04_dual_stream.yaml` | E03 + six fluid/structural streams |
+| `configs/e05_convnext_tiny.yaml` | E04 + ConvNeXt-Tiny backbone |
+| `configs/e06_rank_loss.yaml` | E05 + pairwise AUC-surrogate ranking loss |
+
+The model layer also supports timm backbones using:
+
+```yaml
+backbone: timm:<model_name>
+```
+
+This makes DINOv2-style timm encoders available when allowed weights are accessible. Verify current competition external-model rules before enabling pretrained external weights.
 
 ## Installation
 
@@ -105,139 +113,109 @@ CNN_CPC/
 git clone https://github.com/mtalafha90/CNN_CPC.git
 cd CNN_CPC
 python -m venv .venv
-source .venv/bin/activate       # Linux/macOS
-# .venv\Scripts\activate        # Windows
+source .venv/bin/activate
 pip install -e .
-```
-
-For development/tests:
-
-```bash
 pip install pytest
-PYTHONPATH=src pytest -q
+pytest -q
 ```
 
-## Expected Kaggle data layout
+GitHub Actions also runs the test suite on pushes to `main` and on pull requests.
 
-Set `data_root` in `configs/baseline.yaml` to the mounted competition dataset, normally:
+## Expected data layout
 
 ```text
-/kaggle/input/rsna-knee-abnormality-detection/
+DATA_ROOT/
 ├── train.csv
 ├── train_series.csv
 ├── test.csv
 ├── test_series.csv
-├── train_series/<StudyInstanceUID>/<SeriesInstanceUID>/*.dcm
-└── test_series/<StudyInstanceUID>/<SeriesInstanceUID>/*.dcm
+├── train_series/<StudyInstanceUID>/<SeriesInstanceUID>/*
+└── test_series/<StudyInstanceUID>/<SeriesInstanceUID>/*
 ```
 
-The loader also accepts a few common alternative image directory names. See [docs/data.md](docs/data.md).
-
-## Inspect the competition files
+## Inspect data
 
 ```bash
-rsna-knee inspect --data-root /kaggle/input/rsna-knee-abnormality-detection
+rsna-knee inspect --data-root DATA_ROOT
 ```
 
-This prints study counts, gold/unlabeled counts, series count, and gold positive counts per target.
+## Train E01
 
-## Generate report pseudo-labels
-
-```bash
-rsna-knee pseudo-label \
-  --train-csv /kaggle/input/rsna-knee-abnormality-detection/train.csv \
-  --out /kaggle/working/report_pseudo_labels.csv
-```
-
-The included extractor is intentionally conservative and transparent. It understands target terms and common negation expressions across several languages represented in public descriptions of the challenge. It is a baseline, not a substitute for a validated multilingual clinical NLP model.
-
-## Train image folds
-
-The default is 3 folds because the gold validation set is extremely small.
+Change only `data_root` in the experiment config, then run:
 
 ```bash
 for fold in 0 1 2; do
-  rsna-knee train --config configs/baseline.yaml --fold "$fold"
+  rsna-knee train --config configs/e01_baseline.yaml --fold "$fold"
 done
 ```
 
-Outputs are written under `output_dir/foldN/`:
+Each fold writes:
 
 - `best.pt`
 - `oof.csv`
 - `history.csv`
 - `config.json`
+- `fold_assignments.csv`
+- `calibration.json` when calibration is active
+- `metadata_repair.json`
+- `bootstrap.json`
 
-Validation is gold-only and selected by macro AUC.
-
-## Tune image/report fusion
+## Evaluate the full OOF baseline
 
 ```bash
-rsna-knee tune-fusion \
-  --train-csv /kaggle/input/rsna-knee-abnormality-detection/train.csv \
-  --oof /kaggle/working/runs/fold0/oof.csv \
-        /kaggle/working/runs/fold1/oof.csv \
-        /kaggle/working/runs/fold2/oof.csv \
-  --out /kaggle/working/fusion.json
+rsna-knee evaluate \
+  --train-csv DATA_ROOT/train.csv \
+  --oof runs/e01_baseline/fold0/oof.csv \
+        runs/e01_baseline/fold1/oof.csv \
+        runs/e01_baseline/fold2/oof.csv \
+  --out runs/e01_baseline/evaluation.json
 ```
 
-Because only 58 gold cases exist, treat the tuned fusion coefficient as high variance. Do not over-optimize it against the same tiny validation surface.
+## Compare E02 against E01
+
+```bash
+rsna-knee evaluate \
+  --train-csv DATA_ROOT/train.csv \
+  --oof runs/e01_baseline/fold0/oof.csv \
+        runs/e01_baseline/fold1/oof.csv \
+        runs/e01_baseline/fold2/oof.csv \
+  --compare-oof runs/e02_2p5d_resnet18/fold0/oof.csv \
+                runs/e02_2p5d_resnet18/fold1/oof.csv \
+                runs/e02_2p5d_resnet18/fold2/oof.csv
+```
+
+The paired bootstrap estimates the median macro-AUC difference, an interval for that difference, and how often the second run wins under study resampling.
 
 ## Inference and submission
 
+Inference is **image-only by default**:
+
 ```bash
 rsna-knee infer \
-  --config configs/baseline.yaml \
-  --checkpoints /kaggle/input/YOUR-MODEL-DATASET/fold0.pt \
-                /kaggle/input/YOUR-MODEL-DATASET/fold1.pt \
-                /kaggle/input/YOUR-MODEL-DATASET/fold2.pt \
-  --alpha 0.70 \
-  --out /kaggle/working/submission.csv
+  --config configs/e01_baseline.yaml \
+  --checkpoints /path/fold0.pt /path/fold1.pt /path/fold2.pt \
+  --alpha 1.0 \
+  --out submission.csv
 ```
 
-The output columns are exactly:
+Report fusion is intentionally rejected unless `allow_test_report_fusion: true` is explicitly set after verifying that a test-like dataset genuinely contains report text.
+
+Submission columns are exactly:
 
 ```text
 StudyInstanceUID,ACL,MCL,Medial Meniscus,Lateral Meniscus,Medial OA,Lateral OA,PF OA,Effusion,Synovitis,Baker's,Contusion,Fracture
 ```
 
-Templates for Kaggle are in `kaggle/train_template.py` and `kaggle/submit_template.py`.
+## Development policy
 
-## Report-only sanity baseline
+1. Freeze folds and preserve OOF predictions.
+2. Change one major factor per experiment.
+3. Validate only on official gold labels.
+4. Use paired bootstrap before accepting small improvements.
+5. Treat pretrained/external models as rule-dependent features, not assumptions.
+6. Do not commit competition DICOMs, credentials, or large checkpoints.
+7. Do not report synthetic, teacher-only, or README demonstration metrics as competition results.
 
-Before spending GPU time, create a report-only submission to validate the text path and CSV schema:
+## Next data-dependent step
 
-```bash
-python scripts/report_only_submission.py \
-  --test-csv /kaggle/input/rsna-knee-abnormality-detection/test.csv \
-  --out /kaggle/working/submission.csv
-```
-
-This is a plumbing/sanity baseline, not the intended final model.
-
-## What to improve next
-
-The highest-value experiments are documented in [docs/strategy.md](docs/strategy.md). In order:
-
-1. audit report-derived labels against the 58 gold studies, per class and per language;
-2. establish a measured gold-only CV baseline;
-3. replace rules with a stronger multilingual clinical-text teacher if competition rules permit;
-4. add self-supervised MRI pretraining / allowed pretrained image encoders;
-5. compare `best` vs `dual` multi-sequence routing;
-6. test 3D or 2.5D backbones and plane-specific encoders;
-7. ensemble diverse folds/backbones and calibrate only when supported by validation.
-
-## Important cautions
-
-- **No winner claims:** the competition is ongoing as of this repository snapshot.
-- **No fabricated score:** no leaderboard/CV number is reported until actually measured.
-- **Tiny gold set:** 58 labeled studies makes per-class AUC noisy; some fold/class combinations may be poorly estimated.
-- **Pseudo-label noise:** radiology reports are useful supervision but are not identical to expert binary annotations.
-- **Competition rules change:** verify the current Kaggle rules before using external data, pretrained weights, APIs, or internet-dependent code.
-- **Do not commit competition data or DICOMs** to this repository.
-
-## Background
-
-The design is inspired by MRNet, which demonstrated that knee MRI can be modeled by processing individual slices and combining information across sagittal, coronal and axial series. This repository extends that idea to the current 12-label, multilingual, weakly supervised challenge.
-
-See [docs/references.md](docs/references.md) for sources and public early competition implementations reviewed during development.
+The code-side review recommendations are implemented. The remaining work that cannot be completed without the mounted competition data/GPU is to **run E01-E06**, collect OOF predictions/runtime/memory, and use those measured results to decide which architecture to retain.
