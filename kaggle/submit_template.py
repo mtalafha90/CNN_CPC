@@ -9,7 +9,8 @@ import sys
 import yaml
 
 CODE_ROOT = Path("/kaggle/input/<your-code-dataset>/CNN_CPC")
-MODEL_ROOT = Path("/kaggle/input/<your-model-dataset>/runs/model")
+MODEL_ROOT = Path("/kaggle/input/<your-model-dataset>/runs/stage2")
+EXPECTED_STAGE = "stage2"  # change to "stage1" only if Stage 1 is the frozen final method
 sys.path.insert(0, str(CODE_ROOT / "src"))
 
 from rsna_knee.inference import infer_checkpoints  # noqa: E402
@@ -22,6 +23,7 @@ config["runtime_budget_hours"] = 8.5
 config["submission_filename"] = "submission.csv"
 config["pretrained"] = False
 config["allow_external_pretrained"] = False
+config["expected_checkpoint_stage"] = EXPECTED_STAGE
 
 checkpoints = sorted(MODEL_ROOT.glob("fold*/best.pt"))
 if len(checkpoints) != int(config.get("n_folds", 3)):
