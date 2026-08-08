@@ -18,7 +18,7 @@ CONFIG_RUN = Path("/kaggle/working/train.yaml")
 
 FOLD = 0  # edit to 0, 1, or 2 in separate notebook copies
 STAGE1_MODEL_ROOT = None  # Stage 2: "/kaggle/input/<stage1-model-dataset>/runs/model"
-SSL_CHECKPOINT = None     # optional competition-data SSL checkpoint
+SSL_CHECKPOINT = None     # optional checkpoint produced by pretrain_template.py
 SMOKE = False
 
 stage_name = "cotrain" if STAGE1_MODEL_ROOT else "model"
@@ -34,6 +34,7 @@ config["pretrained"] = False
 config["allow_external_pretrained"] = False
 config["cotrain_stage1_root"] = STAGE1_MODEL_ROOT
 config["ssl_encoder_checkpoint"] = SSL_CHECKPOINT
+config["ssl_checkpoint_source"] = "competition_training_data" if SSL_CHECKPOINT else None
 CONFIG_RUN.write_text(yaml.safe_dump(config, sort_keys=False))
 
 env = os.environ.copy()
