@@ -99,7 +99,14 @@ stage1/fold{k}/weak_oof.csv
 
 For Stage-2 outer fold `k`, **that is the only permitted image teacher**. Predictions from Stage-1 folds `j != k` are rejected because those models may have trained on gold fold `k`, creating indirect validation leakage.
 
-Thus Stage-2 uses image/report consensus only for the fold-local weak subset; other weak cells remain report-supervised. This sacrifices some image-teacher coverage in exchange for an unbiased outer OOF estimate.
+Stage-2 itself has two distinct phases:
+
+1. **Phase A — report-only epoch selection.** The image teacher is deliberately disabled because the Stage-1 fold-`k` model may have trained on the current inner gold fold. This keeps inner selection independent.
+2. **Phase B — fresh image/report co-training.** The model is reinitialized; all non-outer gold studies are allowed, and the `crossfit_fold=k` weak studies are included with fold-local image/report consensus targets. Their image predictions are independent of both themselves and outer-gold fold `k`.
+
+Stage 2 does **not** write another `weak_oof.csv`: those weak studies were used during Stage-2 training, so a subsequent prediction would be in-sample and must not be mislabeled as OOF.
+
+This design intentionally uses image-teacher supervision for only one third of the non-gold studies in each Stage-2 outer fold. The cost is reduced image-teacher coverage; the benefit is an unbiased outer OOF estimate.
 
 ## 10. Full pre-run audit
 
@@ -110,9 +117,9 @@ Before long GPU runs, `rsna-knee audit` measures:
 - gold-fold positive/negative counts;
 - six-stream selection/missing rates;
 - full selected-series DICOM decode status;
-- partial file-decode failures.
+- per-series and global partial file-decode failure rates.
 
-The full pixel audit runs in CPU processes and must complete within its configured budget or it is marked incomplete and fails.
+The full pixel audit runs in CPU processes and is a hard gate: incomplete audits, undecodable selected series, or corruption rates above configured thresholds fail the run.
 
 ## 11. Runtime policy
 
