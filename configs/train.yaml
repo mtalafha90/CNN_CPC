@@ -1,4 +1,5 @@
-# Single production configuration. Change data_root/output_dir for your machine.
+# Production configuration for the 2026 RSNA Knee Abnormality Detection challenge.
+# Machine-specific paths should be the only mandatory edits.
 data_root: /data/rsna-knee-abnormality-detection
 train_csv: train.csv
 train_series_csv: train_series.csv
@@ -8,27 +9,39 @@ output_dir: runs/model
 seed: 2026
 n_folds: 3
 
+# Conservative Kaggle code-competition policy.
+competition_mode: true
+requested_gpus: 1
+runtime_budget_hours: 8.5
+runtime_reserve_minutes: 10
+submission_filename: submission.csv
+# External pretrained weights remain OFF unless the competition-specific rules
+# are explicitly verified to allow them. Competition-data SSL is permitted by
+# this repository's conservative policy because it uses only supplied training data.
+allow_external_pretrained: false
+pretrained: false
+
 # MRI/model: ConvNeXt slice encoder + cross-sequence Transformer + 12 pathology queries.
 n_slices: 16
 image_size: 224
 triplet_gap: 1
 batch_size: 2
+inference_batch_size: 2
 encoder_batch_size: 24
 gradient_checkpointing: true
-pretrained: true
-normalize_input: true
+normalize_input: false
 dropout: 0.25
 transformer_layers: 2
 transformer_heads: 8
 transformer_ff_mult: 2.0
 pathology_layers: 1
 
-# In-domain SSL. Recommended first stage:
+# In-domain SSL. Run this in a separate <=8.5 h notebook/job:
 #   rsna-knee pretrain --config configs/train.yaml
-# then set ssl_encoder_checkpoint: runs/ssl/ssl_encoder.pt
+# Then attach/cache the generated checkpoint and set the path below.
 ssl_encoder_checkpoint: null
 ssl_output_dir: runs/ssl
-ssl_epochs: 10
+ssl_epochs: 4
 ssl_batch_size: 4
 ssl_n_slices: 5
 ssl_projection_dim: 256
@@ -38,15 +51,16 @@ ssl_lr: 0.0002
 ssl_weight_decay: 0.0001
 ssl_noise_std: 0.01
 
-# Optimization
+# Nested optimization. The budget guard can stop Phase A early while preserving
+# enough estimated time for final retraining and outer/weak evaluation.
 lr: 0.0001
 min_lr: 0.000001
 weight_decay: 0.0001
-epochs: 20
-patience: 5
+epochs: 8
+patience: 2
 grad_clip: 1.0
 
-# Weak supervision / PU
+# Weak supervision / PU.
 calibrate_teacher: true
 calibration_alpha: 5.0
 min_calibration_studies: 8
@@ -59,22 +73,23 @@ rank_min_confidence: 0.35
 rank_positive_threshold: 0.75
 rank_negative_threshold: 0.25
 
-# Cross-fitted image/report co-training.
-# Stage 1: leave null and train all folds. Each fold writes weak_oof.csv.
-# Stage 2: set this to the three stage-1 weak_oof.csv files, change output_dir,
-# and retrain all folds. Agreement strengthens supervision; disagreement is weak.
-cotrain_image_oof: null
+# Leakage-safe Stage 2.
+# Leave null for Stage 1. For Stage 2 set this to the Stage-1 output root, e.g.
+# /kaggle/input/<stage1-models>/runs/model . Outer fold k will ONLY read
+# fold{k}/weak_oof.csv, whose generating model excluded both outer-gold fold k
+# and those weak studies.
+cotrain_stage1_root: null
 cotrain_positive_threshold: 0.80
 cotrain_negative_threshold: 0.20
 cotrain_agreement_weight: 0.90
 cotrain_disagreement_weight: 0.05
 cotrain_blend: 0.50
 
-# Balanced study sampling
+# Balanced study sampling.
 trusted_fraction: 0.30
 trusted_pseudo_threshold: 0.60
 
-# MRI-specific training augmentation
+# MRI-specific training augmentation.
 noise_std: 0.02
 slice_dropout: 0.08
 train_gap_choices: [1, 2]
@@ -85,24 +100,29 @@ scale_jitter: 0.05
 gamma_jitter: 0.12
 bias_field_strength: 0.08
 
-# Deterministic inference TTA over slice-center offsets.
+# Inference TTA. All views are generated from one DICOM decode; if projected
+# runtime threatens the budget, inference automatically falls back to center view.
 tta_center_offsets: [-1, 0, 1]
+auto_tta_budget: true
 
-# DICOM safety
+# DICOM safety / cache.
 preflight_before_train: true
 preflight_sample_size: 24
 preflight_max_decode_failure_rate: 0.05
 strict_dicom: false
 strict_dicom_inference: true
+series_cache_mb_per_worker: 256
 
-# Evaluation
+# Full audit uses CPU processes in a separate run.
+audit_workers: 4
+
+# Evaluation.
 n_bootstrap: 2000
 
-# Runtime / DDP
-# torchrun --standalone --nproc_per_node=<N> -m rsna_knee.cli train --config configs/train.yaml --fold 0
+# One GPU + CPU multiprocessing. Never launch with torchrun.
 device: auto
 precision: auto
-ddp_backend: nccl
 num_workers: null
 persistent_workers: true
-prefetch_factor: 4
+prefetch_factor: 2
+multiprocessing_context: spawn
