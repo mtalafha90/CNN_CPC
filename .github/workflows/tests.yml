@@ -8,6 +8,7 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,5 +24,9 @@ jobs:
         run: python -m compileall -q src tests kaggle
       - name: Verify dependencies
         run: pip check
+      - name: CLI/runtime import smoke
+        run: rsna-knee runtime --config configs/train.yaml
       - name: Run tests
+        env:
+          WORLD_SIZE: '1'
         run: pytest -q
