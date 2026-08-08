@@ -125,6 +125,7 @@ def pretrain_ssl(config: dict) -> Path:
 
     history = []
     epoch_times = []
+    budget_exhausted = False
     for epoch in range(epochs):
         if epoch_times:
             estimate = float(torch.tensor(epoch_times).median().item())
@@ -136,6 +137,10 @@ def pretrain_ssl(config: dict) -> Path:
         total, steps = 0.0, 0
         for batch_index, batch in enumerate(loader):
             if batch_index >= max_batches:
+                break
+            if not budget.can_start(120.0):
+                budget_exhausted = True
+                print("[budget] stopping SSL batches before the wall-clock reserve")
                 break
             volumes = batch["volumes"].to(runtime.device, non_blocking=True)
             present = batch["present"].to(runtime.device, non_blocking=True)
@@ -165,18 +170,22 @@ def pretrain_ssl(config: dict) -> Path:
 
         epoch_seconds = time.monotonic() - epoch_start
         epoch_times.append(epoch_seconds)
-        row = {
-            "epoch": epoch + 1,
-            "loss": total / max(steps, 1),
-            "epoch_seconds": epoch_seconds,
-            "batches": int(steps),
-            "max_batches": int(max_batches),
-        }
-        history.append(row)
-        print(row)
+        if steps > 0:
+            row = {
+                "epoch": epoch + 1,
+                "loss": total / steps,
+                "epoch_seconds": epoch_seconds,
+                "batches": int(steps),
+                "max_batches": int(max_batches),
+                "budget_limited": bool(budget_exhausted),
+            }
+            history.append(row)
+            print(row)
+        if budget_exhausted:
+            break
 
     if not history:
-        raise RuntimeError("SSL did not complete one epoch inside the runtime budget")
+        raise RuntimeError("SSL did not complete one training batch inside the runtime budget")
     torch.save(
         {
             "encoder": model.encoder.state_dict(),
