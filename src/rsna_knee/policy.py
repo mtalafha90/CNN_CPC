@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 SSL_COMPETITION_SOURCE = "competition_training_data"
@@ -9,6 +10,46 @@ def _offsets(config: dict, key: str, fallback) -> tuple[int, ...]:
     values = config.get(key, fallback)
     values = [0] if values is None or len(values) == 0 else values
     return tuple(int(value) for value in values)
+
+
+def _stage1_sources(config: dict) -> list[Path]:
+    root = config.get("cotrain_stage1_root")
+    candidates = config.get("cotrain_stage1_candidates")
+    if root:
+        return [Path(str(root))]
+    if candidates:
+        return [Path(str(value)) for value in candidates]
+    return []
+
+
+def _validate_mounted_stage1_contract(config: dict, validation_offsets: tuple[int, ...]) -> None:
+    """Reject mounted Stage-1 sources evaluated under another validation policy."""
+    n_folds = int(config.get("n_folds", 3))
+    for root in _stage1_sources(config):
+        if not root.exists():
+            # Saved checkpoint configs may reference paths that are not mounted at
+            # inference time. Actual Stage-2 training will have mounted sources.
+            continue
+        for fold in range(n_folds):
+            path = root / f"fold{fold}" / "selection.json"
+            if not path.is_file():
+                raise FileNotFoundError(f"mounted Stage-1 source is missing {path}")
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if str(payload.get("stage", "")) != "stage1":
+                raise ValueError(f"Stage-2 source {path.parent} is not a Stage-1 fold")
+            if int(payload.get("outer_fold", -1)) != fold:
+                raise ValueError(f"Stage-2 source {path.parent} has the wrong outer fold")
+            offsets = payload.get("validation_tta_offsets")
+            if not isinstance(offsets, list) or not offsets:
+                raise ValueError(
+                    f"Stage-1 source {path.parent} predates the validation-TTA contract; retrain it"
+                )
+            source_offsets = tuple(int(value) for value in offsets)
+            if source_offsets != validation_offsets:
+                raise ValueError(
+                    f"Stage-1 source {path.parent} validated TTA {source_offsets}, but current "
+                    f"Stage-2 validation TTA is {validation_offsets}"
+                )
 
 
 def validate_competition_config(config: dict, *, purpose: str) -> None:
@@ -50,6 +91,8 @@ def validate_competition_config(config: dict, *, purpose: str) -> None:
     if stage1_candidates is not None:
         if not isinstance(stage1_candidates, (list, tuple)) or len(stage1_candidates) < 1:
             raise ValueError("cotrain_stage1_candidates must be a non-empty list of Stage-1 roots")
+    if purpose == "train" and (stage1_root or stage1_candidates):
+        _validate_mounted_stage1_contract(config, validation_offsets)
 
     ssl_path = config.get("ssl_encoder_checkpoint")
     if ssl_path and not bool(config.get("allow_external_pretrained", False)):
