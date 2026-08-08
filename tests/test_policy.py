@@ -9,6 +9,16 @@ from rsna_knee.inference import _load_checkpoint_payload
 from rsna_knee.policy import validate_competition_config, validate_submission_path
 
 
+def _safe_training_config() -> dict:
+    return {
+        "competition_mode": True,
+        "runtime_budget_hours": 8.5,
+        "requested_gpus": 1,
+        "pretrained": False,
+        "allow_external_pretrained": False,
+    }
+
+
 def test_competition_budget_must_be_strictly_below_nine_hours():
     with pytest.raises(ValueError, match="strictly below 9"):
         validate_competition_config(
@@ -29,11 +39,8 @@ def test_external_pretrained_is_off_by_default():
     with pytest.raises(ValueError, match="forbids external pretrained"):
         validate_competition_config(
             {
-                "competition_mode": True,
-                "runtime_budget_hours": 8.5,
-                "requested_gpus": 1,
+                **_safe_training_config(),
                 "pretrained": True,
-                "allow_external_pretrained": False,
             },
             purpose="train",
         )
@@ -41,17 +48,42 @@ def test_external_pretrained_is_off_by_default():
 
 def test_attached_ssl_requires_explicit_competition_data_source():
     base = {
-        "competition_mode": True,
-        "runtime_budget_hours": 8.5,
-        "requested_gpus": 1,
-        "pretrained": False,
-        "allow_external_pretrained": False,
+        **_safe_training_config(),
         "ssl_encoder_checkpoint": "/kaggle/input/ssl/ssl_encoder.pt",
     }
     with pytest.raises(ValueError, match="ssl_checkpoint_source"):
         validate_competition_config(base, purpose="train")
     safe = {**base, "ssl_checkpoint_source": "competition_training_data"}
     validate_competition_config(safe, purpose="train")
+
+
+def test_mounted_ssl_payload_must_have_competition_data_provenance(tmp_path):
+    bad_path = tmp_path / "bad_ssl.pt"
+    torch.save(
+        {"encoder": {}, "source": "unknown", "config": _safe_training_config()},
+        bad_path,
+    )
+    config = {
+        **_safe_training_config(),
+        "ssl_encoder_checkpoint": str(bad_path),
+        "ssl_checkpoint_source": "competition_training_data",
+    }
+    with pytest.raises(ValueError, match="provenance"):
+        validate_competition_config(config, purpose="train")
+
+    good_path = tmp_path / "good_ssl.pt"
+    torch.save(
+        {
+            "encoder": {},
+            "source": "competition_training_data",
+            "config": _safe_training_config(),
+        },
+        good_path,
+    )
+    validate_competition_config(
+        {**config, "ssl_encoder_checkpoint": str(good_path)},
+        purpose="train",
+    )
 
 
 def test_inference_rejects_checkpoint_from_unsafe_training_policy(tmp_path):
@@ -76,9 +108,7 @@ def test_inference_rejects_checkpoint_from_unsafe_training_policy(tmp_path):
 
 def test_submission_filename_is_enforced():
     config = {
-        "competition_mode": True,
-        "runtime_budget_hours": 8.5,
-        "requested_gpus": 1,
+        **_safe_training_config(),
         "submission_filename": "submission.csv",
     }
     validate_competition_config(config, purpose="infer")
