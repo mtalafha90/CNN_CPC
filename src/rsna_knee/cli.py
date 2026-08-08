@@ -13,7 +13,7 @@ import yaml
 from .audit import run_audit
 from .constants import TARGETS
 from .cotrain import choose_fold_candidate_root
-from .data import gold_mask, load_series_csv, load_train_csv
+from .data import build_validation_manifest, gold_mask, load_series_csv, load_train_csv
 from .evaluation import bootstrap_macro_auc, compare_runs, load_oof
 from .inference import infer_checkpoints
 from .policy import validate_submission_path
@@ -67,7 +67,7 @@ def main() -> None:
 
     p = sub.add_parser("preflight", help="decode a representative DICOM sample")
     p.add_argument("--data-root", required=True)
-    p.add_argument("--split", choices=["train", "test"], default="train")
+    p.add_argument("--split", choices=["train", "test", "validation"], default="train")
     p.add_argument("--series-csv", default=None)
     p.add_argument("--sample-size", type=int, default=24)
     p.add_argument("--max-decode-failure-rate", type=float, default=0.05)
@@ -92,6 +92,14 @@ def main() -> None:
     p.add_argument("--config", required=True)
     p.add_argument("--fold", type=int, required=True)
     p.add_argument("--smoke", action="store_true", help="2-epoch/20-batch integration run")
+
+    p = sub.add_parser(
+        "validation-manifest",
+        help="export the real gold nested validation/training roles for one outer fold",
+    )
+    p.add_argument("--config", required=True)
+    p.add_argument("--fold", type=int, required=True)
+    p.add_argument("--out", required=True)
 
     p = sub.add_parser(
         "select-stage1",
@@ -178,6 +186,26 @@ def main() -> None:
             config = _smoke_config(config)
         _set_training_limits(config)
         print(train_fold(config, args.fold))
+        return
+
+    if args.cmd == "validation-manifest":
+        config = read_config(args.config)
+        root = Path(config["data_root"])
+        df = load_train_csv(root / config.get("train_csv", "train.csv"))
+        n_folds = int(config.get("n_folds", 3))
+        inner_fold = int(config.get("inner_selection_fold", (args.fold + 1) % n_folds))
+        manifest = build_validation_manifest(
+            df,
+            outer_fold=args.fold,
+            n_splits=n_folds,
+            seed=int(config.get("seed", 2026)),
+            inner_fold=inner_fold,
+        )
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        manifest.to_csv(out, index=False)
+        print(manifest["role"].value_counts().to_string())
+        print(out)
         return
 
     if args.cmd == "select-stage1":
