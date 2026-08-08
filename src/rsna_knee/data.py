@@ -166,6 +166,41 @@ def make_balanced_gold_folds(df: pd.DataFrame, n_splits: int = 3, seed: int = 20
     return out
 
 
+def build_validation_manifest(
+    df: pd.DataFrame,
+    *,
+    outer_fold: int,
+    n_splits: int = 3,
+    seed: int = 2026,
+    inner_fold: int | None = None,
+) -> pd.DataFrame:
+    """Return the explicit gold nested-validation manifest for one outer fold.
+
+    The manifest is for inspection/reproducibility only. ``outer_validation`` is
+    the untouched final OOF fold; ``inner_selection`` chooses training duration;
+    the remaining gold rows are ``gold_train``. Non-gold studies are excluded.
+    """
+    if n_splits < 3:
+        raise ValueError("nested validation manifest requires at least 3 folds")
+    if not 0 <= int(outer_fold) < n_splits:
+        raise ValueError("outer_fold is outside the configured fold range")
+    if inner_fold is None:
+        inner_fold = (int(outer_fold) + 1) % n_splits
+    if not 0 <= int(inner_fold) < n_splits or int(inner_fold) == int(outer_fold):
+        raise ValueError("inner_fold must be valid and differ from outer_fold")
+
+    folds = make_balanced_gold_folds(df, n_splits=n_splits, seed=seed)
+    gold = gold_mask(df)
+    manifest = df.loc[gold, ["StudyInstanceUID", *TARGETS]].copy()
+    manifest.insert(1, "fold", folds.loc[gold].astype(int).to_numpy())
+    manifest.insert(2, "role", "gold_train")
+    manifest.loc[manifest["fold"].eq(int(inner_fold)), "role"] = "inner_selection"
+    manifest.loc[manifest["fold"].eq(int(outer_fold)), "role"] = "outer_validation"
+    manifest.insert(3, "outer_fold", int(outer_fold))
+    manifest.insert(4, "inner_fold", int(inner_fold))
+    return manifest.sort_values(["role", "StudyInstanceUID"]).reset_index(drop=True)
+
+
 def _rank_indices(score: np.ndarray) -> list[int]:
     return np.argsort(-score, kind="mergesort").astype(int).tolist()
 
