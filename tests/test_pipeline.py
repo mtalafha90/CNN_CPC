@@ -37,5 +37,20 @@ def test_gold_folds_and_submission():
     rows.append({"StudyInstanceUID": "u", "Report": "unlabeled", **{t: np.nan for t in TARGETS}})
     folds = make_balanced_gold_folds(pd.DataFrame(rows), n_splits=3)
     assert folds.iloc[-1] == -1
+    gold_counts = folds[folds >= 0].value_counts().sort_index()
+    assert set(gold_counts.index) == {0, 1, 2}
+    assert int(gold_counts.max() - gold_counts.min()) <= 1
     submission = pd.DataFrame([["x", *([0.5] * 12)]], columns=SUBMISSION_COLUMNS)
     validate_submission(submission)
+
+
+def test_symmetric_gold_labels_do_not_starve_a_fold():
+    rows = []
+    for i in range(12):
+        row = {"StudyInstanceUID": f"s{i}", "Report": f"unique symmetric report {i}"}
+        for j, target in enumerate(TARGETS):
+            row[target] = float((i + j) % 2)
+        rows.append(row)
+    folds = make_balanced_gold_folds(pd.DataFrame(rows), n_splits=3, seed=2026)
+    counts = folds.value_counts().sort_index()
+    assert counts.to_dict() == {0: 4, 1: 4, 2: 4}
