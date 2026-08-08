@@ -1,289 +1,292 @@
 # Local Real-Data Training Runbook
 
-Use this exact sequence from a local Linux terminal when training `CNN_CPC` on the real RSNA Knee Abnormality Detection data.
+This is the concise production runbook for the current local RSNA knee workflow.
 
-Production assumptions:
+The repository has already passed real-data CSV inspection, nested-fold generation, train/test DICOM preflight, full selected-series audit, OA weak-label verification, and paired-sampler fold-0 smoke training.
 
-- one GPU only;
-- CPU multiprocessing for DICOM/data work;
-- no DDP / no `torchrun`;
-- competition-data-only SSL by default;
-- every long GPU job has an 8.5 h software budget, below the 9 h ceiling;
-- validation TTA is identical to planned submission TTA;
-- random-vs-SSL Stage-1 selection is nested: **each outer fold is chosen from inner AUC only**.
+## Current verified environment snapshot
 
-Do not skip the audit or smoke steps.
+Observed on 2026-08-08:
 
----
+```text
+Conda environment: rsna-knee
+GPU: NVIDIA RTX A4500 Laptop GPU
+precision: bf16
+one visible GPU
+```
 
-## 0. Define paths
+The current local repository/data layout used during verification was:
+
+```text
+repo:
+/media/talafha/Disk_1/CNN_CPC
+
+data root:
+/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection
+```
+
+Do not hard-code these paths on another machine; set `REPO` and `DATA_ROOT` appropriately.
+
+## 1. Start a terminal
 
 ```bash
-export REPO="$HOME/CNN_CPC"
-export DATA_ROOT="/path/to/rsna-knee-abnormality-detection"
+export REPO="/media/talafha/Disk_1/CNN_CPC"
+export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
 export CUDA_VISIBLE_DEVICES=0
+
 cd "$REPO"
+conda activate rsna-knee
 ```
 
-Check the data surface:
+Check:
 
 ```bash
-ls -lh \
-  "$DATA_ROOT/train.csv" \
-  "$DATA_ROOT/train_series.csv" \
-  "$DATA_ROOT/test.csv" \
-  "$DATA_ROOT/test_series.csv"
-```
-
-The image tree must also contain `train_images/` or `train_series/` and, when available locally, the corresponding test tree.
-
----
-
-## 1. Update the repository
-
-```bash
-cd "$REPO"
-git checkout main
-git pull origin main
-git rev-parse --short HEAD
-```
-
----
-
-## 2. Create/activate the environment
-
-First time:
-
-```bash
-cd "$REPO"
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -e .
-pip install pytest
-```
-
-Later terminals:
-
-```bash
-cd "$REPO"
-source .venv/bin/activate
-export CUDA_VISIBLE_DEVICES=0
-```
-
-Check CUDA:
-
-```bash
-python - <<'PY'
-import torch
-print("PyTorch:", torch.__version__)
-print("CUDA available:", torch.cuda.is_available())
-print("Visible GPUs:", torch.cuda.device_count())
-if torch.cuda.is_available():
-    print("GPU:", torch.cuda.get_device_name(0))
-PY
-```
-
----
-
-## 3. Run the complete software test suite
-
-```bash
-pytest -q
+which python
+python --version
 python -m rsna_knee.cli --help
 ```
 
-Do not start real GPU training if these fail.
-
----
-
-## 4. Create the local production config
+## 2. Pull repository updates before starting a new production stage
 
 ```bash
-cp configs/train.yaml configs/train_local.yaml
+git checkout main
+git pull --ff-only origin main
+git log -5 --oneline
 ```
 
-Patch only machine/output paths and keep the production safety contract:
+Do not pull into the middle of an already running training process. A running process uses the code/config it loaded at startup.
+
+## 3. Verify the local config
+
+The production local config should be:
+
+```text
+configs/train_local.yaml
+```
+
+Check the critical values:
 
 ```bash
 python - <<'PY'
-import os
-from pathlib import Path
 import yaml
+from pathlib import Path
 
-path = Path("configs/train_local.yaml")
-config = yaml.safe_load(path.read_text())
-config["data_root"] = os.environ["DATA_ROOT"]
-config["output_dir"] = "runs/stage1_random"
-config["ssl_output_dir"] = "runs/ssl"
-config["competition_mode"] = True
-config["requested_gpus"] = 1
-config["runtime_budget_hours"] = 8.5
-config["pretrained"] = False
-config["allow_external_pretrained"] = False
-config["ssl_encoder_checkpoint"] = None
-config["ssl_checkpoint_source"] = None
-config["cotrain_stage1_root"] = None
-config["cotrain_stage1_candidates"] = None
-config["expected_checkpoint_stage"] = None
-path.write_text(yaml.safe_dump(config, sort_keys=False))
-print(path)
+c = yaml.safe_load(Path("configs/train_local.yaml").read_text())
+for key in [
+    "data_root", "output_dir", "requested_gpus", "runtime_budget_hours",
+    "pretrained", "allow_external_pretrained", "batch_size",
+    "trusted_fraction", "trusted_pseudo_threshold", "rank_min_confidence",
+    "tta_center_offsets", "validation_tta_offsets", "weak_oof_tta_offsets",
+]:
+    print(f"{key}: {c.get(key)}")
+print("TTA match:", c["tta_center_offsets"] == c["validation_tta_offsets"])
 PY
 ```
 
-Verify the important lines:
+Expected core production values:
 
-```bash
-grep -E 'data_root|requested_gpus|runtime_budget_hours|pretrained|allow_external|tta_center_offsets|validation_tta_offsets|cotrain_stage1' configs/train_local.yaml
+```yaml
+output_dir: runs/stage1_random
+requested_gpus: 1
+runtime_budget_hours: 8.5
+pretrained: false
+allow_external_pretrained: false
+batch_size: 2
+trusted_fraction: 0.30
+trusted_pseudo_threshold: 0.60
+rank_min_confidence: 0.35
+tta_center_offsets: [-1, 0, 1]
+validation_tta_offsets: [-1, 0, 1]
+weak_oof_tta_offsets: [0]
 ```
 
-`tta_center_offsets` and `validation_tta_offsets` must match.
+## 4. Data checks already completed
 
----
+The real CSV inspection returned:
 
-## 5. Verify runtime
-
-```bash
-python -m rsna_knee.cli runtime --config configs/train_local.yaml
-nvidia-smi
+```text
+studies=4407
+gold=58
+unlabeled=4349
+reports_present=4407
+series=24371
 ```
 
-Optional second terminal during GPU runs:
+Nested validation manifests:
 
-```bash
-watch -n 2 nvidia-smi
+```text
+fold 0: gold_train 20, inner 20, outer 18
+fold 1: gold_train 18, inner 20, outer 20
+fold 2: gold_train 20, inner 18, outer 20
 ```
 
----
+Train preflight:
 
-## 6. Inspect CSVs
-
-```bash
-python -m rsna_knee.cli inspect --data-root "$DATA_ROOT"
+```text
+24 studies
+121/121 selected streams decoded
+4045/4045 DICOM files decoded
+0 failures
 ```
 
-Confirm study/gold/report/series counts are sensible.
+Complete local test preflight:
 
----
-
-## 7. DICOM preflight
-
-Train:
-
-```bash
-mkdir -p runs
-python -m rsna_knee.cli preflight \
-  --data-root "$DATA_ROOT" \
-  --split train \
-  --sample-size 24 \
-  --max-decode-failure-rate 0.05 \
-  --max-file-decode-failure-rate 0.05 \
-  --out runs/preflight_train.json
+```text
+3 studies
+14/14 selected streams decoded
+533/533 DICOM files decoded
+0 failures
 ```
 
-Test, when present locally:
+Full audit:
 
-```bash
-python -m rsna_knee.cli preflight \
-  --data-root "$DATA_ROOT" \
-  --split test \
-  --sample-size 24 \
-  --max-decode-failure-rate 0.05 \
-  --max-file-decode-failure-rate 0.05 \
-  --out runs/preflight_test.json
+```text
+21,886/21,886 selected series decoded
+732,554/732,556 DICOM files decoded
+2 partial one-file failures
+0 selected series failed
 ```
 
-Do not continue after a preflight failure.
+These steps do not need to be repeated before every fold unless the dataset, DICOM code, routing code or local files change.
 
----
+## 5. OA report supervision already verified
 
-## 8. Full CPU multiprocessing audit
+After the compartment-aware parser update:
+
+```text
+Medial OA:  492 positive, 339 negated, 3576 unmentioned
+Lateral OA: 409 positive, 387 negated, 3611 unmentioned
+PF OA:      695 positive, 379 negated, 3333 unmentioned
+```
+
+No confidence threshold was lowered to obtain these labels.
+
+## 6. Fold-0 smoke already passed
+
+The current paired-sampler smoke produced:
+
+```text
+selected epoch:        2
+inner macro AUC:       0.5513549264
+outer TTA macro AUC:   0.5139555403
+outer center AUC:      0.5228523149
+budget limited:        false
+```
+
+Ranking diagnostics:
+
+```text
+selection pairs: 63
+retrain pairs:   61
+all 12 targets: nonzero
+```
+
+This proves the end-to-end training path and ranking branch are active. It is not a production result.
+
+## 7. Current next step — Stage-1 random production fold 0
 
 ```bash
-python -m rsna_knee.cli audit \
+python -m rsna_knee.cli train \
   --config configs/train_local.yaml \
-  --out-dir runs/audit
+  --fold 0
 ```
 
-Inspect:
+There is no `--smoke` flag here.
+
+Expected console rows resemble:
+
+```text
+{'phase': 'selection',
+ 'epoch': 1,
+ 'train_loss': ...,
+ 'inner_macro_auc': ...,
+ 'inner_center_macro_auc': ...,
+ 'lr': ...,
+ 'epoch_seconds': ...,
+ 'train_batches': ...}
+```
+
+The model selects the best epoch from **inner** macro-AUC, not outer macro-AUC.
+
+## 8. Harmless warnings
+
+PyTorch may print:
+
+```text
+enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+```
+
+This is an optimization warning, not a training failure.
+
+Python may also emit a multiprocessing `resource_tracker` semaphore warning at interpreter shutdown. If it appears **after `best.pt` and all artifacts are written**, treat it as a worker-cleanup warning rather than a failed training run. Investigate only if artifacts are missing, the process exits early, or workers fail during training.
+
+## 9. Inspect a completed production fold
+
+After fold 0 finishes:
 
 ```bash
 python - <<'PY'
 import json
 from pathlib import Path
-p = json.loads(Path("runs/audit/audit.json").read_text())
-print(json.dumps(p["decode_audit"], indent=2))
-print("\nSelected streams:", json.dumps(p["selected_stream_counts"], indent=2))
-print("\nMissing streams:", json.dumps(p["missing_stream_counts"], indent=2))
-print("\nTeacher confidence:", json.dumps(p["teacher_confidence_counts"], indent=2))
+
+root = Path("runs/stage1_random/fold0")
+s = json.loads((root / "selection.json").read_text())
+r = json.loads((root / "runtime.json").read_text())
+d = json.loads((root / "training_diagnostics.json").read_text())
+
+print("selected_epoch      :", s["selected_epoch"])
+print("inner_macro_auc     :", s["inner_macro_auc"])
+print("outer_tta_macro_auc :", s["outer_macro_auc"])
+print("outer_center_auc    :", s["outer_center_macro_auc"])
+print("budget_limited      :", s["budget_limited_selection"])
+print("runtime_hours       :", r["elapsed_seconds"] / 3600)
+print("device              :", r["device"])
+print("peak_gpu_GB         :", r["peak_gpu_memory_bytes"] / 1024**3)
+print("selection rank pairs:", sum(d["selection"]["rank_pairs"].values()))
+print("retrain rank pairs  :", sum(d["retrain"]["rank_pairs"].values()))
 PY
 ```
 
-Do not start production training unless the audit completes successfully.
-
----
-
-# Stage 1A — Random initialization
-
-## 9. First real GPU smoke: fold 0 only
+Also inspect the training curve:
 
 ```bash
-python -m rsna_knee.cli train \
-  --config configs/train_local.yaml \
-  --fold 0 \
-  --smoke
+column -s, -t < runs/stage1_random/fold0/history.csv | less -S
 ```
 
-Inspect:
+## 10. Required Stage-1 artifacts
 
-```bash
-find runs/stage1_random/smoke/fold0 -maxdepth 1 -type f -printf '%f\n' | sort
-cat runs/stage1_random/smoke/fold0/selection.json
-cat runs/stage1_random/smoke/fold0/runtime.json
-cat runs/stage1_random/smoke/fold0/training_diagnostics.json
-```
-
-Expected core artifacts include:
+A successful Stage-1 production fold should contain:
 
 ```text
 best.pt
-oof.csv                 # primary TTA OOF, same policy as submission
-oof_center.csv          # diagnostic center-only OOF
-weak_oof.csv             # Stage-1 only
-selection.json
-history.csv
-training_diagnostics.json
-supervision_plan.json
-runtime.json
 bootstrap.json
+calibration.json
+calibration_selection.json
+config.json
+fold_assignments.csv
+history.csv
+metadata_repair.json
+oof.csv
+oof_center.csv
+preflight.json
+runtime.json
+sampling.json
+selection.json
+supervision_plan.json
+training_diagnostics.json
+weak_oof.csv
 ```
 
-Only after fold 0 succeeds, smoke folds 1 and 2:
+## 11. Run folds 1 and 2 unchanged
+
+After fold 0 is confirmed computationally healthy, do not tune from its outer score. Run:
 
 ```bash
-python -m rsna_knee.cli train --config configs/train_local.yaml --fold 1 --smoke
-python -m rsna_knee.cli train --config configs/train_local.yaml --fold 2 --smoke
-```
-
----
-
-## 10. Stage-1 random production folds
-
-Run sequentially, never simultaneously on the same GPU:
-
-```bash
-python -m rsna_knee.cli train --config configs/train_local.yaml --fold 0
 python -m rsna_knee.cli train --config configs/train_local.yaml --fold 1
 python -m rsna_knee.cli train --config configs/train_local.yaml --fold 2
 ```
 
-Each command is independently budgeted below 9 h and reserves time for outer OOF, weak OOF, bootstrap, and checkpoint writing.
-
----
-
-## 11. Evaluate random Stage-1 OOF
-
-Primary TTA OOF:
+## 12. Evaluate the three-fold random baseline
 
 ```bash
 python -m rsna_knee.cli evaluate \
@@ -296,7 +299,7 @@ python -m rsna_knee.cli evaluate \
   --out runs/stage1_random/evaluation.json
 ```
 
-Diagnostic TTA-vs-center comparison:
+Diagnostic TTA versus center-only:
 
 ```bash
 python -m rsna_knee.cli evaluate \
@@ -313,72 +316,27 @@ python -m rsna_knee.cli evaluate \
   --out runs/stage1_random/tta_vs_center.json
 ```
 
-Do **not** change submission TTA after looking at outer OOF. TTA is already part of the predeclared inner-selection policy; this comparison is diagnostic only.
+Do not change TTA retroactively from this diagnostic.
 
-Inspect target supervision/ranking utilization:
-
-```bash
-for f in 0 1 2; do
-  echo "===== RANDOM FOLD $f ====="
-  cat "runs/stage1_random/fold${f}/training_diagnostics.json"
-done
-```
-
----
-
-# Stage 1B — Competition-data SSL candidate
-
-## 12. Train SSL separately
+## 13. Optional competition-data SSL
 
 ```bash
 python -m rsna_knee.cli pretrain --config configs/train_local.yaml
 ```
 
-Expected:
+Then create `configs/train_local_ssl.yaml` with:
 
-```text
-runs/ssl/ssl_encoder.pt
-runs/ssl/history.json
+```yaml
+output_dir: runs/stage1_ssl
+ssl_encoder_checkpoint: /absolute/path/to/runs/ssl/ssl_encoder.pt
+ssl_checkpoint_source: competition_training_data
+cotrain_stage1_root: null
+cotrain_stage1_candidates: null
 ```
 
----
+Train folds 0/1/2 with the same validation policy.
 
-## 13. Build the SSL Stage-1 config
-
-```bash
-cp configs/train_local.yaml configs/train_local_ssl.yaml
-python - <<'PY'
-from pathlib import Path
-import yaml
-
-path = Path("configs/train_local_ssl.yaml")
-config = yaml.safe_load(path.read_text())
-config["output_dir"] = "runs/stage1_ssl"
-config["ssl_encoder_checkpoint"] = str(Path("runs/ssl/ssl_encoder.pt").resolve())
-config["ssl_checkpoint_source"] = "competition_training_data"
-config["cotrain_stage1_root"] = None
-config["cotrain_stage1_candidates"] = None
-path.write_text(yaml.safe_dump(config, sort_keys=False))
-PY
-```
-
----
-
-## 14. Train all three SSL Stage-1 folds
-
-```bash
-python -m rsna_knee.cli train --config configs/train_local_ssl.yaml --fold 0
-python -m rsna_knee.cli train --config configs/train_local_ssl.yaml --fold 1
-python -m rsna_knee.cli train --config configs/train_local_ssl.yaml --fold 2
-```
-
-You may evaluate random vs SSL OOF for research diagnostics, but **do not use total outer OOF to decide which candidate supplies a given outer fold**.
-
----
-
-## 15. Perform leakage-safe per-fold Stage-1 selection
-
-This is the only supported random-vs-SSL selection for downstream Stage 2:
+## 14. Leakage-safe Stage-1 candidate selection
 
 ```bash
 python -m rsna_knee.cli select-stage1 \
@@ -388,200 +346,43 @@ python -m rsna_knee.cli select-stage1 \
   --out runs/stage1_selection.json
 ```
 
-Inspect:
+The selector uses only fold-local **inner AUC**.
 
-```bash
-cat runs/stage1_selection.json
+## 15. Stage 2
+
+Create a Stage-2 config with both candidate roots, then run folds sequentially. Each fold should produce `stage2_supervision.json`, but not `weak_oof.csv`.
+
+Inspect especially:
+
+```text
+zero_to_nonzero_weight
+stage2_high_confidence
+probability_changed_gt_0.05
 ```
 
-For each outer fold `k`, the selector uses **only `inner_macro_auc` for fold `k`**. It ignores `outer_macro_auc` even if one candidate has a much better outer result.
+## 16. Final inference
 
----
+After freezing the final stage, set:
 
-# Stage 2 — Fold-local image/report co-training
-
-## 16. Create the Stage-2 config
-
-Use the base random-init config for Stage-2 initialization. Candidate selection controls the fold-local image teacher; it does not use outer OOF to choose Stage-2 initialization.
-
-```bash
-cp configs/train_local.yaml configs/train_local_stage2.yaml
-python - <<'PY'
-from pathlib import Path
-import yaml
-
-path = Path("configs/train_local_stage2.yaml")
-config = yaml.safe_load(path.read_text())
-config["output_dir"] = "runs/stage2"
-config["ssl_encoder_checkpoint"] = None
-config["ssl_checkpoint_source"] = None
-config["cotrain_stage1_root"] = None
-config["cotrain_stage1_candidates"] = [
-    str(Path("runs/stage1_random").resolve()),
-    str(Path("runs/stage1_ssl").resolve()),
-]
-path.write_text(yaml.safe_dump(config, sort_keys=False))
-PY
+```yaml
+expected_checkpoint_stage: stage1
 ```
 
-Verify:
+or
 
-```bash
-grep -E 'output_dir|ssl_encoder|cotrain_stage1' configs/train_local_stage2.yaml
+```yaml
+expected_checkpoint_stage: stage2
 ```
 
----
+as appropriate, then call `infer` with exactly folds 0, 1 and 2.
 
-## 17. Run Stage-2 folds sequentially
+## Rule for interpreting results
 
-```bash
-python -m rsna_knee.cli train --config configs/train_local_stage2.yaml --fold 0
-python -m rsna_knee.cli train --config configs/train_local_stage2.yaml --fold 1
-python -m rsna_knee.cli train --config configs/train_local_stage2.yaml --fold 2
-```
+Do not report:
 
-For each fold inspect how much supervision Stage 2 actually added:
+- smoke AUC as production AUC;
+- one outer fold as the final CV score;
+- OOF as pristine independent validation after using it to choose the final method;
+- a leaderboard score until an actual Kaggle submission has been evaluated.
 
-```bash
-for f in 0 1 2; do
-  echo "===== STAGE2 FOLD $f ====="
-  cat "runs/stage2/fold${f}/stage2_supervision.json"
-  cat "runs/stage2/fold${f}/training_diagnostics.json"
-done
-```
-
-`zero_to_nonzero_weight` is especially important: it measures report-silent cells for which a very confident cross-fitted image teacher added modest BCE supervision.
-
-Stage 2 intentionally does **not** produce another `weak_oof.csv`.
-
----
-
-## 18. Evaluate Stage 2
-
-```bash
-python -m rsna_knee.cli evaluate \
-  --train-csv "$DATA_ROOT/train.csv" \
-  --oof \
-    runs/stage2/fold0/oof.csv \
-    runs/stage2/fold1/oof.csv \
-    runs/stage2/fold2/oof.csv \
-  --n-bootstrap 2000 \
-  --out runs/stage2/evaluation.json
-```
-
-For a paired comparison against the *nested-selected* Stage-1 folds, extract their OOF paths from the selection manifest:
-
-```bash
-mapfile -t SELECTED_STAGE1_OOF < <(python - <<'PY'
-import json
-from pathlib import Path
-p = json.loads(Path("runs/stage1_selection.json").read_text())
-for f in range(3):
-    root = Path(p["folds"][str(f)]["selected_root"])
-    print(root / f"fold{f}" / "oof.csv")
-PY
-)
-
-python -m rsna_knee.cli evaluate \
-  --train-csv "$DATA_ROOT/train.csv" \
-  --oof \
-    "${SELECTED_STAGE1_OOF[0]}" \
-    "${SELECTED_STAGE1_OOF[1]}" \
-    "${SELECTED_STAGE1_OOF[2]}" \
-  --compare-oof \
-    runs/stage2/fold0/oof.csv \
-    runs/stage2/fold1/oof.csv \
-    runs/stage2/fold2/oof.csv \
-  --n-bootstrap 2000 \
-  --out runs/stage2/vs_nested_stage1.json
-```
-
-This Stage-2-vs-Stage-1 outer comparison is useful for competition model choice, but once you use it to choose the final method it is **model-selection CV**, not a pristine unbiased generalization estimate.
-
----
-
-# Final inference
-
-## 19. Choose final checkpoint stage
-
-If Stage 2 is your frozen final method:
-
-```bash
-cp configs/train_local_stage2.yaml configs/final_infer.yaml
-python - <<'PY'
-from pathlib import Path
-import yaml
-p = Path("configs/final_infer.yaml")
-c = yaml.safe_load(p.read_text())
-c["expected_checkpoint_stage"] = "stage2"
-p.write_text(yaml.safe_dump(c, sort_keys=False))
-PY
-```
-
-Run:
-
-```bash
-python -m rsna_knee.cli infer \
-  --config configs/final_infer.yaml \
-  --checkpoints \
-    runs/stage2/fold0/best.pt \
-    runs/stage2/fold1/best.pt \
-    runs/stage2/fold2/best.pt \
-  --out submission.csv
-```
-
-The inference code verifies:
-
-- exactly three checkpoints;
-- folds exactly `{0,1,2}`;
-- all checkpoints from one stage;
-- matching architecture/stream order;
-- checkpoint validation TTA exactly matching submission TTA;
-- finite probabilities and exact submission columns.
-
-If final Stage 1 is preferred instead, use `runs/stage1_selection.json` to supply exactly the selected fold checkpoint paths and set `expected_checkpoint_stage: stage1`.
-
----
-
-## 20. Final file checks
-
-```bash
-ls -lh submission.csv
-head -3 submission.csv
-python - <<'PY'
-import pandas as pd
-x = pd.read_csv("submission.csv")
-print(x.shape)
-print(x.columns.tolist())
-print(x.isna().sum().sum(), "NaNs")
-PY
-```
-
----
-
-# What to inspect after every long fold
-
-```bash
-cat runs/<stage>/fold0/selection.json
-cat runs/<stage>/fold0/runtime.json
-cat runs/<stage>/fold0/training_diagnostics.json
-cat runs/<stage>/fold0/supervision_plan.json
-```
-
-For Stage 2 also inspect:
-
-```bash
-cat runs/stage2/fold0/stage2_supervision.json
-```
-
-Key warning signs:
-
-- `budget_limited_selection: true` very early;
-- actual batches far below planned batches;
-- near-zero ranking pairs for most targets;
-- very small nonzero supervision counts for rare pathologies;
-- zero Stage-2 `zero_to_nonzero_weight` counts;
-- high DICOM decode failure rates;
-- TTA fallback during final inference.
-
-If any of these occur, evaluate the diagnostic before spending more GPU time.
+The production baseline is complete only after all three non-smoke Stage-1 folds have been combined.
