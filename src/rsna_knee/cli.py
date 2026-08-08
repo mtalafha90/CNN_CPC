@@ -52,6 +52,7 @@ def main() -> None:
     p.add_argument("--series-csv", default=None)
     p.add_argument("--sample-size", type=int, default=24)
     p.add_argument("--max-decode-failure-rate", type=float, default=0.05)
+    p.add_argument("--max-file-decode-failure-rate", type=float, default=0.05)
     p.add_argument("--no-strict", action="store_true")
     p.add_argument("--out", default=None)
 
@@ -110,6 +111,7 @@ def main() -> None:
             sample_size=args.sample_size,
             stream_mode="dual",
             max_decode_failure_rate=args.max_decode_failure_rate,
+            max_file_decode_failure_rate=args.max_file_decode_failure_rate,
             strict=not args.no_strict,
         )
         print(result.summary())
