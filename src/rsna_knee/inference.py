@@ -30,10 +30,13 @@ def _load_checkpoint_payload(path: str | Path) -> dict:
     if not path.is_file():
         raise FileNotFoundError(f"checkpoint not found: {path}")
     payload = torch.load(path, map_location="cpu", weights_only=False)
-    required = {"model", "model_spec", "stream_names"}
+    required = {"model", "model_spec", "stream_names", "config"}
     missing = sorted(required.difference(payload))
     if missing:
         raise ValueError(f"checkpoint {path} missing keys: {missing}")
+    if not isinstance(payload["config"], dict):
+        raise ValueError(f"checkpoint {path} has invalid training config")
+    validate_competition_config(payload["config"], purpose="train")
     missing_spec = sorted(MODEL_SPEC_KEYS.difference(payload["model_spec"]))
     if missing_spec:
         raise ValueError(
@@ -68,8 +71,7 @@ def load_checkpoint(path: str | Path, device: torch.device):
         pathology_layers=int(spec["pathology_layers"]),
     )
     model.load_state_dict(payload["model"], strict=True)
-    model = model.to(device).eval()
-    return model, payload
+    return model.to(device).eval(), payload
 
 
 def _dataset(root, test, index, spec, config, offsets):
@@ -181,8 +183,6 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
         probability_rows.append(probability.cpu().numpy())
         uid_rows.extend(list(batch["study_uid"]))
 
-        # The first fallback batch deliberately benchmarks every view, so its
-        # duration is not representative of subsequent center-only batches.
         if not fallback_this_batch:
             steady_batch_times.append(elapsed)
         remaining_batches = len(loader) - batch_index - 1
