@@ -140,10 +140,9 @@ def make_balanced_gold_folds(df: pd.DataFrame, n_splits: int = 3, seed: int = 20
     target_pos = gold[TARGETS].fillna(0).sum(axis=0).to_numpy(float) / n_splits
     target_n = len(gold) / n_splits
     for group_index, (_, indices, labels, _, _) in enumerate(groups):
-        # Seed one report group into every fold before unrestricted greedy
-        # balancing. Without this constraint symmetric label patterns can make
-        # the greedy objective repeatedly choose the same folds and leave an
-        # outer/inner fold empty despite sufficient gold groups.
+        # Seed every fold once, then score a hypothetical assignment by the
+        # GLOBAL fold matrix. Scoring only the candidate fold can prefer a fold
+        # already near its target and starve an empty fold.
         candidate_folds = (
             np.flatnonzero(fold_n == 0).astype(int).tolist()
             if group_index < n_splits
@@ -151,10 +150,14 @@ def make_balanced_gold_folds(df: pd.DataFrame, n_splits: int = 3, seed: int = 20
         )
         costs = []
         for fold in candidate_folds:
+            trial_pos = fold_pos.copy()
+            trial_n = fold_n.copy()
+            trial_pos[fold] += labels
+            trial_n[fold] += len(indices)
             label_cost = np.mean(
-                ((fold_pos[fold] + labels - target_pos) / np.maximum(target_pos, 1.0)) ** 2
+                ((trial_pos - target_pos[None, :]) / np.maximum(target_pos[None, :], 1.0)) ** 2
             )
-            size_cost = ((fold_n[fold] + len(indices) - target_n) / max(target_n, 1.0)) ** 2
+            size_cost = np.mean(((trial_n - target_n) / max(target_n, 1.0)) ** 2)
             costs.append(label_cost + 0.2 * size_cost)
         chosen = int(candidate_folds[int(np.argmin(costs))])
         out.loc[indices] = chosen
