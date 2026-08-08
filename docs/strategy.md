@@ -2,116 +2,160 @@
 
 ## Core principle
 
-The competition is a weakly supervised multi-sequence MRI problem with a very small trusted gold set. The production strategy therefore prioritizes **supervision quality and validation discipline before model scale**.
+This is a weakly supervised multi-sequence MRI problem with a very small trusted gold set. Production therefore prioritizes **supervision quality, leakage control, and runtime discipline before model scale**.
 
-## 1. Weak supervision is positive-unlabeled aware
+## 1. PU-aware weak supervision
 
-Reports are a training teacher, not a required inference modality. Each target/report pair is classified as positive, negated, uncertain, or unmentioned. Fold-safe calibration estimates `P(y=1 | state)` using only gold studies allowed in the current training phase.
+Reports are a training teacher, never a required inference modality. Each target/report pair is classified as positive, negated, uncertain, or unmentioned. Fold-safe calibration estimates `P(y=1 | state)` only from gold studies allowed in the current training phase.
 
-Confidence is not simply `n/(n+alpha)`. It also measures how far the state-specific probability lies from the target prevalence. A state can therefore be frequent but receive little weight when it is not diagnostically informative.
+Confidence combines calibration evidence with information beyond target prevalence. A frequent but uninformative report state remains low-weight. `unmentioned` receives zero direct BCE weight by default; report silence is unlabeled, not negative. Official target cells override the teacher cell-by-cell.
 
-`unmentioned` receives zero direct BCE weight by default. Report silence is treated as unlabeled rather than a weak negative. Official target cells always override the teacher cell-by-cell.
+## 2. Nested outer/inner validation
 
-## 2. Nested gold validation
-
-Each outer fold has three roles:
+For outer fold `k`:
 
 ```text
-outer gold fold       -> final untouched OOF evaluation
-inner gold fold       -> choose training duration only
-remaining gold fold   -> phase-A trusted training
+outer gold fold       -> untouched final OOF evaluation
+inner gold fold       -> epoch-count selection only
+remaining gold fold   -> Phase-A trusted training
 ```
 
-After the best epoch is selected, the phase-A model is discarded. A fresh model is initialized and retrained for exactly the selected number of epochs using **all non-outer gold studies**. Only then is the outer fold evaluated.
+After epoch selection, Phase A is discarded. A fresh model is initialized and trained for exactly the selected duration using all non-outer gold studies. Only then is the outer fold evaluated.
 
-This avoids using the outer fold for early stopping while recovering the inner gold cases for final outer-fold training.
+The wall-clock guard may stop Phase-A exploration early if another selection epoch would leave insufficient estimated time for Phase B and evaluation.
 
-## 3. Metric-aligned objective
+## 3. Macro-metric-aligned loss
 
-The competition metric is macro ROC-AUC, where each pathology has equal weight. BCE is therefore normalized separately within each target and only then averaged across the 12 targets. Targets with more confident pseudo-label cells cannot dominate the loss simply because they have more supervision mass.
+The competition metric is macro ROC-AUC, so BCE is normalized separately within each target and then averaged across the 12 targets. A pathology with more pseudo-label mass cannot dominate simply because it has more supervised cells.
 
-A confidence-gated pairwise ranking term complements BCE. With DDP, logits/targets/weights are gathered into the global batch so rare targets have a realistic chance of containing trusted positive-negative pairs.
+A confidence-gated pairwise ranking term is retained as an AUC-oriented auxiliary objective. Because production uses one GPU with a small study batch, its effective use is **measured, not assumed**: every fold writes per-pathology pair counts to `ranking_pairs.json`. If rare targets receive essentially no ranking pairs, the term should be disabled or redesigned rather than credited with performance.
 
-## 4. Global trusted/general sampling
+## 4. One-GPU trusted/general sampling
 
-Training uses two study pools:
+Training uses two pools:
 
-- trusted: gold plus unusually reliable pseudo-labeled studies;
-- general: the remaining weakly supervised studies.
+- trusted: official gold plus unusually reliable pseudo-labeled studies;
+- general: remaining weakly supervised studies.
 
-A deterministic global batch is constructed first and then sharded across DDP ranks. This preserves the requested trusted fraction and avoids independent ranks drawing the same sample in the same step when the pools are sufficiently large.
+A deterministic single-GPU batch sampler enforces the requested trusted fraction in expectation. CPU worker processes handle DICOM/data work; the model itself runs in one CUDA process.
 
 ## 5. In-domain MRI self-supervision
 
-Optional SSL uses only non-gold MRI studies by default. Different sequences from the same knee are positive pairs for an anatomy contrastive objective. Auxiliary heads preserve acquisition information by predicting plane and fluid/structural sequence type.
+Optional SSL uses only non-gold competition MRI studies by default. Different sequences from the same knee form anatomy-related positive pairs; auxiliary heads predict plane and fluid/structural sequence type.
 
-The saved ConvNeXt encoder can initialize supervised training with:
+The conservative competition config does **not** use external pretrained weights unless the exact competition-specific rules are independently verified to permit them. Therefore the meaningful production ablation is:
 
-```yaml
-ssl_encoder_checkpoint: runs/ssl/ssl_encoder.pt
+```text
+random ConvNeXt initialization
+vs
+competition-data SSL initialization
 ```
 
-This uses the released MRI distribution itself rather than relying solely on natural-image pretraining.
+on identical Stage-1 outer OOF folds.
 
 ## 6. MRI representation and fusion
 
-The production input is up to six semantic streams:
+The model consumes up to six semantic streams:
 
-- sagittal fluid-sensitive
-- sagittal structural
-- coronal fluid-sensitive
-- coronal structural
-- axial fluid-sensitive
-- axial structural
+- sagittal fluid-sensitive;
+- sagittal structural;
+- coronal fluid-sensitive;
+- coronal structural;
+- axial fluid-sensitive;
+- axial structural.
 
-Each selected series is represented by distributed 2.5D triplets. During training, triplet gap and center positions vary mildly. ConvNeXt encodes each active triplet; missing streams are never sent through the backbone.
+Each selected series is represented by distributed 2.5D triplets. Training varies triplet gap and center position mildly. ConvNeXt encodes active triplets only; missing streams are masked before the backbone.
 
-All active MRI tokens then pass through a Transformer before classification. This permits direct cross-plane and cross-sequence interaction rather than only late pooling.
+All MRI slice/sequence tokens then interact through a Transformer before classification. Twelve pathology query tokens self-attend and cross-attend to the MRI memory.
 
-## 7. Interacting pathology queries
+## 7. Deterministic stochastic training
 
-The 12 abnormalities are represented by learned pathology query tokens. They first self-attend, allowing label relationships to be learned, and then cross-attend to the contextualized MRI tokens. Each pathology can retrieve evidence from any plane/sequence while preserving target identity.
+Augmentation uses acquisition-compatible perturbations: center jitter, gap 1-2, small affine transforms, gamma variation, low-frequency bias field, noise, and slice dropout.
 
-## 8. MRI-specific augmentation and TTA
+Worker randomness is derived from the seeded PyTorch worker generator. NumPy slice-jitter generators are seeded from that worker-local torch RNG, making controlled experiments reproducible for fixed settings and worker count.
 
-Training uses mild acquisition-compatible perturbations: center jitter, triplet gaps 1-2, small rotation/translation/scale, gamma variation, low-frequency bias field, noise, and slice dropout.
+## 8. DICOM caching and one-pass TTA
 
-Inference is deterministic and averages slice-center offsets `[-1, 0, +1]` by default.
+Persistent DataLoader workers hold a bounded LRU of recently decoded DICOM volumes. This reduces repeat decoding without requiring a huge disk cache.
 
-## 9. Cross-fitted co-training
+At inference, a selected series is decoded once. All requested slice-center TTA views are generated from that decoded volume, and all fold models use the same batch before it is released. TTA therefore multiplies GPU forward passes but not DICOM reads.
 
-Every non-gold normalized report group receives a deterministic cross-fit fold. During stage 1, fold `k` excludes its own weak cross-fit subset and writes image predictions to `weak_oof.csv`.
+If projected multi-view inference approaches the runtime budget, the pipeline automatically falls back to the central view. It fails early if even the reduced path cannot safely finish.
 
-Across all three folds, these files cover non-gold studies with predictions from models that never trained on their report group. Stage 2 combines those independent image probabilities with the current fold's calibrated report teacher:
+## 9. Leakage-safe Stage-2 co-training
 
-- strong agreement -> higher confidence;
-- direct disagreement -> very low confidence;
-- gold cells -> official labels, always.
+Every non-gold report group receives a deterministic `crossfit_fold`.
 
-This avoids trivial self-confirmation.
+Stage-1 outer fold `k` excludes:
 
-## 10. Statistical reporting
+- outer-gold fold `k`; and
+- non-gold `crossfit_fold=k` studies.
+
+It writes predictions for those weak studies to:
+
+```text
+stage1/fold{k}/weak_oof.csv
+```
+
+For Stage-2 outer fold `k`, **that is the only permitted image teacher**. Predictions from Stage-1 folds `j != k` are rejected because those models may have trained on gold fold `k`, creating indirect validation leakage.
+
+Thus Stage-2 uses image/report consensus only for the fold-local weak subset; other weak cells remain report-supervised. This sacrifices some image-teacher coverage in exchange for an unbiased outer OOF estimate.
+
+## 10. Full pre-run audit
+
+Before long GPU runs, `rsna-knee audit` measures:
+
+- report-state counts per pathology;
+- calibrated confidence distributions;
+- gold-fold positive/negative counts;
+- six-stream selection/missing rates;
+- full selected-series DICOM decode status;
+- partial file-decode failures.
+
+The full pixel audit runs in CPU processes and must complete within its configured budget or it is marked incomplete and fails.
+
+## 11. Runtime policy
+
+Every Kaggle execution is its own bounded job:
+
+```text
+full audit
+optional SSL
+Stage-1 fold 0
+Stage-1 fold 1
+Stage-1 fold 2
+Stage-2 fold 0
+Stage-2 fold 1
+Stage-2 fold 2
+final inference
+```
+
+Production uses `runtime_budget_hours: 8.5`, giving margin below a 9-hour GPU notebook ceiling. Do not combine all folds into one notebook.
+
+## 12. Statistical reporting
 
 Outer OOF uses raw official cells with NaNs preserved. Report:
 
 - per-target AUC;
 - macro AUC;
 - study-level bootstrap interval;
-- paired bootstrap delta for controlled comparisons.
+- paired bootstrap delta between controlled runs.
 
-No methodology change should be called an improvement until it is measured on the same outer OOF studies.
+No SSL, Stage-2, augmentation, or architecture change should be called an improvement until it is measured on the same outer OOF studies.
 
 ## Recommended execution order
 
 ```text
-inspect + preflight
-  -> optional non-gold SSL
-  -> stage-1 3-fold nested/DDP training
-  -> collect weak_oof.csv from all folds
-  -> stage-2 co-training 3-fold run
-  -> combined outer OOF evaluation
-  -> paired bootstrap stage2 vs stage1
-  -> MRI-only TTA submission
+full audit
+  -> 3-fold Stage-1 smoke
+  -> Stage-1 random-init production
+  -> optional SSL run
+  -> Stage-1 SSL production
+  -> paired OOF comparison
+  -> freeze best Stage-1 initialization
+  -> Stage-2 fold-local co-training
+  -> paired Stage2 vs Stage1 OOF
+  -> one-pass MRI-only submission
 ```
 
-Avoid treating missing labels/report silence as negatives, selecting epochs on outer OOF, mixing non-cross-fitted image predictions into pseudo-labels, or claiming gains before real OOF measurements exist.
+Avoid report-silence negatives, outer-fold early stopping, wrong-fold image teachers, multi-GPU launchers, network dependencies, and any notebook plan that consumes the full 9-hour ceiling without safety margin.
