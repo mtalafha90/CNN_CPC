@@ -10,7 +10,7 @@ from torch.utils.data import Sampler
 
 
 class TwoPoolBatchSampler(Sampler[list[int]]):
-    """Deterministically mix trusted and general studies in one local batch."""
+    """Deterministically mix trusted/general studies with a hard epoch-work cap."""
 
     def __init__(
         self,
@@ -20,6 +20,7 @@ class TwoPoolBatchSampler(Sampler[list[int]]):
         trusted_fraction: float = 0.30,
         seed: int = 2026,
         drop_last: bool = True,
+        max_batches: int | None = None,
     ) -> None:
         mask = np.asarray(trusted_mask, dtype=bool)
         if mask.ndim != 1:
@@ -28,6 +29,8 @@ class TwoPoolBatchSampler(Sampler[list[int]]):
             raise ValueError("batch_size must be positive")
         if not 0.0 <= trusted_fraction <= 1.0:
             raise ValueError("trusted_fraction must be in [0,1]")
+        if max_batches is not None and int(max_batches) < 1:
+            raise ValueError("max_batches must be >=1 or null")
         self.trusted = np.flatnonzero(mask)
         self.general = np.flatnonzero(~mask)
         if trusted_fraction > 0 and len(self.trusted) == 0:
@@ -40,7 +43,8 @@ class TwoPoolBatchSampler(Sampler[list[int]]):
         self.seed = int(seed)
         self.drop_last = bool(drop_last)
         self.epoch = 0
-        self.n_batches = self.n // self.batch_size if self.drop_last else math.ceil(self.n / self.batch_size)
+        full_batches = self.n // self.batch_size if self.drop_last else math.ceil(self.n / self.batch_size)
+        self.n_batches = min(full_batches, int(max_batches)) if max_batches is not None else full_batches
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
