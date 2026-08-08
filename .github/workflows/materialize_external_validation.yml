@@ -6,6 +6,11 @@ on:
     paths:
       - scripts/materialize_external_validation.py
       - .github/workflows/materialize_external_validation.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - scripts/materialize_external_validation.py
+      - .github/workflows/materialize_external_validation.yml
   workflow_dispatch:
 
 permissions:
@@ -19,6 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -35,6 +41,8 @@ jobs:
             --output fixtures/external_validation \
             --overwrite
       - name: Commit materialized validation fixture
+        env:
+          TARGET_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -44,4 +52,4 @@ jobs:
             exit 0
           fi
           git commit -m "Materialize four-image external knee MRI validation fixture"
-          git push origin HEAD:main
+          git push origin "HEAD:${TARGET_BRANCH}"
