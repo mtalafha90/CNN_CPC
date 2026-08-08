@@ -1,83 +1,64 @@
-# Validation workflow
+# Test and validation workflow
 
-There are two different things called "validation" in this repository. They must not be mixed.
+The repository now has two deliberately separate resources. Do not mix them.
 
-## 1. Four-image external smoke validation
+## 1. Four-image external test set
 
-`fixtures/external_validation/` contains four openly licensed knee MRI examples downloaded from Wikimedia Commons and converted into competition-like DICOM/CSV structure.
+`fixtures/external_validation/` contains four openly licensed knee MRI examples downloaded from Wikimedia Commons and converted into the competition-like test contract:
+
+```text
+test.csv
+test_series.csv
+test_images/<StudyInstanceUID>/<SeriesInstanceUID>/image.dcm
+```
 
 Purpose:
 
 - DICOM decoding;
-- plane/sequence routing;
+- series routing;
 - 2.5D preprocessing;
 - missing-stream masking;
 - CPU multiprocessing/preflight;
-- later model-forward sanity checks.
+- model/inference plumbing once trained checkpoints exist.
 
-It is **not** used for competition model selection and is too small/partially labeled for a meaningful macro ROC-AUC.
-
-Materialize the fixture manually if needed:
-
-```bash
-source .venv/bin/activate
-pip install pillow
-PYTHONPATH=src python scripts/materialize_external_validation.py \
-  --output fixtures/external_validation \
-  --overwrite
-```
-
-Check all four studies:
+Run a strict four-study preflight:
 
 ```bash
 python -m rsna_knee.cli preflight \
   --data-root fixtures/external_validation \
-  --split validation \
+  --split test \
   --sample-size 4 \
   --max-decode-failure-rate 0 \
   --max-file-decode-failure-rate 0 \
-  --out runs/external_validation_preflight.json
+  --out runs/external_test_preflight.json
 ```
 
-The source-supported positive cells in `validation.csv` are deliberately sparse. Targets not explicitly documented by the source remain `NaN`; report/caption silence is never treated as a negative label.
+A parallel `validation.csv` / `validation_series.csv` / `validation_images/` copy provides **sparse source-supported sanity labels**. It is too small and incompletely labeled for meaningful macro ROC-AUC. Targets not explicitly documented by the online source remain `NaN`; caption silence is never a negative label.
 
 ## 2. Real competition validation set
 
-The real evaluation remains the leakage-safe nested gold folds built from the official competition `train.csv`.
+The real evaluation set remains the leakage-safe nested gold folds built from the official competition `train.csv`.
 
 For outer fold `k`:
 
-- `outer_validation`: untouched gold studies used only for final OOF evaluation;
-- `inner_selection`: gold studies used to choose the training duration in Phase A;
-- `gold_train`: remaining gold studies available to training.
+- `outer_validation`: untouched official gold studies used only for final OOF evaluation;
+- `inner_selection`: official gold studies used to choose Phase-A training duration;
+- `gold_train`: remaining official gold studies available to training.
 
-Export the exact real validation manifest before training.
-
-Fold 0:
+Export the exact validation manifest for every fold before training:
 
 ```bash
-python -m rsna_knee.cli validation-manifest \
-  --config configs/train_local.yaml \
-  --fold 0 \
-  --out runs/validation/fold0.csv
+mkdir -p runs/validation
+for f in 0 1 2; do
+  python -m rsna_knee.cli validation-manifest \
+    --config configs/train_local.yaml \
+    --fold "$f" \
+    --out "runs/validation/fold${f}.csv"
+done
 ```
 
-Fold 1 and fold 2:
-
-```bash
-python -m rsna_knee.cli validation-manifest \
-  --config configs/train_local.yaml \
-  --fold 1 \
-  --out runs/validation/fold1.csv
-
-python -m rsna_knee.cli validation-manifest \
-  --config configs/train_local.yaml \
-  --fold 2 \
-  --out runs/validation/fold2.csv
-```
-
-These files contain the official target cells and exact fold/role assignments. This is the validation data that should be used when interpreting OOF performance.
+Each manifest contains `StudyInstanceUID`, fold, role, outer fold, inner fold, and the official target cells. These are the validation assignments that should be used when interpreting OOF performance.
 
 ## Important separation
 
-Never append the four Wikimedia fixture studies to the competition training data. Never use their predictions to choose final competition hyperparameters. The fixture tests plumbing; the official gold folds estimate model performance.
+Never append the four external Wikimedia studies to competition training. Never use their predictions to choose final competition hyperparameters. The external four-study set tests the pipeline; the official nested gold folds estimate competition performance.
