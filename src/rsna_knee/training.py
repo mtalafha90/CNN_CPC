@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 from .budget import RuntimeBudget
 from .calibration import fit_calibration
 from .constants import DUAL_STREAMS, TARGETS
-from .cotrain import assign_crossfit_folds, consensus_arrays, load_image_predictions
+from .cotrain import assign_crossfit_folds, consensus_arrays, load_fold_image_teacher
 from .data import (
     add_report_groups,
     backfill_series_metadata,
@@ -111,7 +111,6 @@ def predict(model, loader, device, runtime=None):
                 )
             probability = torch.sigmoid(logits.float()).cpu().numpy()
         else:
-            # Evaluation TTA: [B,V,K,S,C,H,W]. Decode happened once in Dataset.
             present = batch["present"].to(device, non_blocking=True)
             view_probs = []
             for view in range(volumes.shape[1]):
@@ -163,7 +162,7 @@ def _model_spec(config):
         "triplet_gap": int(config.get("triplet_gap", 1)),
         "stream_mode": "dual",
         "dropout": float(config.get("dropout", 0.25)),
-        "normalize_input": bool(config.get("normalize_input", True)),
+        "normalize_input": bool(config.get("normalize_input", False)),
         "encoder_batch_size": int(config.get("encoder_batch_size", 24)),
         "gradient_checkpointing": bool(config.get("gradient_checkpointing", True)),
         "transformer_layers": int(config.get("transformer_layers", 2)),
@@ -175,9 +174,7 @@ def _model_spec(config):
 
 def _build_model(spec, config, device):
     model = KneeMILNet(
-        spec["n_streams"],
-        spec["n_slices"],
-        in_channels=3,
+        spec["n_streams"], spec["n_slices"], in_channels=3,
         pretrained_weights=bool(config.get("pretrained", False)),
         normalize_input=spec["normalize_input"],
         dropout=spec["dropout"],
@@ -220,20 +217,9 @@ def _teacher_arrays(df, states, gold, allowed_mask, config, fold: int):
             float(config.get("uncertain_weight_cap", 0.10)),
         )
 
-    # Leakage-safe Stage 2: outer fold k may use only weak predictions from the
-    # Stage-1 model k. That model never saw outer-gold fold k nor those weak rows.
     stage1_root = config.get("cotrain_stage1_root")
     if stage1_root:
-        image_path = Path(stage1_root) / f"fold{fold}" / "weak_oof.csv"
-        if not image_path.is_file():
-            raise FileNotFoundError(f"missing leakage-safe Stage-1 teacher: {image_path}")
-        image = load_image_predictions([str(image_path)], df["StudyInstanceUID"])
-        allowed_image_rows = (~gold.to_numpy()) & df["crossfit_fold"].eq(fold).to_numpy()
-        available_rows = np.isfinite(image).any(axis=1)
-        if np.any(available_rows & ~allowed_image_rows):
-            raise ValueError(
-                f"Stage-1 weak teacher for outer fold {fold} contains predictions outside its held-out weak fold"
-            )
+        image = load_fold_image_teacher(stage1_root, fold, df, gold.to_numpy())
         pseudo, confidence = consensus_arrays(
             pseudo,
             confidence,
@@ -265,15 +251,9 @@ def _balanced_train_loader(dataset, gold_rows, weights, config, runtime, seed):
         batch_size,
         trusted_fraction=float(config.get("trusted_fraction", 0.30)),
         seed=seed,
-        rank=0,
-        world_size=1,
         drop_last=True,
     )
-    loader = DataLoader(
-        dataset,
-        batch_sampler=sampler,
-        **runtime.loader_kwargs(seed=seed),
-    )
+    loader = DataLoader(dataset, batch_sampler=sampler, **runtime.loader_kwargs(seed=seed))
     return loader, sampler, trusted
 
 
@@ -337,7 +317,7 @@ def _train_epoch(model, loader, sampler, optimizer, scaler, runtime, config, epo
 
 
 def train_fold(config: dict, fold: int) -> Path:
-    """One-GPU nested training with leakage-safe weak cross-fitting."""
+    """One-GPU nested training plus leakage-safe weak cross-fitting."""
     validate_competition_config(config, purpose="train")
     start = time.time()
     budget = RuntimeBudget(
@@ -474,10 +454,8 @@ def train_fold(config: dict, fold: int) -> Path:
     if final_cal is not None:
         (outdir / "calibration.json").write_text(json.dumps(final_cal.to_dict(), indent=2))
 
-    # Phase A: select only the epoch count. Continue only if there is enough
-    # budget left for a conservative estimate of Phase B plus evaluation.
     model = _build_model(spec, config, runtime.device)
-    max_epochs = int(config.get("epochs", 12))
+    max_epochs = int(config.get("epochs", 8))
     optimizer, scheduler, scaler = _optimizer_bundle(model, config, max_epochs, runtime)
     best_score, best_epoch, bad_epochs = -np.inf, 0, 0
     history = []
@@ -511,17 +489,15 @@ def train_fold(config: dict, fold: int) -> Path:
             best_score, best_epoch, bad_epochs = float(inner_score), epoch + 1, 0
         else:
             bad_epochs += 1
-        if bad_epochs >= int(config.get("patience", 3)):
+        if bad_epochs >= int(config.get("patience", 2)):
             break
 
         estimate = float(np.median(epoch_times))
         next_epoch = epoch + 2
-        # Worst case: the next epoch becomes selected and Phase B must run that
-        # many epochs. Reserve an additional evaluation-equivalent epoch.
         future_required = estimate * (1.0 + 1.15 * next_epoch + 0.75)
         if not budget.can_start(future_required):
             budget_limited = True
-            print("[budget] stopping model selection early to reserve Phase-B/evaluation time")
+            print("[budget] stopping selection early to reserve retraining/evaluation time")
             break
 
     if best_epoch == 0:
@@ -535,7 +511,11 @@ def train_fold(config: dict, fold: int) -> Path:
         final_ds, gold.iloc[fi].to_numpy(), final_weights[fi], config, runtime, seed + 50_000 + fold
     )
     estimate = float(np.median(epoch_times)) if epoch_times else 60.0
-    budget.require(1.15 * best_epoch * estimate + 0.75 * estimate, label="Phase-B retraining and evaluation")
+    post_eval_factor = float(config.get("post_train_evaluation_epoch_fraction", 0.75))
+    budget.require(
+        1.15 * best_epoch * estimate + post_eval_factor * estimate,
+        label="Phase-B retraining and evaluation",
+    )
 
     model = _build_model(spec, config, runtime.device)
     optimizer, scheduler, scaler = _optimizer_bundle(model, config, best_epoch, runtime)
@@ -571,7 +551,7 @@ def train_fold(config: dict, fold: int) -> Path:
         final_checkpoint,
     )
 
-    budget.require(0.25 * estimate, label="outer/weak evaluation")
+    budget.require(post_eval_factor * estimate, label="outer/weak evaluation")
     outer_uids, outer_probability, outer_truth = predict(model, outer_loader, runtime.device, runtime)
     weak_uids, weak_probability, _ = predict(model, weak_loader, runtime.device, runtime)
     _save_predictions(outdir / "oof.csv", outer_uids, outer_probability)
@@ -589,6 +569,7 @@ def train_fold(config: dict, fold: int) -> Path:
                 "selection_gold_train": int((selection_train_mask & gold).sum()),
                 "final_gold_train": int((final_train_mask & gold).sum()),
                 "budget_limited_selection": bool(budget_limited),
+                "stage": "stage2" if config.get("cotrain_stage1_root") else "stage1",
             },
             indent=2,
         )
