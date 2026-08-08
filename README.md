@@ -36,7 +36,10 @@ study bootstrap macro-AUC
 
 STAGE 2
 outer fold k uses ONLY stage1/fold{k}/weak_oof.csv
+Phase A = report-only epoch selection
+Phase B = fresh image/report-consensus retraining
 wrong-fold weak teachers are rejected
+Stage 2 never exports another weak_oof.csv
 
 INFERENCE
 one GPU
@@ -118,9 +121,9 @@ It reports:
 - gold fold class counts;
 - selected/missing six-stream counts;
 - every selected series' DICOM decode status;
-- candidate-file failures and partial-series corruption.
+- candidate-file failures and per-series/global partial-corruption rates.
 
-The audit uses CPU processes and must complete within the configured budget or it fails rather than presenting a partial audit as complete.
+The audit uses CPU processes. It is a hard gate: incomplete audits, undecodable selected series, or corruption rates beyond the configured thresholds fail the run.
 
 ## 2. Optional competition-data SSL
 
@@ -160,7 +163,7 @@ rsna-knee train --config configs/train.yaml --fold 0
 
 Repeat in separate runs for folds 1 and 2. Do not put all folds into one Kaggle GPU notebook.
 
-Each fold writes:
+Each Stage-1 fold writes:
 
 - `best.pt`;
 - untouched outer-gold `oof.csv`;
@@ -186,7 +189,11 @@ For outer fold `k`, training automatically reads only:
 cotrain_stage1_root/fold{k}/weak_oof.csv
 ```
 
-This is intentional. Using all three weak-OOF files for every outer fold would leak outer-gold information indirectly and is therefore rejected by the production API.
+Using all three weak-OOF files for every outer fold would leak outer-gold information indirectly and is rejected.
+
+Stage-2 Phase A stays report-only so its inner fold remains a clean epoch selector. The fresh Phase-B model then includes the fold-`k` weak studies with image/report consensus targets. Those rows are safe because the Stage-1 fold-`k` model excluded both them and outer-gold fold `k`.
+
+Stage 2 writes `best.pt` and outer `oof.csv`, but intentionally **does not write a new `weak_oof.csv`** because its image-teacher rows were used for training and are no longer OOF.
 
 Run Stage-2 folds separately, again one run per fold.
 
@@ -236,6 +243,8 @@ kaggle/submit_template.py     final one-pass submission run
 - outer gold folds never choose their own epoch/model;
 - Phase B reinitializes before outer evaluation;
 - Stage-2 outer fold `k` can only use the Stage-1 fold-`k` weak teacher;
+- Stage-2 Phase A never uses the image teacher;
+- Stage-2 image-teacher rows enter Phase B and are never re-exported as OOF;
 - duplicate normalized reports stay inside held-out report-group boundaries;
 - BCE is normalized per pathology before macro averaging;
 - ranking-pair utilization is recorded per pathology;
