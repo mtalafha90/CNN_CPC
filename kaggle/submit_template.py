@@ -1,17 +1,18 @@
 """Kaggle one-GPU submission template.
 
-The final notebook uses one CUDA device, Internet-independent attached model
-artifacts, one-pass DICOM decoding for all fold models/TTA views, an 8.5 h wall
-clock budget, and writes exactly ``/kaggle/working/submission.csv``.
+The attached repository is imported directly from its ``src`` directory, so the
+Internet-disabled committed run requires no pip/network installation.
 """
 from pathlib import Path
+import sys
 
 import yaml
 
-from rsna_knee.inference import infer_checkpoints
-
 CODE_ROOT = Path("/kaggle/input/<your-code-dataset>/CNN_CPC")
 MODEL_ROOT = Path("/kaggle/input/<your-model-dataset>/runs/model")
+sys.path.insert(0, str(CODE_ROOT / "src"))
+
+from rsna_knee.inference import infer_checkpoints  # noqa: E402
 
 config = yaml.safe_load((CODE_ROOT / "configs/train.yaml").read_text())
 config["data_root"] = "/kaggle/input/rsna-knee-abnormality-detection"
