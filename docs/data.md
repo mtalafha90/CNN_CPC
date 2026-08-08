@@ -38,7 +38,7 @@ Persistent DataLoader workers own a bounded LRU cache of recently decoded raw se
 series_cache_mb_per_worker: 256
 ```
 
-This is deliberately an in-memory per-process cache rather than an unbounded disk cache: MRI volumes can be large, and writing all selected series to `/kaggle/working` would create a second storage bottleneck. The cache is opportunistic and never changes numerical preprocessing.
+This is deliberately an in-memory per-process cache rather than an unbounded disk cache. The cache is opportunistic and never changes numerical preprocessing.
 
 ## Deterministic 2.5D sampling
 
@@ -79,7 +79,7 @@ where `V` is the number of TTA center offsets and `K` is the six-stream dimensio
 rsna-knee preflight --data-root DATA_ROOT --split train --sample-size 24
 ```
 
-Preflight executes real DICOM decoding and the production 2.5D transform. It distinguishes legitimate missing semantic streams from selected-stream path/decode failures and reports metadata repair counts.
+Preflight executes real DICOM decoding and the production 2.5D transform. It independently gates selected-stream failures and partial candidate-file corruption.
 
 ## Full audit
 
@@ -94,23 +94,25 @@ The full audit adds:
 - six-stream availability;
 - every selected training series' decode status;
 - total candidate DICOM files and failed instances;
-- partial-series corruption counts.
+- per-series and global partial-corruption rates.
 
-Pixel audit work runs in CPU processes. If it cannot finish before the configured wall-clock reserve, it writes partial CSV output and then fails; it does not label the audit complete.
+Pixel audit work runs in CPU processes. The audit fails if it is incomplete, if any selected series cannot decode, or if configured partial-corruption thresholds are exceeded.
 
 ## Gold, inner, outer, and weak cross-fit roles
 
-For fold `k`:
+For Stage-1 fold `k`:
 
 - `outer_oof`: official gold used only for final fold evaluation;
 - `inner_selection`: gold used only to choose training duration in Phase A;
 - `gold_train_selection`: trusted gold used in Phase-A training;
-- `weak_oof`: non-gold `crossfit_fold=k`, excluded so fold `k` can produce an independent image teacher;
-- `weak_train`: report-supervised rows.
+- `weak_oof`: non-gold `crossfit_fold=k`, excluded from Stage-1 fold `k` so it can receive an independent image prediction;
+- `weak_train`: remaining report-supervised rows.
 
-After epoch selection, Phase B retrains a fresh model using all non-outer gold while continuing to exclude `weak_oof`.
+Stage-1 Phase B retrains a fresh model using all non-outer gold while continuing to exclude its `weak_oof` subset. It then writes `fold{k}/weak_oof.csv`.
 
-For Stage-2 outer fold `k`, only Stage-1 `fold{k}/weak_oof.csv` may be used. Other folds' weak predictions are rejected because their models may have trained on outer-gold fold `k`.
+For Stage-2 outer fold `k`, only Stage-1 `fold{k}/weak_oof.csv` is permitted. Phase A remains report-only so the inner gold fold cannot influence epoch selection indirectly through the image teacher. In the fresh Phase-B retrain, the corresponding `crossfit_fold=k` weak studies are **included** as image/report-consensus training rows because their Stage-1 predictions are independent of both themselves and outer-gold fold `k`.
+
+Stage 2 deliberately does not emit a new `weak_oof.csv`, because those image-teacher rows have now been used for training and their predictions would no longer be out-of-fold.
 
 ## Self-supervised data scope
 
