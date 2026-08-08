@@ -1,70 +1,16 @@
-%% This template can be used to write a paper for
-%% Computer Physics Communications using LaTeX.
-%% For authors who want to write a computer program description,
-%% an example Program Summary is included that only has to be
-%% completed and which will give the correct layout in the
-%% preprint and the journal.
-%% The `elsarticle' style is used and more information on this style
-%% can be found at 
-%% http://www.elsevier.com/wps/find/authorsview.authors/elsarticle.
-%%
-%%
+%% CNN_CPC manuscript draft for Computer Physics Communications.
+%% The manuscript is intentionally implementation-faithful: numerical results
+%% are not invented before the real-data production experiments are completed.
 \documentclass[preprint,12pt]{elsarticle}
 
-%% Use the option review to obtain double line spacing
-%% \documentclass[preprint,review,12pt]{elsarticle}
-
-%% Use the options 1p,twocolumn; 3p; 3p,twocolumn; 5p; or 5p,twocolumn
-%% for a journal layout:
-%% \documentclass[final,1p,times]{elsarticle}
-%% \documentclass[final,1p,times,twocolumn]{elsarticle}
-%% \documentclass[final,3p,times]{elsarticle}
-%% \documentclass[final,3p,times,twocolumn]{elsarticle}
-%% \documentclass[final,5p,times]{elsarticle}
-%% \documentclass[final,5p,times,twocolumn]{elsarticle}
-
-%% if you use PostScript figures in your article
-%% use the graphics package for simple commands
-%% \usepackage{graphics}
-%% or use the graphicx package for more complicated commands
-%% \usepackage{graphicx}
-%% or use the epsfig package if you prefer to use the old commands
-%% \usepackage{epsfig}
-
-%% The amssymb package provides various useful mathematical symbols
+\usepackage{amsmath}
 \usepackage{amssymb}
-%% The amsthm package provides extended theorem environments
-%% \usepackage{amsthm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{url}
+\usepackage{hyperref}
 
-%% The lineno packages adds line numbers. Start line numbering with
-%% \begin{linenumbers}, end it with \end{linenumbers}. Or switch it on
-%% for the whole article with \linenumbers after \end{frontmatter}.
-%% \usepackage{lineno}
-
-%% natbib.sty is loaded by default. However, natbib options can be
-%% provided with \biboptions{...} command. Following options are
-%% valid:
-
-%%   round  -  round parentheses are used (default)
-%%   square -  square brackets are used   [option]
-%%   curly  -  curly braces are used      {option}
-%%   angle  -  angle brackets are used    <option>
-%%   semicolon  -  multiple citations separated by semi-colon
-%%   colon  - same as semicolon, an earlier confusion
-%%   comma  -  separated by comma
-%%   numbers-  selects numerical citations
-%%   super  -  numerical citations as superscripts
-%%   sort   -  sorts multiple citations according to order in ref. list
-%%   sort&compress   -  like sort, but also compresses numerical citations
-%%   compress - compresses without sorting
-%%
-%% \biboptions{comma,round}
-
-% \biboptions{}
-
-%% This list environment is used for the references in the
-%% Program Summary
-%%
 \newcounter{bla}
 \newenvironment{refnummer}{%
 \list{[\arabic{bla}]}%
@@ -86,144 +32,315 @@
 
 \begin{frontmatter}
 
-%% Title, authors and addresses
+\title{CNN\_CPC: A leakage-aware weakly supervised multi-sequence MRI framework for knee abnormality detection}
 
-%% use the tnoteref command within \title for footnotes;
-%% use the tnotetext command for the associated footnote;
-%% use the fnref command within \author or \address for footnotes;
-%% use the fntext command for the associated footnote;
-%% use the corref command within \author for corresponding author footnotes;
-%% use the cortext command for the associated footnote;
-%% use the ead command for the email address,
-%% and the form \ead[url] for the home page:
-%%
-%% \title{Title\tnoteref{label1}}
-%% \tnotetext[label1]{}
-%% \author{Name\corref{cor1}\fnref{label2}}
-%% \ead{email address}
-%% \ead[url]{home page}
-%% \fntext[label2]{}
-%% \cortext[cor1]{}
-%% \address{Address\fnref{label3}}
-%% \fntext[label3]{}
-
-\title{A \LaTeX{} template for CPC Computer Programs in Physics (CPiP) articles}
-
-%% use optional labels to link authors explicitly to addresses:
-%% \author[label1,label2]{<author name>}
-%% \address[label1]{<address>}
-%% \address[label2]{<address>}
-
-\author[a]{First Author\corref{author}}
-\author[a,b]{Second Author}
-\author[b]{Third Author}
-
-\cortext[author] {Corresponding author.\\\textit{E-mail address:} firstAuthor@somewhere.edu}
-\address[a]{First Address}
-\address[b]{Second Address}
+\author[a]{Mohammed H. Talafha\corref{cor1}}
+\cortext[cor1]{Corresponding author.}
+\address[a]{Research Institute of Sciences and Engineering, University of Sharjah, Sharjah, United Arab Emirates}
+% TODO before submission: add the corresponding author's e-mail address.
 
 \begin{abstract}
-%% Text of abstract
-A submitted program is expected to satisfy the following criteria: it must be of benefit to other physicists, or be an exemplar of good programming practice, or illustrate new or novel programming techniques which are of importance to computational physics community; it should be implemented in a language and executable on hardware that is widely available and well documented; it should meet accepted standards for scientific programming; it should be adequately documented and, where appropriate, supplied with a separate User Manual, which together with the manuscript should make clear the structure, functionality, installation, and operation of the program.
+Knee magnetic-resonance imaging (MRI) classification becomes methodologically difficult when only a small subset of studies has trusted structured labels, while a much larger set contains radiology reports and heterogeneous imaging sequences. We present \texttt{CNN\_CPC}, a PyTorch framework designed for weakly supervised, multi-sequence, study-level MRI classification under strict leakage and runtime constraints. The software converts radiology reports into target-wise positive, negated, uncertain, and unmentioned states; calibrates report-derived supervision only with gold labels permitted by the current training fold; routes each examination into up to six semantic MRI streams; constructs distributed 2.5D triplets; and encodes them with a ConvNeXt-Tiny backbone followed by cross-sequence Transformer fusion and twelve interacting pathology queries. The optimization combines a pathology-balanced weighted binary cross-entropy objective with confidence-gated pairwise ranking. A nested three-fold protocol separates epoch selection from outer out-of-fold evaluation, while an optional in-domain self-supervised stage and a leakage-safe second-stage image/report co-training procedure exploit the unlabeled portion of the competition data. The implementation further includes DICOM metadata repair, full decode auditing, deterministic study sampling, checkpoint identity contracts, bootstrap evaluation, submission-matched test-time augmentation, and an explicit sub-nine-hour execution budget. This article describes the implemented software and methodology; competition-scale predictive results are intentionally not reported until the full real-data audit and production experiments have been completed.
 
-Your manuscript and figure sources should be submitted through Editorial Manager (EM) by using the online submission tool at \\
-https://www.editorialmanager.com/comphy/.
-
-In addition to the manuscript you must supply: the program source code; a README file giving the names and a brief description of the files/directory structure that make up the package and clear instructions on the installation and execution of the program; sample input and output data for at least one comprehensive test run; and, where appropriate, a user manual.
-
-A compressed archive program file or files, containing these items, should be uploaded at the "Attach Files" stage of the EM submission.
-
-For files larger than 1Gb, if difficulties are encountered during upload the author should contact the Technical Editor at cpc.mendeley@gmail.com.
-\\
-
-% All CPiP articles must contain the following
-% PROGRAM SUMMARY.
-
-\noindent \textbf{PROGRAM SUMMARY/NEW VERSION PROGRAM SUMMARY}
-  %Delete as appropriate.
+\vspace{1em}
+\noindent \textbf{PROGRAM SUMMARY}
 
 \begin{small}
 \noindent
-{\em Program Title:}                                          \\
+{\em Program Title:} CNN\_CPC \\
 {\em CPC Library link to program files:} (to be added by Technical Editor) \\
-{\em Developer's repository link:} (if available) \\
-{\em Licensing provisions(please choose one):} CC0 1.0/CC By 4.0/MIT/Apache-2.0/BSD 3-clause/BSD 2-clause/GPLv3/GPLv2/LGPL/CC BY NC 3.0/MPL-2.0  \\
-{\em Programming language:}                                   \\
-{\em Supplementary material:}                                 \\
-  % Fill in if necessary, otherwise leave out.
-{\em Journal reference of previous version:}*                  \\
-  %Only required for a New Version summary, otherwise leave out.
-{\em Does the new version supersede the previous version?:}*   \\
-  %Only required for a New Version summary, otherwise leave out.
-{\em Reasons for the new version:*}\\
-  %Only required for a New Version summary, otherwise leave out.
-{\em Summary of revisions:}*\\
-  %Only required for a New Version summary, otherwise leave out.
-{\em Nature of problem(approx. 50-250 words):}\\
-  %Describe the nature of the problem here. \\
-{\em Solution method(approx. 50-250 words):}\\
-  %Describe the method solution here.
-{\em Additional comments including restrictions and unusual features (approx. 50-250 words):}\\
-  %Provide any additional comments here.
-   \\
-   
+{\em Developer's repository link:} \url{https://github.com/mtalafha90/CNN_CPC} \\
+{\em Licensing provisions:} Not yet specified. A repository license must be selected before CPC submission. \\
+{\em Programming language:} Python 3.10 or newer; PyTorch-based implementation. \\
+{\em Supplementary material:} Source code, production configuration, command-line interface, tests, Kaggle execution templates, validation documentation, and an external technical DICOM fixture are included in the developer repository. \\
 
+{\em Nature of problem:} Automated knee MRI classification must integrate heterogeneous sagittal, coronal, and axial sequences while learning twelve study-level abnormalities. The available supervision is highly asymmetric: trusted structured labels are sparse, whereas many additional studies contain free-text radiology reports. Directly treating unmentioned findings as negative creates label noise, and calibrating pseudo-labels with held-out gold cases creates validation leakage. In addition, the imaging input consists of variable-length DICOM series with incomplete or inconsistent metadata, and the target execution environment imposes a strict single-GPU runtime limit. The software therefore addresses the joint problem of robust DICOM ingestion, weak-label construction, leakage-controlled validation, multi-sequence representation learning, runtime-safe training, and reproducible inference. \\
 
-\begin{thebibliography}{0}
-\bibitem{1}Reference 1         % This list should only contain those items referenced in the                 
-\bibitem{2}Reference 2         % Program Summary section.   
-\bibitem{3}Reference 3         % Type references in text as [1], [2], etc.
-                               % This list is different from the bibliography at the end of 
-                               % the Long Write-Up.
-\end{thebibliography}
-* Items marked with an asterisk are only required for new versions
-of programs previously published in the CPC Program Library.\\
+{\em Solution method:} CNN\_CPC first validates the competition CSV structure, repairs missing series metadata from DICOM headers when possible, and routes each study into six semantic streams: fluid-sensitive and structural series for each of the sagittal, coronal, and axial planes. Each active stream is intensity-normalized, spatially ordered, resized, and represented by distributed 2.5D triplets. ConvNeXt-Tiny encodes the triplets, a Transformer mixes slice and sequence tokens, and twelve learned pathology queries cross-attend to the MRI memory before target-specific readout. Radiology reports provide deterministic multilingual weak supervision with fold-safe calibration; finite official labels override pseudo-labels cell by cell. Training uses a macro-balanced weighted binary cross-entropy objective plus a confidence-gated ranking auxiliary. Nested outer/inner validation, optional competition-data self-supervision, fold-local cross-fitted image teachers, and stage/fold/TTA checkpoint checks are used to reduce leakage and make final inference reproducible. \\
+
+{\em Additional comments including restrictions and unusual features:} The production configuration uses one GPU and CPU multiprocessing for DICOM work, disables external pretrained weights by default, and enforces an 8.5-hour software budget with reserve time for validation, out-of-fold prediction, bootstrap evaluation, and serialization. Missing MRI streams are masked rather than imputed. Validation test-time augmentation is predeclared to match submission augmentation. The external four-study DICOM fixture distributed with the repository is only a technical decoding and routing fixture and must not be used to estimate scientific or competition performance. The software is intended for research and competition methodology development and is not a clinical diagnostic device. \\
 \end{small}
-   \end{abstract}
+\end{abstract}
+
+\begin{keyword}
+knee MRI \sep weak supervision \sep DICOM \sep ConvNeXt \sep Transformer \sep nested validation \sep self-supervised learning \sep multi-label classification
+\end{keyword}
+
 \end{frontmatter}
 
-%% main text
-\section{}
-\label{}
+\section{Introduction}
+\label{sec:introduction}
 
-%% The Appendices part is started with the command \appendix;
-%% appendix sections are then done as normal sections
-%% \appendix
+Deep learning has shown that study-level knee MRI abnormalities can be learned directly from image series, with MRNet providing an influential early demonstration of multi-series knee MRI classification \cite{bien2018mrnet}. Modern convolutional backbones such as ConvNeXt \cite{liu2022convnext} and attention-based sequence models \cite{vaswani2017attention} make it possible to combine local image representation with long-range interactions among slices and MRI sequences. However, architecture alone is not the dominant difficulty when trusted structured labels are scarce and most available studies are supervised indirectly by free-text radiology reports.
 
-%% \section{}
-%% \label{}
+\texttt{CNN\_CPC} was developed for the 2026 RSNA Knee Abnormality Detection setting as a conservative image-only inference pipeline whose training stage may exploit report-derived supervision. The implementation is built around four design requirements. First, report silence must remain unlabeled rather than being converted into a false negative. Second, all calibration, model selection, and second-stage teaching must respect outer validation boundaries. Third, heterogeneous MRI sequences and missing series must be handled explicitly. Fourth, the complete training and inference workflow must remain feasible in a bounded single-GPU execution environment.
 
-%% References
-%%
-%% Following citation commands can be used in the body text:
-%% Usage of \cite is as follows:
-%%   \cite{key}         ==>>  [#]
-%%   \cite[chap. 2]{key} ==>> [#, chap. 2]
-%%
+The contribution of the software is therefore not a single neural-network block, but an integrated production framework combining DICOM processing, semantic series routing, weak supervision, nested validation, in-domain self-supervision, cross-fitted co-training, metric-aware optimization, runtime protection, and inference-contract validation. The package is implemented in Python and PyTorch \cite{paszke2019pytorch} and exposes its production operations through the \texttt{rsna-knee} command-line interface.
 
-%% References with bibTeX database:
+\section{Software organization and production contract}
+\label{sec:software}
 
-\bibliographystyle{elsarticle-num}
-\bibliography{<your-bib-database>}
+The source package is organized by responsibility rather than as a monolithic training script. DICOM decoding and preprocessing are implemented in \path{src/rsna_knee/dicom.py}; metadata recovery and semantic series selection are handled by the data modules; deterministic report labeling and fold-safe calibration form the weak-supervision layer; the neural model is defined in \path{model.py}; and nested Stage-1/Stage-2 optimization is implemented in \path{training.py}. Separate modules provide self-supervised pretraining, audit/preflight gates, runtime resolution, evaluation, and final inference.
 
-%% Authors are advised to submit their bibtex database files. They are
-%% requested to list a bibtex style file in the manuscript if they do
-%% not want to use elsarticle-num.bst.
+The default production configuration uses three outer folds, one GPU, CPU multiprocessing for image loading, an 8.5-hour software runtime budget, and no external pretrained weights. The primary model operates on 16 sampled triplet centers per selected stream at an in-plane size of $224\times224$ pixels. Validation and submission use identical center-offset test-time augmentation (TTA) views, $\{-1,0,+1\}$, unless an explicitly validated configuration changes that contract.
 
-%% References without bibTeX database:
+\section{Input data model and DICOM processing}
+\label{sec:dicom}
 
-% \begin{thebibliography}{00}
+\subsection{Study and target representation}
 
-%% \bibitem must have the following form:
-%%   \bibitem{key}...
-%%
+The package expects a study-level training table containing \texttt{StudyInstanceUID}, radiology report text, and twelve target columns:
+\begin{quote}
+ACL, MCL, Medial Meniscus, Lateral Meniscus, Medial OA, Lateral OA, PF OA, Effusion, Synovitis, Baker's, Contusion, and Fracture.
+\end{quote}
+Series metadata are read from a second table containing study and series UIDs together with anatomical plane, fluid sensitivity, and fat-suppression flags. Input validation rejects missing or duplicate study identifiers and duplicate study/series pairs.
 
-% \bibitem{}
+\subsection{Six-stream semantic routing}
+\label{subsec:routing}
 
-% \end{thebibliography}
+Each examination is represented by up to six semantic streams:
+\begin{enumerate}[label=(\roman*)]
+    \item sagittal fluid-sensitive,
+    \item sagittal structural,
+    \item coronal fluid-sensitive,
+    \item coronal structural,
+    \item axial fluid-sensitive, and
+    \item axial structural.
+\end{enumerate}
+For each anatomical plane, a fluid score favors fluid-sensitive and fat-suppressed acquisitions, whereas a structural score favors non-fat-suppressed and non-fluid-sensitive acquisitions. When multiple series are available, the two routing roles are assigned to different series whenever possible. Unknown plane or contrast metadata can be repaired from DICOM metadata before routing. If a semantic slot is genuinely unavailable, the corresponding stream remains missing and is represented by an explicit mask rather than fabricated image data.
 
+\subsection{Spatial ordering and intensity processing}
+
+DICOM slices are sorted from physical geometry whenever \texttt{ImagePositionPatient} and \texttt{ImageOrientationPatient} are available. The slice-plane normal is obtained from the cross product of the in-plane direction vectors and the position is projected onto that normal. \texttt{InstanceNumber} provides the fallback ordering. Pixel intensities are converted to floating point, transformed with \texttt{RescaleSlope} and \texttt{RescaleIntercept}, and inverted for \texttt{MONOCHROME1}. Multi-frame DICOM objects are expanded into individual frames. When decoded frames have inconsistent spatial shapes, they are centrally padded or cropped to a common target shape.
+
+For every decoded volume $V$, non-finite values are repaired and intensities are clipped to the first and ninety-ninth percentiles. The clipped volume is then scaled to $[0,1]$. Distributed slice centers are sampled across the usable extent of the volume. At center $z$ and gap $g$, a 2.5D image is constructed as
+\begin{equation}
+X_z = \left[V_{z-g},\;V_z,\;V_{z+g}\right],
+\label{eq:triplet}
+\end{equation}
+where the three slices become the three image channels. The default gap is one slice at inference; training may use gaps of one or two and mild center jitter. Each triplet is resized bilinearly to the configured image size.
+
+\section{Weak supervision from radiology reports}
+\label{sec:weak}
+
+\subsection{Deterministic multilingual report states}
+
+Reports are normalized to lowercase Unicode-decomposed text with diacritics removed. Target-specific lexicons cover common English and multilingual terms. Each report--target pair is assigned one of four semantic states: \emph{positive}, \emph{negated}, \emph{uncertain}, or \emph{unmentioned}. The deterministic base teacher assigns initial positive and negated probabilities of 0.92 and 0.06, respectively, both with confidence 0.80. An uncertain mention receives probability 0.50 with low confidence, while an unmentioned target is not interpreted as a negative observation.
+
+The production configuration sets the direct weight of unmentioned report states to zero and caps uncertain-state confidence at 0.10. Thus, report silence is treated as missing supervision. This positive--unlabeled interpretation is essential because an omitted pathology in a radiology report is not equivalent to an explicitly normal finding.
+
+\subsection{Fold-safe calibration and gold override}
+
+When enough permitted gold studies are available, the report states are calibrated inside the current training boundary to estimate target- and state-specific probabilities. The outer validation fold is never allowed to calibrate the teacher used to train its own model. At the target-cell level, any finite official label $y_{ic}$ overrides the report-derived pseudo-label and receives the configured gold weight, $w_{\mathrm{gold}}=8$ by default. Missing official cells remain weakly supervised or unlabeled according to their report evidence.
+
+\subsection{Macro-balanced optimization}
+
+Let $\ell_{ic}$ denote binary cross-entropy for study $i$ and pathology $c$, and let $w_{ic}$ be its supervision weight. The production sampler first determines the planned epoch and computes the total supervision mass for each target,
+\begin{equation}
+D_c = \sum_{i\in\mathcal{E}} w_{ic}.
+\end{equation}
+Batch contributions are then accumulated against the fixed epoch-level denominator, producing a pathology-balanced objective of the form
+\begin{equation}
+\mathcal{L}_{\mathrm{BCE}}
+= \frac{1}{|\mathcal{C}_{+}|}
+\sum_{c\in\mathcal{C}_{+}}
+\frac{\sum_i w_{ic}\,\ell_{ic}}{D_c},
+\label{eq:macrobce}
+\end{equation}
+where $\mathcal{C}_{+}$ contains targets with non-zero planned supervision. This prevents common report states from giving one pathology systematically more optimizer influence than another simply because it participates in more mini-batches.
+
+An auxiliary pairwise ranking term is computed only from sufficiently confident targets. For a positive candidate $p$ and negative candidate $n$ for pathology $c$, the implemented ranking penalty is
+\begin{equation}
+\mathcal{L}_{\mathrm{rank}}
+= \operatorname{softplus}\!\left[-(s_{pc}-s_{nc})\right]
+\min(w_{pc},w_{nc}),
+\label{eq:rank}
+\end{equation}
+with default pseudo-label thresholds of 0.75 and 0.25 and a minimum confidence of 0.35. The total loss adds this auxiliary term with weight 0.10. Per-target ranking-pair counts and effective supervision mass are written to the training diagnostics so the contribution is measured rather than assumed.
+
+\section{Neural-network architecture}
+\label{sec:model}
+
+\subsection{Slice encoder}
+
+A study batch has conceptual shape
+\begin{equation}
+[B,K,S,3,H,W],
+\end{equation}
+where $K=6$ semantic streams, $S=16$ triplet centers in the default production configuration, and $H=W=224$. Active triplets are flattened and processed in bounded chunks by a ConvNeXt-Tiny encoder \cite{liu2022convnext}. The conservative production configuration initializes the encoder without external ImageNet weights, although the model class supports them when explicitly permitted. Gradient checkpointing is enabled during training to reduce memory pressure.
+
+Only streams marked present are encoded. Missing streams therefore incur neither fabricated visual content nor unnecessary backbone computation. Each encoded token receives a learned slice-position embedding and a learned stream embedding.
+
+\subsection{Cross-sequence Transformer}
+
+All active slice/stream tokens are flattened into one MRI memory sequence and processed by a Transformer encoder \cite{vaswani2017attention}. The default configuration uses two Transformer layers, eight attention heads, pre-normalization, GELU activation, dropout 0.25, and a feed-forward width twice the ConvNeXt feature dimension. A padding mask prevents missing streams from entering attention.
+
+\subsection{Interacting pathology queries}
+
+Twelve learned pathology tokens, one per target, first interact through a separate pathology Transformer layer. They then serve as queries in multi-head cross-attention over the contextual MRI memory. If $Q_c$ denotes the resulting representation for pathology $c$, the target logit is
+\begin{equation}
+s_c = Q_c^{\mathsf T} a_c + b_c,
+\end{equation}
+where $a_c$ and $b_c$ are learned target-specific parameters. This design permits each pathology to attend to different slices and sequences while also allowing pathology queries to exchange information before MRI cross-attention.
+
+\section{In-domain self-supervised pretraining}
+\label{sec:ssl}
+
+An optional Stage-1 candidate pretrains the ConvNeXt encoder using only non-gold competition MRI studies. The self-supervised learner samples the central triplet from active streams and optimizes a same-study contrastive objective. Features from different streams of the same knee serve as positives. A two-layer projection head maps encoder features to a 256-dimensional normalized embedding, and the default contrastive temperature is 0.15.
+
+Two auxiliary metadata heads predict the anatomical plane (sagittal, coronal, or axial) and the semantic sequence role (fluid-sensitive or structural). If $\mathcal{L}_{\mathrm{con}}$ is the contrastive loss and $\mathcal{L}_{\mathrm{meta}}$ is the sum of the two cross-entropy metadata losses, the SSL objective is
+\begin{equation}
+\mathcal{L}_{\mathrm{SSL}}
+= \mathcal{L}_{\mathrm{con}} + 0.25\,\mathcal{L}_{\mathrm{meta}}.
+\end{equation}
+The resulting checkpoint stores the encoder state and explicit provenance indicating that it was trained from competition training data. Random initialization and competition-data SSL are treated as separate Stage-1 candidates rather than as a choice made from outer-fold performance.
+
+\section{Nested validation and model selection}
+\label{sec:validation}
+
+\subsection{Gold fold construction}
+
+Gold studies are partitioned into three folds. Before assignment, normalized report text is hashed so duplicate normalized reports remain in the same group. Groups are greedily assigned to folds using a global objective that balances both per-target positive counts and fold size. The algorithm seeds every fold before subsequent assignments to avoid an empty-fold failure mode.
+
+For outer fold $k$, the explicit validation manifest contains three roles:
+\begin{itemize}
+    \item \texttt{outer\_validation}: untouched gold cases used only for final out-of-fold evaluation;
+    \item \texttt{inner\_selection}: the gold fold used to select training duration;
+    \item \texttt{gold\_train}: the remaining gold studies used in the inner optimization phase.
+\end{itemize}
+The default inner fold is $(k+1)\bmod 3$.
+
+\subsection{Two-phase fold training}
+
+Each outer fold uses two distinct training phases. Phase A trains without access to the outer gold fold and uses the inner fold to select the number of epochs. The Phase-A model is then discarded. Phase B initializes a fresh model and retrains for exactly the selected duration using all gold studies except the outer fold, together with the weakly supervised studies allowed by the fold contract. Only the fresh Phase-B model is evaluated on the outer fold.
+
+Validation predictions use the same TTA center offsets as the planned submission. Consequently, the primary \texttt{oof.csv} measures the predeclared inference policy, whereas \texttt{oof\_center.csv} is retained only as a diagnostic center-view comparison.
+
+\subsection{Leakage-safe Stage-1 candidate selection}
+
+The random-initialized and SSL-initialized Stage-1 models are trained under identical fold and validation contracts. For outer fold $k$, the downstream Stage-1 source is chosen using only that candidate's \texttt{inner\_macro\_auc} for fold $k$. The selector deliberately ignores \texttt{outer\_macro\_auc}. This prevents the outer validation labels from selecting the image teacher that later participates in Stage 2 for the same fold.
+
+\section{Stage-2 image/report co-training}
+\label{sec:stage2}
+
+The second stage adds an independent image teacher without violating the outer validation boundary. Non-gold studies are assigned deterministic cross-fit folds. A Stage-1 model for outer fold $k$ excludes both outer-gold fold $k$ and the weak-study subset assigned to cross-fit fold $k$, then predicts that held-out weak subset into \texttt{fold\{k\}/weak\_oof.csv}. Stage 2 for outer fold $k$ may consume only this fold-local teacher.
+
+Stage-2 Phase A remains report-only so image predictions cannot influence inner epoch selection. After the duration is selected, a fresh Phase-B model is trained with report supervision plus the safe fold-local image teacher. Strong image/report agreement receives high weight, whereas direct conflict is strongly downweighted. By default, a very confident image prediction ($\geq0.95$ or $\leq0.05$) may add a modest BCE weight of 0.20 when report confidence is near zero. These image-only cells do not automatically become trusted-sampler examples and do not enter the confidence-gated ranking term merely because the image teacher is confident.
+
+For every pathology, the software records how many report-silent cells move from zero to non-zero supervision weight, along with probability changes caused by Stage 2. Stage 2 does not export another weak out-of-fold teacher because those weak-study predictions would no longer be out of sample.
+
+\section{Data augmentation, sampling, and reproducibility}
+\label{sec:augmentation}
+
+Training augmentation is deliberately mild and MRI-compatible. The default configuration uses triplet gaps of one or two slices, center jitter of up to two positions, rotations up to $5^{\circ}$, translation up to 3\% of image size, scale jitter, gamma perturbation, a low-frequency multiplicative bias field, Gaussian noise, and slice dropout. Validation and inference disable stochastic augmentation.
+
+The mini-batch sampler maintains separate trusted and general study pools. Official gold studies and unusually reliable pseudo-labeled studies form the trusted pool; the remaining studies form the general pool. The configured trusted fraction is 0.30. Sampling and worker random number generation are seeded, and NumPy augmentation randomness is derived from worker-local PyTorch seeds. The implementation aims at reproducible sampling for fixed software, seed, and worker settings, while not claiming bitwise determinism for all accelerated GPU kernels.
+
+Persistent data-loader workers maintain a bounded decoded-series cache. For validation and inference, all requested TTA center-offset views are created after a single DICOM decode, so TTA multiplies neural forward passes rather than DICOM reads.
+
+\section{Preflight, audit, and runtime protection}
+\label{sec:runtime}
+
+Before long training jobs, \texttt{rsna-knee preflight} decodes a representative real-pixel sample and measures study- and file-level failure rates. The more extensive \texttt{rsna-knee audit} measures report-state coverage, fold balance, semantic-stream availability, every selected series' decode status, and both per-series and global partial-file corruption. The production thresholds make severe or incomplete decode audits a hard gate rather than a warning.
+
+All long GPU operations are independently time-bounded. The production configuration allocates 8.5 hours with an additional reserve. The remaining-work estimator does not consider only the next epoch; it reserves measured time for the remaining Phase-B epochs, outer-fold TTA prediction, Stage-1 weak out-of-fold generation, bootstrap evaluation, data-loader startup, and serialization. Prediction also checks the remaining budget before every batch. This is designed to avoid the common failure mode in which model optimization completes but required post-training inference exceeds the execution ceiling.
+
+\section{Evaluation and inference contracts}
+\label{sec:evaluation}
+
+The evaluation module computes target-wise ROC AUC and their macro average from official finite gold cells. Study-level bootstrap resampling provides uncertainty estimates, and paired bootstrap comparisons are available when two OOF prediction sets contain the same study ordering. The default evaluation configuration uses 2000 bootstrap replicates.
+
+Production checkpoints store the outer fold, stage identifier, model specification, semantic stream order, training configuration, and validation TTA offsets. Final inference requires an exact fold set, normally $\{0,1,2\}$, a single checkpoint stage, compatible model specifications, compatible stream order, and validation TTA identical to the requested submission TTA. Duplicate folds, missing folds, mixed stages, or TTA mismatches are rejected before inference.
+
+The final model is image-only: radiology reports are used as training supervision but are not required for hidden-test prediction. The output is a study-level table containing \texttt{StudyInstanceUID} and the twelve target probabilities.
+
+\section{Command-line workflow}
+\label{sec:cli}
+
+Table~\ref{tab:cli} summarizes the production commands exposed by the package.
+
+\begin{table}[ht]
+\centering
+\caption{Principal \texttt{rsna-knee} command-line operations.}
+\label{tab:cli}
+\begin{tabular}{p{0.25\linewidth}p{0.65\linewidth}}
+\toprule
+Command & Purpose \\
+\midrule
+\texttt{inspect} & Validate and summarize competition CSVs and target counts. \\
+\texttt{preflight} & Decode a representative DICOM sample and enforce decode-failure thresholds. \\
+\texttt{audit} & Perform the full fold/report/stream/DICOM audit using CPU multiprocessing. \\
+\texttt{validation-manifest} & Export explicit outer-validation, inner-selection, and gold-training roles. \\
+\texttt{pretrain} & Train the competition-data self-supervised MRI encoder. \\
+\texttt{train} & Train one nested outer fold, optionally in smoke mode. \\
+\texttt{select-stage1} & Select random versus SSL Stage-1 source per outer fold using inner AUC only. \\
+\texttt{evaluate} & Compute gold OOF macro AUC, bootstrap intervals, and paired comparisons. \\
+\texttt{infer} & Run validated fold-ensemble/TTA inference and write the submission table. \\
+\texttt{runtime} & Display the resolved one-GPU and multiprocessing execution environment. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A recommended production sequence is
+\begin{quote}
+full audit $\rightarrow$ Stage-1 random smoke $\rightarrow$ Stage-1 random folds $\rightarrow$ competition-data SSL $\rightarrow$ Stage-1 SSL folds $\rightarrow$ inner-AUC foldwise selection $\rightarrow$ Stage 2 $\rightarrow$ OOF evaluation $\rightarrow$ frozen-stage final inference.
+\end{quote}
+Each fold is run sequentially on a single GPU; distributed \texttt{torchrun} execution is intentionally outside the production contract.
+
+\section{Software verification status}
+\label{sec:verification}
+
+The repository contains unit tests for data contracts, fold construction, policy validation, model/inference compatibility, weak supervision, and runtime safeguards, together with multiprocessing and synthetic DICOM integration tests. A committed external technical fixture contains four openly licensed knee MRI source images converted into minimal multi-frame DICOM studies for deterministic decode/routing regression tests. Each fixture DICOM repeats a single published MRI slice over several frames; consequently, this fixture is suitable only for software verification and must not be used for scientific validation, model selection, or competition AUC estimation.
+
+At the present manuscript stage, the codebase is deliberately separated from empirical claims. Full competition-data decode auditing, production smoke runs, Stage-1/SSL/Stage-2 OOF experiments, GPU memory/runtime measurements, and hidden-test inference must be completed before numerical performance claims are inserted. This avoids reporting projected or architecture-based performance as if it were measured evidence.
+
+\section{Limitations}
+\label{sec:limitations}
+
+The deterministic report teacher is intentionally conservative and cannot capture the full clinical nuance of unrestricted multilingual radiology prose. Fold-safe calibration reduces systematic bias but is itself limited by the size and class balance of the trusted gold set. The 2.5D representation captures local depth context but does not provide the complete volumetric inductive bias of a full 3D network. Semantic routing selects at most two series per plane, so additional acquisitions can be ignored. The Stage-2 image teacher can recover some report omissions, but its thresholds and supervision weights remain hyperparameters whose usefulness must be established empirically.
+
+The framework is designed for competition and research use rather than clinical deployment. It does not provide prospective clinical validation, uncertainty calibration sufficient for patient-level decision making, or regulatory safeguards required for a medical device. Finally, a formal open-source license has not yet been added to the repository and must be selected before a CPC software submission.
+
+\section{Conclusions}
+\label{sec:conclusion}
+
+\texttt{CNN\_CPC} integrates weak report supervision, robust multi-sequence DICOM handling, a ConvNeXt--Transformer MRI model, nested gold validation, in-domain self-supervision, leakage-safe Stage-2 co-training, metric-aware loss construction, and strict runtime/inference contracts into one reproducible software pipeline. The central methodological principle is that supervision quality and validation integrity are treated as first-class components of the computational method rather than as bookkeeping around the neural network. The implementation is ready for real-data audit and production experiments; quantitative results should be added only after those experiments are completed under the frozen protocol described here.
+
+\section*{Code availability}
+
+The source code and documentation are available from the developer repository at \url{https://github.com/mtalafha90/CNN_CPC}. Before journal submission, the repository should be archived at a permanent release DOI and a formal software license should be added.
+
+\section*{Declaration of competing interest}
+
+The author declares that there are no known competing financial interests or personal relationships that could have appeared to influence the work reported in this article.
+
+\section*{Acknowledgements}
+
+The author acknowledges the University of Sharjah for supporting the research environment in which this software was developed. The RSNA Knee Abnormality Detection data remain subject to the terms and conditions of the corresponding competition and data provider.
+
+\begin{thebibliography}{00}
+
+\bibitem{bien2018mrnet}
+N. Bien, P. Rajpurkar, R.L. Ball, J. Irvin, A. Park, E. Jones, M. Bereket, B.N. Patel, K.W. Yeom, K. Shpanskaya, et al.,
+Deep-learning-assisted diagnosis for knee magnetic resonance imaging: Development and retrospective validation of MRNet,
+PLOS Medicine 15 (11) (2018) e1002699.
+\href{https://doi.org/10.1371/journal.pmed.1002699}{doi:10.1371/journal.pmed.1002699}.
+
+\bibitem{liu2022convnext}
+Z. Liu, H. Mao, C.-Y. Wu, C. Feichtenhofer, T. Darrell, S. Xie,
+A ConvNet for the 2020s,
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (2022) 11976--11986.
+
+\bibitem{vaswani2017attention}
+A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A.N. Gomez, L. Kaiser, I. Polosukhin,
+Attention Is All You Need,
+Advances in Neural Information Processing Systems 30 (2017).
+
+\bibitem{paszke2019pytorch}
+A. Paszke, S. Gross, F. Massa, A. Lerer, J. Bradbury, G. Chanan, T. Killeen, Z. Lin, N. Gimelshein, L. Antiga, et al.,
+PyTorch: An Imperative Style, High-Performance Deep Learning Library,
+Advances in Neural Information Processing Systems 32 (2019).
+
+\end{thebibliography}
 
 \end{document}
-
-%%
-%% End of file 
