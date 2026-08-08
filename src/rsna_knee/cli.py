@@ -12,6 +12,7 @@ import yaml
 
 from .audit import run_audit
 from .constants import TARGETS
+from .cotrain import choose_fold_candidate_root
 from .data import gold_mask, load_series_csv, load_train_csv
 from .evaluation import bootstrap_macro_auc, compare_runs, load_oof
 from .inference import infer_checkpoints
@@ -34,14 +35,10 @@ def read_config(path: str | Path) -> dict:
 def _smoke_config(config: dict) -> dict:
     smoke = copy.deepcopy(config)
     smoke["epochs"] = min(2, int(smoke.get("epochs", 2)))
-    smoke["max_train_batches_per_epoch"] = min(
-        20, int(smoke.get("max_train_batches_per_epoch", 20))
-    )
+    smoke["max_train_batches_per_epoch"] = min(20, int(smoke.get("max_train_batches_per_epoch", 20)))
     smoke["patience"] = 1
     smoke["n_bootstrap"] = min(100, int(smoke.get("n_bootstrap", 100)))
-    smoke["runtime_budget_hours"] = min(
-        2.0, float(smoke.get("runtime_budget_hours", 2.0))
-    )
+    smoke["runtime_budget_hours"] = min(2.0, float(smoke.get("runtime_budget_hours", 2.0)))
     smoke["output_dir"] = str(Path(smoke.get("output_dir", "runs/model")) / "smoke")
     return smoke
 
@@ -57,7 +54,6 @@ def _set_training_limits(config: dict) -> None:
     if reserve_minutes < 0 or reserve_minutes >= budget_hours * 60:
         raise ValueError("runtime reserve must be non-negative and shorter than the run budget")
     os.environ[ENV_MAX_BATCHES] = str(cap)
-    # Stop scheduling new training batches at the beginning of the reserve.
     deadline = time.monotonic() + budget_hours * 3600.0 - reserve_minutes * 60.0
     os.environ[ENV_RUN_DEADLINE] = f"{deadline:.9f}"
 
@@ -79,9 +75,7 @@ def main() -> None:
     p.add_argument("--no-strict", action="store_true")
     p.add_argument("--out", default=None)
 
-    p = sub.add_parser(
-        "audit", help="full teacher/fold/stream/DICOM audit using CPU multiprocessing"
-    )
+    p = sub.add_parser("audit", help="full teacher/fold/stream/DICOM audit using CPU multiprocessing")
     p.add_argument("--config", required=True)
     p.add_argument("--out-dir", default="runs/audit")
     p.add_argument("--metadata-only", action="store_true")
@@ -98,6 +92,14 @@ def main() -> None:
     p.add_argument("--config", required=True)
     p.add_argument("--fold", type=int, required=True)
     p.add_argument("--smoke", action="store_true", help="2-epoch/20-batch integration run")
+
+    p = sub.add_parser(
+        "select-stage1",
+        help="choose one Stage-1 candidate per outer fold using inner_macro_auc only",
+    )
+    p.add_argument("--candidate-root", action="append", required=True)
+    p.add_argument("--n-folds", type=int, default=3)
+    p.add_argument("--out", default="runs/stage1_selection.json")
 
     p = sub.add_parser("evaluate", help="bootstrap official gold OOF macro AUC")
     p.add_argument("--train-csv", required=True)
@@ -178,6 +180,25 @@ def main() -> None:
         print(train_fold(config, args.fold))
         return
 
+    if args.cmd == "select-stage1":
+        if args.n_folds < 1:
+            raise ValueError("n-folds must be >=1")
+        payload = {"criterion": "inner_macro_auc_only", "candidate_roots": args.candidate_root, "folds": {}}
+        for fold in range(args.n_folds):
+            root, metadata = choose_fold_candidate_root(args.candidate_root, fold)
+            fold_dir = root / f"fold{fold}"
+            payload["folds"][str(fold)] = {
+                **metadata,
+                "checkpoint": str((fold_dir / "best.pt").resolve()),
+                "weak_oof": str((fold_dir / "weak_oof.csv").resolve()),
+            }
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(json.dumps(payload, indent=2))
+        print(out)
+        return
+
     if args.cmd == "evaluate":
         y_true, predictions, uids = load_oof(args.train_csv, args.oof)
         result = bootstrap_macro_auc(y_true, predictions, n_bootstrap=args.n_bootstrap)
@@ -188,9 +209,7 @@ def main() -> None:
             _, other, other_uids = load_oof(args.train_csv, args.compare_oof, restrict_to=uids)
             if other_uids != uids:
                 raise ValueError("paired comparison OOF study ordering mismatch")
-            payload["comparison"] = compare_runs(
-                y_true, predictions, other, n_bootstrap=args.n_bootstrap
-            )
+            payload["comparison"] = compare_runs(y_true, predictions, other, n_bootstrap=args.n_bootstrap)
             print(payload["comparison"])
         if args.out:
             Path(args.out).write_text(json.dumps(payload, indent=2), encoding="utf-8")
