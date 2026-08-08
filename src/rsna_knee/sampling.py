@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from collections.abc import Iterator
 
 import numpy as np
@@ -11,14 +12,15 @@ from torch.utils.data import Sampler
 
 DEFAULT_MAX_BATCHES_PER_EPOCH = 300
 ENV_MAX_BATCHES = "RSNA_MAX_TRAIN_BATCHES"
+ENV_RUN_DEADLINE = "RSNA_RUN_DEADLINE_MONOTONIC"
 
 
 class TwoPoolBatchSampler(Sampler[list[int]]):
-    """Deterministically mix trusted/general studies with a hard epoch-work cap.
+    """Deterministically mix trusted/general studies with hard work/time caps.
 
-    ``max_batches`` can be supplied by library callers. The production CLI sets
-    ``RSNA_MAX_TRAIN_BATCHES`` from ``max_train_batches_per_epoch``. Direct API
-    callers that do neither still receive the conservative 300-batch ceiling.
+    The production CLI sets both a maximum batch count and an absolute monotonic
+    deadline. The sampler stops scheduling new GPU batches once that deadline is
+    reached, leaving the configured reserve for checkpointing/evaluation.
     """
 
     def __init__(
@@ -45,6 +47,8 @@ class TwoPoolBatchSampler(Sampler[list[int]]):
         if int(max_batches) < 1:
             raise ValueError("max_batches must be >=1")
 
+        deadline_text = os.environ.get(ENV_RUN_DEADLINE)
+        self.deadline = float(deadline_text) if deadline_text else None
         self.trusted = np.flatnonzero(mask)
         self.general = np.flatnonzero(~mask)
         if trusted_fraction > 0 and len(self.trusted) == 0:
@@ -66,6 +70,9 @@ class TwoPoolBatchSampler(Sampler[list[int]]):
     def __len__(self) -> int:
         return self.n_batches
 
+    def _time_available(self) -> bool:
+        return self.deadline is None or time.monotonic() < self.deadline
+
     @staticmethod
     def _draw(pool: np.ndarray, count: int, rng: np.random.Generator, state: dict) -> list[int]:
         result = []
@@ -85,6 +92,8 @@ class TwoPoolBatchSampler(Sampler[list[int]]):
         trusted_state, general_state = {}, {}
         previous_quota = 0
         for batch_index in range(self.n_batches):
+            if not self._time_available():
+                break
             cumulative = int(math.floor((batch_index + 1) * self.batch_size * self.fraction + 1e-9))
             n_trusted = min(self.batch_size, max(0, cumulative - previous_quota))
             previous_quota = cumulative
