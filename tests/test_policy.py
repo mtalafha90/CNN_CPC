@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -22,6 +24,23 @@ def _safe_training_config() -> dict:
     }
 
 
+def _write_stage1_contract(root, offsets=(-1, 0, 1)):
+    for fold in range(3):
+        folder = root / f"fold{fold}"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "selection.json").write_text(
+            json.dumps(
+                {
+                    "stage": "stage1",
+                    "outer_fold": fold,
+                    "inner_fold": (fold + 1) % 3,
+                    "inner_macro_auc": 0.5,
+                    "validation_tta_offsets": list(offsets),
+                }
+            )
+        )
+
+
 def test_competition_budget_must_be_strictly_below_nine_hours():
     with pytest.raises(ValueError, match="strictly below 9"):
         validate_competition_config(
@@ -42,6 +61,21 @@ def test_validation_tta_must_match_submission_tta():
     config = {**_safe_training_config(), "validation_tta_offsets": [0]}
     with pytest.raises(ValueError, match="validation_tta_offsets"):
         validate_competition_config(config, purpose="train")
+
+
+def test_mounted_stage1_source_must_match_current_validation_tta(tmp_path):
+    root = tmp_path / "stage1"
+    _write_stage1_contract(root, offsets=(0,))
+    config = {**_safe_training_config(), "cotrain_stage1_root": str(root)}
+    with pytest.raises(ValueError, match="current Stage-2 validation TTA"):
+        validate_competition_config(config, purpose="train")
+
+
+def test_mounted_stage1_source_with_matching_tta_is_accepted(tmp_path):
+    root = tmp_path / "stage1"
+    _write_stage1_contract(root)
+    config = {**_safe_training_config(), "cotrain_stage1_root": str(root)}
+    validate_competition_config(config, purpose="train")
 
 
 def test_stage2_cannot_set_single_root_and_candidate_list_together():
