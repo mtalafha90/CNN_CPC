@@ -1,11 +1,12 @@
 """Kaggle one-GPU in-domain SSL template.
 
-Run this as its own committed notebook execution. The production budget guard
-keeps the job below 9 h and saves ``ssl_encoder.pt`` after the last completed
-epoch.
+Run this as its own committed notebook execution. The attached repository is
+executed directly via PYTHONPATH; no pip/network installation is required.
 """
 from pathlib import Path
+import os
 import subprocess
+import sys
 
 import yaml
 
@@ -23,5 +24,11 @@ config["pretrained"] = False
 config["allow_external_pretrained"] = False
 CONFIG_RUN.write_text(yaml.safe_dump(config, sort_keys=False))
 
-subprocess.run(["rsna-knee", "pretrain", "--config", str(CONFIG_RUN)], check=True)
+env = os.environ.copy()
+env["PYTHONPATH"] = str(CODE_ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
+subprocess.run(
+    [sys.executable, "-m", "rsna_knee.cli", "pretrain", "--config", str(CONFIG_RUN)],
+    check=True,
+    env=env,
+)
 print("SSL checkpoint: /kaggle/working/runs/ssl/ssl_encoder.pt")
