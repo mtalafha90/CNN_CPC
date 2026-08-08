@@ -130,18 +130,33 @@ def make_balanced_gold_folds(df: pd.DataFrame, n_splits: int = 3, seed: int = 20
     for group, part in gold.groupby("report_group", sort=False):
         labels = part[TARGETS].fillna(0).max(axis=0).to_numpy(float)
         groups.append((group, part.index.tolist(), labels, float(np.sum(labels / prevalence)), rng.random()))
+    if len(groups) < n_splits:
+        raise ValueError(
+            f"cannot create {n_splits} non-empty gold folds from only {len(groups)} report groups"
+        )
     groups.sort(key=lambda x: (x[3], len(x[1]), x[4]), reverse=True)
     fold_pos = np.zeros((n_splits, N_TARGETS))
     fold_n = np.zeros(n_splits)
     target_pos = gold[TARGETS].fillna(0).sum(axis=0).to_numpy(float) / n_splits
     target_n = len(gold) / n_splits
-    for _, indices, labels, _, _ in groups:
+    for group_index, (_, indices, labels, _, _) in enumerate(groups):
+        # Seed one report group into every fold before unrestricted greedy
+        # balancing. Without this constraint symmetric label patterns can make
+        # the greedy objective repeatedly choose the same folds and leave an
+        # outer/inner fold empty despite sufficient gold groups.
+        candidate_folds = (
+            np.flatnonzero(fold_n == 0).astype(int).tolist()
+            if group_index < n_splits
+            else list(range(n_splits))
+        )
         costs = []
-        for fold in range(n_splits):
-            label_cost = np.mean(((fold_pos[fold] + labels - target_pos) / np.maximum(target_pos, 1.0)) ** 2)
+        for fold in candidate_folds:
+            label_cost = np.mean(
+                ((fold_pos[fold] + labels - target_pos) / np.maximum(target_pos, 1.0)) ** 2
+            )
             size_cost = ((fold_n[fold] + len(indices) - target_n) / max(target_n, 1.0)) ** 2
             costs.append(label_cost + 0.2 * size_cost)
-        chosen = int(np.argmin(costs))
+        chosen = int(candidate_folds[int(np.argmin(costs))])
         out.loc[indices] = chosen
         fold_pos[chosen] += labels
         fold_n[chosen] += len(indices)
