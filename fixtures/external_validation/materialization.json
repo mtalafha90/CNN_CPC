@@ -1,5 +1,5 @@
 {
   "studies": 4,
-  "purpose": "external technical validation only",
+  "purpose": "external technical test/sparse-validation fixture only",
   "warning": "single published slices are repeated into synthetic multi-frame DICOMs; do not use for leaderboard/scientific AUC"
 }
