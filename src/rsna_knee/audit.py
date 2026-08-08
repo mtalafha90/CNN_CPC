@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import multiprocessing as mp
-import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -37,18 +36,22 @@ def _decode_one(task: tuple[str, str, str, str]) -> dict:
             "decoded": False,
             "candidate_files": 0,
             "file_decode_failures": 0,
+            "file_decode_failure_rate": 1.0,
             "decoded_frames": 0,
             "error": "series directory not found",
         }
     try:
         _, stats = read_dicom_series(path, return_stats=True)
+        candidates = int(stats["candidate_files"])
+        failures = int(stats["decode_failures"])
         return {
             "StudyInstanceUID": study_uid,
             "SeriesInstanceUID": series_uid,
             "found": True,
             "decoded": True,
-            "candidate_files": int(stats["candidate_files"]),
-            "file_decode_failures": int(stats["decode_failures"]),
+            "candidate_files": candidates,
+            "file_decode_failures": failures,
+            "file_decode_failure_rate": float(failures / max(candidates, 1)),
             "decoded_frames": int(stats["decoded_frames"]),
             "error": "",
         }
@@ -60,6 +63,7 @@ def _decode_one(task: tuple[str, str, str, str]) -> dict:
             "decoded": False,
             "candidate_files": 0,
             "file_decode_failures": 0,
+            "file_decode_failure_rate": 1.0,
             "decoded_frames": 0,
             "error": f"{type(exc).__name__}: {exc}",
         }
@@ -89,6 +93,11 @@ def run_audit(
         max_hours=float(max_hours or config.get("runtime_budget_hours", 8.5)),
         reserve_minutes=float(config.get("runtime_reserve_minutes", 10.0)),
     )
+    global_failure_limit = float(config.get("audit_max_global_file_decode_failure_rate", 0.02))
+    series_failure_limit = float(config.get("audit_max_series_file_decode_failure_rate", 0.20))
+    if not 0 <= global_failure_limit <= 1 or not 0 <= series_failure_limit <= 1:
+        raise ValueError("audit decode-failure thresholds must be in [0,1]")
+
     root = Path(config["data_root"])
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -127,10 +136,11 @@ def run_audit(
         for target in TARGETS:
             values = train.loc[mask, target]
             known = values.notna()
+            positives = int(values[known].sum()) if known.any() else 0
             per_target[target] = {
                 "known": int(known.sum()),
-                "positive": int(values[known].sum()) if known.any() else 0,
-                "negative": int(known.sum() - values[known].sum()) if known.any() else 0,
+                "positive": positives,
+                "negative": int(known.sum()) - positives,
             }
         fold_counts[str(fold)] = {"studies": int(mask.sum()), "targets": per_target}
 
@@ -150,7 +160,10 @@ def run_audit(
     decode_complete = not full_decode
     if full_decode:
         tasks = [(str(root), uid, series_uid, "train") for uid, series_uid in sorted(selected_pairs)]
-        workers = max(1, int(config.get("audit_workers", default_workers(config.get("num_workers")))))
+        requested_workers = config.get("audit_workers")
+        if requested_workers is None:
+            requested_workers = default_workers(config.get("num_workers"))
+        workers = max(1, int(requested_workers))
         ctx = mp.get_context(str(config.get("multiprocessing_context", "spawn")))
         executor = ProcessPoolExecutor(max_workers=workers, mp_context=ctx)
         try:
@@ -169,9 +182,17 @@ def run_audit(
     candidate_files = sum(int(row.get("candidate_files", 0)) for row in decode_rows)
     file_failures = sum(int(row.get("file_decode_failures", 0)) for row in decode_rows)
     decoded_series = sum(bool(row.get("decoded")) for row in decode_rows)
+    series_failed = len(decode_rows) - decoded_series
     series_with_partial_failures = sum(
-        bool(row.get("decoded")) and int(row.get("file_decode_failures", 0)) > 0 for row in decode_rows
+        bool(row.get("decoded")) and int(row.get("file_decode_failures", 0)) > 0
+        for row in decode_rows
     )
+    series_over_limit = sum(
+        float(row.get("file_decode_failure_rate", 0.0)) > series_failure_limit
+        for row in decode_rows
+    )
+    global_failure_rate = float(file_failures / max(candidate_files, 1))
+
     payload = {
         "studies": int(len(train)),
         "gold_studies": int(gold.sum()),
@@ -189,18 +210,37 @@ def run_audit(
             "complete": bool(decode_complete),
             "series_checked": int(len(decode_rows)),
             "series_decoded": int(decoded_series),
-            "series_failed": int(len(decode_rows) - decoded_series),
+            "series_failed": int(series_failed),
             "series_with_partial_file_failures": int(series_with_partial_failures),
+            "series_over_file_failure_limit": int(series_over_limit),
+            "series_file_failure_limit": float(series_failure_limit),
             "candidate_files": int(candidate_files),
             "file_decode_failures": int(file_failures),
-            "file_decode_failure_rate": float(file_failures / max(candidate_files, 1)),
+            "file_decode_failure_rate": global_failure_rate,
+            "global_file_failure_limit": float(global_failure_limit),
         },
         "runtime": budget.to_dict(),
     }
     (out / "audit.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
     if full_decode and not decode_complete:
         raise RuntimeError(
             "full decode audit did not finish inside the configured budget; "
             f"partial results are in {out / 'series_decode_audit.csv'}"
+        )
+    if full_decode and series_failed:
+        raise RuntimeError(
+            f"full audit found {series_failed} selected MRI series that could not be decoded; "
+            f"inspect {out / 'series_decode_audit.csv'}"
+        )
+    if full_decode and series_over_limit:
+        raise RuntimeError(
+            f"full audit found {series_over_limit} selected series exceeding the "
+            f"{series_failure_limit:.1%} per-series file failure limit"
+        )
+    if full_decode and global_failure_rate > global_failure_limit:
+        raise RuntimeError(
+            f"global DICOM file failure rate {global_failure_rate:.2%} exceeds "
+            f"audit limit {global_failure_limit:.2%}"
         )
     return payload
