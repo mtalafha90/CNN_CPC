@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +18,6 @@ class _TinyKneeModel(nn.Module):
         self.head = nn.Linear(1, len(TARGETS))
 
     def forward(self, volumes, present):
-        # Keep the same production input contract while making CI inexpensive.
         scalar = volumes.mean(dim=(1, 2, 3, 4, 5), keepdim=False).unsqueeze(1)
         return self.head(scalar)
 
@@ -164,6 +164,6 @@ def test_synthetic_fold_runs_preflight_nested_training_and_artifact_export(tmp_p
     ]:
         assert (fold_dir / name).is_file(), name
 
-    selection = pd.read_json(fold_dir / "selection.json", typ="series")
+    selection = json.loads((fold_dir / "selection.json").read_text())
     assert selection["stage"] == "stage1"
     assert selection["validation_tta_offsets"] == [0]
