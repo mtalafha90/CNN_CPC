@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+torch = pytest.importorskip("torch")
+
 from rsna_knee.budget import RuntimeBudget
+from rsna_knee.inference import _load_checkpoint_payload
 from rsna_knee.policy import validate_competition_config, validate_submission_path
 
 
@@ -49,6 +52,26 @@ def test_attached_ssl_requires_explicit_competition_data_source():
         validate_competition_config(base, purpose="train")
     safe = {**base, "ssl_checkpoint_source": "competition_training_data"}
     validate_competition_config(safe, purpose="train")
+
+
+def test_inference_rejects_checkpoint_from_unsafe_training_policy(tmp_path):
+    path = tmp_path / "unsafe.pt"
+    torch.save(
+        {
+            "model": {},
+            "model_spec": {},
+            "stream_names": [],
+            "config": {
+                "competition_mode": True,
+                "runtime_budget_hours": 8.5,
+                "requested_gpus": 2,
+                "pretrained": False,
+            },
+        },
+        path,
+    )
+    with pytest.raises(ValueError, match="single-GPU only"):
+        _load_checkpoint_payload(path)
 
 
 def test_submission_filename_is_enforced():
