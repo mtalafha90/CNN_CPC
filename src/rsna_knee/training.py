@@ -10,11 +10,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-import torch.distributed as dist
 from torch import nn
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 
+from .budget import RuntimeBudget
 from .calibration import fit_calibration
 from .constants import DUAL_STREAMS, TARGETS
 from .cotrain import assign_crossfit_folds, consensus_arrays, load_image_predictions
@@ -30,9 +29,16 @@ from .data import (
 from .dataset import DatasetConfig, KneeStudyDataset
 from .evaluation import bootstrap_macro_auc, macro_auc_from_arrays
 from .model import KneeMILNet
+from .policy import validate_competition_config
 from .preflight import run_preflight
-from .report_labels import STATE_UNCERTAIN, STATE_UNMENTIONED, combine_gold_and_pseudo, label_dataframe, state_dataframe
-from .runtime import autocast, barrier, global_loss_batch, make_scaler, resolve_runtime
+from .report_labels import (
+    STATE_UNCERTAIN,
+    STATE_UNMENTIONED,
+    combine_gold_and_pseudo,
+    label_dataframe,
+    state_dataframe,
+)
+from .runtime import autocast, make_scaler, resolve_runtime
 from .sampling import TwoPoolBatchSampler, trusted_study_mask
 
 
@@ -49,7 +55,11 @@ def macro_weighted_bce(logits, target, weight):
     numerator = (cell * weight).sum(dim=0)
     denominator = weight.sum(dim=0)
     valid = denominator > 0
-    return (numerator[valid] / denominator[valid].clamp_min(1e-8)).mean() if valid.any() else logits.sum() * 0.0
+    return (
+        (numerator[valid] / denominator[valid].clamp_min(1e-8)).mean()
+        if valid.any()
+        else logits.sum() * 0.0
+    )
 
 
 def confidence_gated_ranking_loss(
@@ -61,12 +71,18 @@ def confidence_gated_ranking_loss(
     min_confidence=0.35,
     positive_threshold=0.75,
     negative_threshold=0.25,
+    return_counts: bool = False,
 ):
     losses = []
+    counts = torch.zeros(logits.shape[1], dtype=torch.long, device=logits.device)
     for j in range(logits.shape[1]):
         trusted = weight[:, j] >= float(min_confidence)
-        positives = torch.nonzero(trusted & (target[:, j] >= positive_threshold), as_tuple=False).flatten()
-        negatives = torch.nonzero(trusted & (target[:, j] <= negative_threshold), as_tuple=False).flatten()
+        positives = torch.nonzero(
+            trusted & (target[:, j] >= positive_threshold), as_tuple=False
+        ).flatten()
+        negatives = torch.nonzero(
+            trusted & (target[:, j] <= negative_threshold), as_tuple=False
+        ).flatten()
         if positives.numel() == 0 or negatives.numel() == 0:
             continue
         n = min(int(pairs_per_target), int(positives.numel() * negatives.numel()))
@@ -76,7 +92,9 @@ def confidence_gated_ranking_loss(
         losses.append(
             (nn.functional.softplus(-(logits[pi, j] - logits[ni, j])) * pair_weight).mean()
         )
-    return torch.stack(losses).mean() if losses else logits.new_zeros(())
+        counts[j] = n
+    loss = torch.stack(losses).mean() if losses else logits.new_zeros(())
+    return (loss, counts) if return_counts else loss
 
 
 @torch.no_grad()
@@ -84,12 +102,24 @@ def predict(model, loader, device, runtime=None):
     model.eval()
     uids, probs, targets = [], [], []
     for batch in loader:
-        with (autocast(runtime) if runtime is not None else nullcontext()):
-            logits = model(
-                batch["volumes"].to(device, non_blocking=True),
-                batch["present"].to(device, non_blocking=True),
-            )
-        probs.append(torch.sigmoid(logits.float()).cpu().numpy())
+        volumes = batch["volumes"]
+        if volumes.ndim != 7:
+            with (autocast(runtime) if runtime is not None else nullcontext()):
+                logits = model(
+                    volumes.to(device, non_blocking=True),
+                    batch["present"].to(device, non_blocking=True),
+                )
+            probability = torch.sigmoid(logits.float()).cpu().numpy()
+        else:
+            # Evaluation TTA: [B,V,K,S,C,H,W]. Decode happened once in Dataset.
+            present = batch["present"].to(device, non_blocking=True)
+            view_probs = []
+            for view in range(volumes.shape[1]):
+                with (autocast(runtime) if runtime is not None else nullcontext()):
+                    logits = model(volumes[:, view].to(device, non_blocking=True), present)
+                view_probs.append(torch.sigmoid(logits.float()))
+            probability = torch.stack(view_probs).mean(dim=0).cpu().numpy()
+        probs.append(probability)
         uids.extend(list(batch["study_uid"]))
         if "target" in batch:
             targets.append(batch["target"].numpy())
@@ -100,7 +130,7 @@ def predict(model, loader, device, runtime=None):
     )
 
 
-def _dataset_config(config, root, *, train, split="train", center_offset=0):
+def _dataset_config(config, root, *, train, split="train", center_offset=0, tta_offsets=()):
     return DatasetConfig(
         data_root=str(root),
         split=split,
@@ -111,6 +141,7 @@ def _dataset_config(config, root, *, train, split="train", center_offset=0):
         triplet_gap=int(config.get("triplet_gap", 1)),
         strict_dicom=bool(config.get("strict_dicom", False)),
         center_offset=int(center_offset),
+        tta_center_offsets=tuple(int(x) for x in tta_offsets),
         train_gap_choices=tuple(int(x) for x in config.get("train_gap_choices", [1, 2])),
         center_jitter=int(config.get("center_jitter", 2)) if train else 0,
         rotation_deg=float(config.get("rotation_deg", 5.0)) if train else 0.0,
@@ -118,6 +149,7 @@ def _dataset_config(config, root, *, train, split="train", center_offset=0):
         scale_jitter=float(config.get("scale_jitter", 0.05)) if train else 0.0,
         gamma_jitter=float(config.get("gamma_jitter", 0.12)) if train else 0.0,
         bias_field_strength=float(config.get("bias_field_strength", 0.08)) if train else 0.0,
+        series_cache_mb=int(config.get("series_cache_mb_per_worker", 256)),
     )
 
 
@@ -146,7 +178,7 @@ def _build_model(spec, config, device):
         spec["n_streams"],
         spec["n_slices"],
         in_channels=3,
-        pretrained_weights=bool(config.get("pretrained", True)),
+        pretrained_weights=bool(config.get("pretrained", False)),
         normalize_input=spec["normalize_input"],
         dropout=spec["dropout"],
         encoder_batch_size=spec["encoder_batch_size"],
@@ -163,26 +195,7 @@ def _build_model(spec, config, device):
     return model.to(device)
 
 
-def _wrap_ddp(model, runtime):
-    if not runtime.distributed:
-        return model
-    return DDP(
-        model,
-        device_ids=[runtime.local_rank],
-        output_device=runtime.local_rank,
-        broadcast_buffers=False,
-    )
-
-
-def _state_dict(model):
-    return model.module.state_dict() if isinstance(model, DDP) else model.state_dict()
-
-
-def _load_state_dict(model, state):
-    (model.module if isinstance(model, DDP) else model).load_state_dict(state, strict=True)
-
-
-def _teacher_arrays(df, states, gold, allowed_mask, config):
+def _teacher_arrays(df, states, gold, allowed_mask, config, fold: int):
     calibration = None
     calibration_mask = gold.to_numpy() & allowed_mask.to_numpy()
     if bool(config.get("calibrate_teacher", True)) and calibration_mask.sum() >= int(
@@ -207,11 +220,20 @@ def _teacher_arrays(df, states, gold, allowed_mask, config):
             float(config.get("uncertain_weight_cap", 0.10)),
         )
 
-    image_paths = config.get("cotrain_image_oof")
-    if image_paths:
-        if isinstance(image_paths, (str, Path)):
-            image_paths = [image_paths]
-        image = load_image_predictions([str(x) for x in image_paths], df["StudyInstanceUID"])
+    # Leakage-safe Stage 2: outer fold k may use only weak predictions from the
+    # Stage-1 model k. That model never saw outer-gold fold k nor those weak rows.
+    stage1_root = config.get("cotrain_stage1_root")
+    if stage1_root:
+        image_path = Path(stage1_root) / f"fold{fold}" / "weak_oof.csv"
+        if not image_path.is_file():
+            raise FileNotFoundError(f"missing leakage-safe Stage-1 teacher: {image_path}")
+        image = load_image_predictions([str(image_path)], df["StudyInstanceUID"])
+        allowed_image_rows = (~gold.to_numpy()) & df["crossfit_fold"].eq(fold).to_numpy()
+        available_rows = np.isfinite(image).any(axis=1)
+        if np.any(available_rows & ~allowed_image_rows):
+            raise ValueError(
+                f"Stage-1 weak teacher for outer fold {fold} contains predictions outside its held-out weak fold"
+            )
         pseudo, confidence = consensus_arrays(
             pseudo,
             confidence,
@@ -243,11 +265,15 @@ def _balanced_train_loader(dataset, gold_rows, weights, config, runtime, seed):
         batch_size,
         trusted_fraction=float(config.get("trusted_fraction", 0.30)),
         seed=seed,
-        rank=runtime.rank,
-        world_size=runtime.world_size,
+        rank=0,
+        world_size=1,
         drop_last=True,
     )
-    loader = DataLoader(dataset, batch_sampler=sampler, **runtime.loader_kwargs())
+    loader = DataLoader(
+        dataset,
+        batch_sampler=sampler,
+        **runtime.loader_kwargs(seed=seed),
+    )
     return loader, sampler, trusted
 
 
@@ -270,6 +296,7 @@ def _train_epoch(model, loader, sampler, optimizer, scaler, runtime, config, epo
     model.train()
     total, seen = 0.0, 0
     rank_weight = float(config.get("rank_loss_weight", 0.10))
+    pair_counts = np.zeros(len(TARGETS), dtype=np.int64)
     for batch in loader:
         optimizer.zero_grad(set_to_none=True)
         volumes = batch["volumes"].to(runtime.device, non_blocking=True)
@@ -277,22 +304,22 @@ def _train_epoch(model, loader, sampler, optimizer, scaler, runtime, config, epo
         target = batch["target"].to(runtime.device, non_blocking=True)
         weight = batch["weight"].to(runtime.device, non_blocking=True)
         with autocast(runtime):
-            local_logits = model(volumes, present)
-            logits, target_global, weight_global = global_loss_batch(local_logits, target, weight, runtime)
-            bce = macro_weighted_bce(logits, target_global, weight_global)
-            rank = (
-                confidence_gated_ranking_loss(
+            logits = model(volumes, present)
+            bce = macro_weighted_bce(logits, target, weight)
+            if rank_weight > 0:
+                rank, counts = confidence_gated_ranking_loss(
                     logits,
-                    target_global,
-                    weight_global,
+                    target,
+                    weight,
                     pairs_per_target=int(config.get("rank_pairs_per_target", 32)),
                     min_confidence=float(config.get("rank_min_confidence", 0.35)),
                     positive_threshold=float(config.get("rank_positive_threshold", 0.75)),
                     negative_threshold=float(config.get("rank_negative_threshold", 0.25)),
+                    return_counts=True,
                 )
-                if rank_weight > 0
-                else logits.new_zeros(())
-            )
+                pair_counts += counts.detach().cpu().numpy()
+            else:
+                rank = logits.new_zeros(())
             loss = bce + rank_weight * rank
         scaler.scale(loss).backward()
         clip = float(config.get("grad_clip", 1.0))
@@ -303,48 +330,20 @@ def _train_epoch(model, loader, sampler, optimizer, scaler, runtime, config, epo
         scaler.update()
         total += float(loss.item()) * len(target)
         seen += len(target)
-    return total / max(seen, 1)
-
-
-def _safe_preflight(config, root, series_path, study_uids, seed, runtime):
-    payload, error = None, None
-    if runtime.is_main and bool(config.get("preflight_before_train", True)):
-        try:
-            result = run_preflight(
-                root,
-                split="train",
-                series_csv=series_path,
-                study_uids=study_uids,
-                sample_size=int(config.get("preflight_sample_size", 24)),
-                stream_mode="dual",
-                seed=seed,
-                max_decode_failure_rate=float(config.get("preflight_max_decode_failure_rate", 0.05)),
-                strict=True,
-            )
-            payload = result.to_dict()
-            print(result.summary())
-        except Exception as exc:  # broadcast instead of deadlocking other DDP ranks
-            error = f"{type(exc).__name__}: {exc}"
-    if runtime.distributed:
-        message = [payload, error]
-        dist.broadcast_object_list(message, src=0)
-        payload, error = message
-    if error:
-        raise RuntimeError(f"preflight failed on rank 0: {error}")
-    barrier(runtime)
-    return payload
+    return {
+        "loss": total / max(seen, 1),
+        "rank_pairs": {target: int(pair_counts[j]) for j, target in enumerate(TARGETS)},
+    }
 
 
 def train_fold(config: dict, fold: int) -> Path:
-    """Nested fold training plus cross-fitted weak-study predictions.
-
-    Phase A chooses the epoch on an inner gold fold. Phase B reinitializes the
-    model and retrains for exactly that many epochs using *all* non-outer gold
-    cases. The outer gold fold remains untouched until the final evaluation.
-    Non-gold cross-fit studies remain excluded in both phases so ``weak_oof.csv``
-    is a genuinely out-of-training image teacher for stage-2 co-training.
-    """
+    """One-GPU nested training with leakage-safe weak cross-fitting."""
+    validate_competition_config(config, purpose="train")
     start = time.time()
+    budget = RuntimeBudget(
+        max_hours=float(config.get("runtime_budget_hours", 8.5)),
+        reserve_minutes=float(config.get("runtime_reserve_minutes", 10.0)),
+    )
     runtime = resolve_runtime(config)
     seed = int(config.get("seed", 2026))
     n_folds = int(config.get("n_folds", 3))
@@ -356,11 +355,26 @@ def train_fold(config: dict, fold: int) -> Path:
     if inner_fold == fold:
         raise ValueError("inner fold must differ from outer fold")
 
-    seed_everything(seed + fold + runtime.rank)
+    seed_everything(seed + fold)
     root = Path(config["data_root"])
     df = load_train_csv(root / config.get("train_csv", "train.csv"))
     series_path = root / config.get("train_series_csv", "train_series.csv")
-    preflight_payload = _safe_preflight(config, root, series_path, df["StudyInstanceUID"].tolist(), seed, runtime)
+
+    preflight_payload = None
+    if bool(config.get("preflight_before_train", True)):
+        result = run_preflight(
+            root,
+            split="train",
+            series_csv=series_path,
+            study_uids=df["StudyInstanceUID"].tolist(),
+            sample_size=int(config.get("preflight_sample_size", 24)),
+            stream_mode="dual",
+            seed=seed,
+            max_decode_failure_rate=float(config.get("preflight_max_decode_failure_rate", 0.05)),
+            strict=True,
+        )
+        preflight_payload = result.to_dict()
+        print(result.summary())
 
     series = load_series_csv(series_path)
     series, metadata_stats = backfill_series_metadata(series, root, split="train")
@@ -374,21 +388,23 @@ def train_fold(config: dict, fold: int) -> Path:
     if not outer_mask.any() or not inner_mask.any():
         raise ValueError("outer and inner folds must both contain gold studies")
 
-    # Selection phase excludes outer, inner and weak cross-fit groups.
-    selection_heldout = set(df.loc[outer_mask | inner_mask | weak_oof_mask, "report_group"].astype(str))
+    selection_heldout = set(
+        df.loc[outer_mask | inner_mask | weak_oof_mask, "report_group"].astype(str)
+    )
     selection_train_mask = ~df["report_group"].astype(str).isin(selection_heldout)
-    # Final phase can use the former inner fold, but never outer or weak OOF.
     final_heldout = set(df.loc[outer_mask | weak_oof_mask, "report_group"].astype(str))
     final_train_mask = ~df["report_group"].astype(str).isin(final_heldout)
 
     states = state_dataframe(df)
     selection_pseudo, selection_conf, selection_cal = _teacher_arrays(
-        df, states, gold, selection_train_mask, config
+        df, states, gold, selection_train_mask, config, fold
     )
     selection_targets, selection_weights = combine_gold_and_pseudo(
         df, selection_pseudo, selection_conf, float(config.get("gold_weight", 8.0))
     )
-    final_pseudo, final_conf, final_cal = _teacher_arrays(df, states, gold, final_train_mask, config)
+    final_pseudo, final_conf, final_cal = _teacher_arrays(
+        df, states, gold, final_train_mask, config, fold
+    )
     final_targets, final_weights = combine_gold_and_pseudo(
         df, final_pseudo, final_conf, float(config.get("gold_weight", 8.0))
     )
@@ -408,181 +424,204 @@ def train_fold(config: dict, fold: int) -> Path:
         df.iloc[fi]["StudyInstanceUID"].tolist(), index, _dataset_config(config, root, train=True),
         final_targets[fi], final_weights[fi], True
     )
+    eval_cfg = _dataset_config(config, root, train=False)
     inner_ds = KneeStudyDataset(
-        df.iloc[ii]["StudyInstanceUID"].tolist(), index, _dataset_config(config, root, train=False),
+        df.iloc[ii]["StudyInstanceUID"].tolist(), index, eval_cfg,
         df.iloc[ii][TARGETS].to_numpy(np.float32), None, False
     )
     outer_ds = KneeStudyDataset(
-        df.iloc[oi]["StudyInstanceUID"].tolist(), index, _dataset_config(config, root, train=False),
+        df.iloc[oi]["StudyInstanceUID"].tolist(), index, eval_cfg,
         df.iloc[oi][TARGETS].to_numpy(np.float32), None, False
     )
     weak_ds = KneeStudyDataset(
-        df.iloc[wi]["StudyInstanceUID"].tolist(), index, _dataset_config(config, root, train=False), train=False
+        df.iloc[wi]["StudyInstanceUID"].tolist(), index, eval_cfg, train=False
     )
 
     selection_loader, selection_sampler, selection_trusted = _balanced_train_loader(
-        selection_ds,
-        gold.iloc[si].to_numpy(),
-        selection_weights[si],
-        config,
-        runtime,
-        seed + fold,
+        selection_ds, gold.iloc[si].to_numpy(), selection_weights[si], config, runtime, seed + fold
     )
     batch_size = int(config.get("batch_size", 2))
-    inner_loader = DataLoader(inner_ds, batch_size=batch_size, shuffle=False, **runtime.loader_kwargs())
-    outer_loader = DataLoader(outer_ds, batch_size=batch_size, shuffle=False, **runtime.loader_kwargs())
-    weak_loader = DataLoader(weak_ds, batch_size=batch_size, shuffle=False, **runtime.loader_kwargs())
+    inner_loader = DataLoader(
+        inner_ds, batch_size=batch_size, shuffle=False,
+        **runtime.loader_kwargs(seed=seed + 10_000 + fold)
+    )
+    outer_loader = DataLoader(
+        outer_ds, batch_size=batch_size, shuffle=False,
+        **runtime.loader_kwargs(seed=seed + 20_000 + fold)
+    )
+    weak_loader = DataLoader(
+        weak_ds, batch_size=batch_size, shuffle=False,
+        **runtime.loader_kwargs(seed=seed + 30_000 + fold)
+    )
 
     spec = _model_spec(config)
     outdir = Path(config.get("output_dir", "runs/model")) / f"fold{fold}"
-    selection_checkpoint = outdir / "selection.pt"
+    outdir.mkdir(parents=True, exist_ok=True)
     final_checkpoint = outdir / "best.pt"
-    if runtime.is_main:
-        outdir.mkdir(parents=True, exist_ok=True)
-        assignments = df[["StudyInstanceUID", "report_group", "fold", "crossfit_fold"]].copy()
-        assignments["role"] = "weak_train"
-        assignments.loc[selection_train_mask & gold, "role"] = "gold_train_selection"
-        assignments.loc[inner_mask, "role"] = "inner_selection"
-        assignments.loc[outer_mask, "role"] = "outer_oof"
-        assignments.loc[weak_oof_mask, "role"] = "weak_oof"
-        assignments.to_csv(outdir / "fold_assignments.csv", index=False)
-        (outdir / "metadata_repair.json").write_text(json.dumps(metadata_stats, indent=2))
-        if preflight_payload is not None:
-            (outdir / "preflight.json").write_text(json.dumps(preflight_payload, indent=2))
-        if selection_cal is not None:
-            (outdir / "calibration_selection.json").write_text(json.dumps(selection_cal.to_dict(), indent=2))
-        if final_cal is not None:
-            (outdir / "calibration.json").write_text(json.dumps(final_cal.to_dict(), indent=2))
-    barrier(runtime)
 
-    # Phase A: model selection on the inner gold fold.
-    model = _wrap_ddp(_build_model(spec, config, runtime.device), runtime)
-    max_epochs = int(config.get("epochs", 20))
+    assignments = df[["StudyInstanceUID", "report_group", "fold", "crossfit_fold"]].copy()
+    assignments["role"] = "weak_train"
+    assignments.loc[selection_train_mask & gold, "role"] = "gold_train_selection"
+    assignments.loc[inner_mask, "role"] = "inner_selection"
+    assignments.loc[outer_mask, "role"] = "outer_oof"
+    assignments.loc[weak_oof_mask, "role"] = "weak_oof"
+    assignments.to_csv(outdir / "fold_assignments.csv", index=False)
+    (outdir / "metadata_repair.json").write_text(json.dumps(metadata_stats, indent=2))
+    if preflight_payload is not None:
+        (outdir / "preflight.json").write_text(json.dumps(preflight_payload, indent=2))
+    if selection_cal is not None:
+        (outdir / "calibration_selection.json").write_text(json.dumps(selection_cal.to_dict(), indent=2))
+    if final_cal is not None:
+        (outdir / "calibration.json").write_text(json.dumps(final_cal.to_dict(), indent=2))
+
+    # Phase A: select only the epoch count. Continue only if there is enough
+    # budget left for a conservative estimate of Phase B plus evaluation.
+    model = _build_model(spec, config, runtime.device)
+    max_epochs = int(config.get("epochs", 12))
     optimizer, scheduler, scaler = _optimizer_bundle(model, config, max_epochs, runtime)
     best_score, best_epoch, bad_epochs = -np.inf, 0, 0
     history = []
+    pair_totals = {"selection": {t: 0 for t in TARGETS}, "retrain": {t: 0 for t in TARGETS}}
+    epoch_times = []
+    budget_limited = False
+
     for epoch in range(max_epochs):
-        train_loss = _train_epoch(
+        epoch_start = time.monotonic()
+        metrics = _train_epoch(
             model, selection_loader, selection_sampler, optimizer, scaler, runtime, config, epoch
         )
         scheduler.step()
         _, inner_probability, inner_truth = predict(model, inner_loader, runtime.device, runtime)
         inner_score = macro_auc_from_arrays(inner_truth, inner_probability)[0]
+        epoch_seconds = time.monotonic() - epoch_start
+        epoch_times.append(epoch_seconds)
+        for target, count in metrics["rank_pairs"].items():
+            pair_totals["selection"][target] += int(count)
         row = {
             "phase": "selection",
             "epoch": epoch + 1,
-            "train_loss": train_loss,
+            "train_loss": metrics["loss"],
             "inner_macro_auc": inner_score,
             "lr": optimizer.param_groups[0]["lr"],
+            "epoch_seconds": epoch_seconds,
         }
-        if runtime.is_main:
-            history.append(row)
-            print(row)
+        history.append(row)
+        print(row)
         if np.isfinite(inner_score) and inner_score > best_score:
             best_score, best_epoch, bad_epochs = float(inner_score), epoch + 1, 0
-            if runtime.is_main:
-                torch.save({"model": _state_dict(model), "model_spec": spec}, selection_checkpoint)
         else:
             bad_epochs += 1
-        barrier(runtime)
-        if bad_epochs >= int(config.get("patience", 5)):
+        if bad_epochs >= int(config.get("patience", 3)):
             break
+
+        estimate = float(np.median(epoch_times))
+        next_epoch = epoch + 2
+        # Worst case: the next epoch becomes selected and Phase B must run that
+        # many epochs. Reserve an additional evaluation-equivalent epoch.
+        future_required = estimate * (1.0 + 1.15 * next_epoch + 0.75)
+        if not budget.can_start(future_required):
+            budget_limited = True
+            print("[budget] stopping model selection early to reserve Phase-B/evaluation time")
+            break
+
     if best_epoch == 0:
         raise RuntimeError("no finite inner-selection score")
 
-    # Phase B: reinitialize and use all non-outer gold data for exactly the
-    # selected number of epochs. This is the model evaluated on outer OOF.
     del model
     if runtime.device.type == "cuda":
         torch.cuda.empty_cache()
-    seed_everything(seed + 100_000 + fold + runtime.rank)
+    seed_everything(seed + 100_000 + fold)
     final_loader, final_sampler, final_trusted = _balanced_train_loader(
-        final_ds,
-        gold.iloc[fi].to_numpy(),
-        final_weights[fi],
-        config,
-        runtime,
-        seed + 50_000 + fold,
+        final_ds, gold.iloc[fi].to_numpy(), final_weights[fi], config, runtime, seed + 50_000 + fold
     )
-    model = _wrap_ddp(_build_model(spec, config, runtime.device), runtime)
+    estimate = float(np.median(epoch_times)) if epoch_times else 60.0
+    budget.require(1.15 * best_epoch * estimate + 0.75 * estimate, label="Phase-B retraining and evaluation")
+
+    model = _build_model(spec, config, runtime.device)
     optimizer, scheduler, scaler = _optimizer_bundle(model, config, best_epoch, runtime)
     for epoch in range(best_epoch):
-        train_loss = _train_epoch(model, final_loader, final_sampler, optimizer, scaler, runtime, config, epoch)
+        budget.require(1.15 * estimate, label=f"retrain epoch {epoch + 1}")
+        epoch_start = time.monotonic()
+        metrics = _train_epoch(model, final_loader, final_sampler, optimizer, scaler, runtime, config, epoch)
         scheduler.step()
-        if runtime.is_main:
-            history.append({"phase": "retrain", "epoch": epoch + 1, "train_loss": train_loss, "lr": optimizer.param_groups[0]["lr"]})
-
-    if runtime.is_main:
-        torch.save(
+        epoch_seconds = time.monotonic() - epoch_start
+        for target, count in metrics["rank_pairs"].items():
+            pair_totals["retrain"][target] += int(count)
+        history.append(
             {
-                "model": _state_dict(model),
-                "model_spec": spec,
-                "config": config,
-                "stream_names": list(DUAL_STREAMS),
-                "fold": fold,
-                "inner_fold": inner_fold,
-                "selected_epoch": best_epoch,
-                "inner_score": best_score,
-            },
-            final_checkpoint,
+                "phase": "retrain",
+                "epoch": epoch + 1,
+                "train_loss": metrics["loss"],
+                "lr": optimizer.param_groups[0]["lr"],
+                "epoch_seconds": epoch_seconds,
+            }
         )
-    barrier(runtime)
 
+    torch.save(
+        {
+            "model": model.state_dict(),
+            "model_spec": spec,
+            "config": config,
+            "stream_names": list(DUAL_STREAMS),
+            "fold": fold,
+            "inner_fold": inner_fold,
+            "selected_epoch": best_epoch,
+            "inner_score": best_score,
+        },
+        final_checkpoint,
+    )
+
+    budget.require(0.25 * estimate, label="outer/weak evaluation")
     outer_uids, outer_probability, outer_truth = predict(model, outer_loader, runtime.device, runtime)
     weak_uids, weak_probability, _ = predict(model, weak_loader, runtime.device, runtime)
-    if runtime.is_main:
-        _save_predictions(outdir / "oof.csv", outer_uids, outer_probability)
-        _save_predictions(outdir / "weak_oof.csv", weak_uids, weak_probability)
-        pd.DataFrame(history).to_csv(outdir / "history.csv", index=False)
-        outer_score = macro_auc_from_arrays(outer_truth, outer_probability)[0]
-        (outdir / "selection.json").write_text(
-            json.dumps(
-                {
-                    "outer_fold": fold,
-                    "inner_fold": inner_fold,
-                    "selected_epoch": best_epoch,
-                    "inner_macro_auc": best_score,
-                    "outer_macro_auc": float(outer_score),
-                    "selection_gold_train": int((selection_train_mask & gold).sum()),
-                    "final_gold_train": int((final_train_mask & gold).sum()),
-                },
-                indent=2,
-            )
+    _save_predictions(outdir / "oof.csv", outer_uids, outer_probability)
+    _save_predictions(outdir / "weak_oof.csv", weak_uids, weak_probability)
+    pd.DataFrame(history).to_csv(outdir / "history.csv", index=False)
+    outer_score = macro_auc_from_arrays(outer_truth, outer_probability)[0]
+    (outdir / "selection.json").write_text(
+        json.dumps(
+            {
+                "outer_fold": fold,
+                "inner_fold": inner_fold,
+                "selected_epoch": best_epoch,
+                "inner_macro_auc": best_score,
+                "outer_macro_auc": float(outer_score),
+                "selection_gold_train": int((selection_train_mask & gold).sum()),
+                "final_gold_train": int((final_train_mask & gold).sum()),
+                "budget_limited_selection": bool(budget_limited),
+            },
+            indent=2,
         )
-        (outdir / "sampling.json").write_text(
-            json.dumps(
-                {
-                    "selection_trusted": int(selection_trusted.sum()),
-                    "selection_general": int((~selection_trusted).sum()),
-                    "final_trusted": int(final_trusted.sum()),
-                    "final_general": int((~final_trusted).sum()),
-                    "weak_oof": int(weak_oof_mask.sum()),
-                },
-                indent=2,
-            )
+    )
+    (outdir / "sampling.json").write_text(
+        json.dumps(
+            {
+                "selection_trusted": int(selection_trusted.sum()),
+                "selection_general": int((~selection_trusted).sum()),
+                "final_trusted": int(final_trusted.sum()),
+                "final_general": int((~final_trusted).sum()),
+                "weak_oof": int(weak_oof_mask.sum()),
+            },
+            indent=2,
         )
-        bootstrap = bootstrap_macro_auc(
-            outer_truth,
-            outer_probability,
-            n_bootstrap=int(config.get("n_bootstrap", 2000)),
-            seed=seed + fold,
-        )
-        (outdir / "bootstrap.json").write_text(json.dumps(bootstrap.to_dict(), indent=2))
-        (outdir / "config.json").write_text(json.dumps(config, indent=2))
-        (outdir / "runtime.json").write_text(
-            json.dumps(
-                {
-                    "elapsed_seconds": float(time.time() - start),
-                    "device": runtime.device_name,
-                    "world_size": runtime.world_size,
-                    "runtime": runtime.describe(),
-                    "num_workers": runtime.num_workers,
-                    "peak_gpu_memory_bytes": int(torch.cuda.max_memory_allocated(runtime.device)) if runtime.device.type == "cuda" else 0,
-                    "git_sha_env": os.environ.get("GITHUB_SHA") or os.environ.get("GIT_COMMIT"),
-                },
-                indent=2,
-            )
-        )
-        selection_checkpoint.unlink(missing_ok=True)
-    barrier(runtime)
+    )
+    (outdir / "ranking_pairs.json").write_text(json.dumps(pair_totals, indent=2))
+    bootstrap = bootstrap_macro_auc(
+        outer_truth,
+        outer_probability,
+        n_bootstrap=int(config.get("n_bootstrap", 2000)),
+        seed=seed + fold,
+    )
+    (outdir / "bootstrap.json").write_text(json.dumps(bootstrap.to_dict(), indent=2))
+    (outdir / "config.json").write_text(json.dumps(config, indent=2))
+    runtime_payload = {
+        "elapsed_seconds": float(time.time() - start),
+        "device": runtime.device_name,
+        "runtime": runtime.describe(),
+        "num_workers": runtime.num_workers,
+        "peak_gpu_memory_bytes": int(torch.cuda.max_memory_allocated(runtime.device)) if runtime.device.type == "cuda" else 0,
+        "git_sha_env": os.environ.get("GITHUB_SHA") or os.environ.get("GIT_COMMIT"),
+        "budget": budget.to_dict(),
+    }
+    (outdir / "runtime.json").write_text(json.dumps(runtime_payload, indent=2))
     return final_checkpoint
