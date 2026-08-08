@@ -1,37 +1,67 @@
-# External four-image knee MRI validation fixture
+# External four-image knee MRI test fixture
 
-This directory is a **technical smoke-validation fixture**, not a competition validation set and not a source of leaderboard/scientific AUC.
+This directory contains **four online knee MRI studies for technical testing**. It is not the competition validation set and must not be used as a leaderboard/scientific macro-AUC benchmark.
 
-The materialization workflow downloads four openly licensed Wikimedia Commons knee MRI images, keeps the original JPEG files under `source_jpgs/`, and wraps each single published slice into a seven-frame synthetic DICOM so the production DICOM/preprocessing code can be exercised with the normal directory contract:
+The materializer downloads four openly licensed Wikimedia Commons knee MRI images, keeps the source JPEGs under `source_jpgs/`, and wraps each published slice into a seven-frame synthetic DICOM. The same four studies are exposed in two layouts:
 
 ```text
 fixtures/external_validation/
-  validation.csv
-  validation_series.csv
-  validation_images/
+  test.csv
+  test_series.csv
+  test_images/
     EXTVAL_ACL_001/...
     EXTVAL_MEDMEN_001/...
     EXTVAL_BAKER_001/...
     EXTVAL_REFERENCE_001/...
+
+  validation.csv
+  validation_series.csv
+  validation_images/
+    ...same four studies...
+
   source_jpgs/
   sources.csv
   materialization.json
 ```
 
-The repeated frames are **not an original MRI volume**. They exist only to test decoding, metadata routing, resizing, 2.5D construction, missing-stream masking, and model plumbing.
+Use `test.csv` / `test_series.csv` / `test_images/` when you want the production code to consume these four studies exactly like a test set. `validation.csv` exists only as a sparse sanity-label file: it contains source-supported positive cells and leaves every unspecified target as `NaN`.
+
+The seven repeated DICOM frames are **not an original MRI volume**. They are only for decoding, routing, resizing, 2.5D construction, missing-stream masking, and model/inference plumbing.
 
 ## Four sources
 
-1. `EXTVAL_ACL_001` — anterior cruciate ligament rupture, sagittal PD-weighted MRI. Author: Hellerhoff. License: CC BY-SA 3.0. Source: `https://commons.wikimedia.org/wiki/File:MRT_VKB-Riss_PDW.jpg`.
-2. `EXTVAL_MEDMEN_001` — grade 2 medial meniscal tear, coronal proton-density MRI. Authors: Nicolas Lefevre, Jean Francois Naouri, Serge Herman, Antoine Gerometta, Shahnaz Klouche, Yoann Bohu. License: CC BY 4.0. Source: `https://commons.wikimedia.org/wiki/File:Proton_density_MRI_of_a_grade_2_medial_meniscal_tear.jpg`.
-3. `EXTVAL_BAKER_001` — Baker cyst in a patient with ACL rupture. Author: Hellerhoff. License: CC BY-SA 3.0. Source: `https://commons.wikimedia.org/wiki/File:MRT_Bakerzyste.jpg`.
-4. `EXTVAL_REFERENCE_001` — sagittal PD TSE FS knee MRI with no pathology label supplied by the source. Author: Ptrump16. License: CC BY-SA 4.0. Source: `https://commons.wikimedia.org/wiki/File:Knee_MRI_PD_TSE_FS_Sagittal.jpg`.
+1. `EXTVAL_ACL_001` — anterior cruciate ligament rupture, sagittal PD-weighted MRI. Hellerhoff, CC BY-SA 3.0.
+2. `EXTVAL_MEDMEN_001` — grade 2 medial meniscal tear, coronal proton-density MRI. Nicolas Lefevre et al., CC BY 4.0.
+3. `EXTVAL_BAKER_001` — Baker cyst in a patient with ACL rupture. Hellerhoff, CC BY-SA 3.0.
+4. `EXTVAL_REFERENCE_001` — sagittal PD TSE FS knee MRI; the source supplies no pathology label. Ptrump16, CC BY-SA 4.0.
 
-`validation.csv` contains only source-supported positive target cells. Unspecified targets remain `NaN`; the absence of a finding in a Wikimedia caption is **not** converted into a negative label.
+Full source URLs, attribution, licenses, findings, and downloaded SHA-256 hashes are recorded in `sources.csv`.
 
-## Materialize manually
+## Test all four DICOM studies
 
-If the binary fixture has not yet been generated in your clone:
+```bash
+python -m rsna_knee.cli preflight \
+  --data-root fixtures/external_validation \
+  --split test \
+  --sample-size 4 \
+  --max-decode-failure-rate 0 \
+  --max-file-decode-failure-rate 0 \
+  --out runs/external_test_preflight.json
+```
+
+You can also check the sparse labeled copy:
+
+```bash
+python -m rsna_knee.cli preflight \
+  --data-root fixtures/external_validation \
+  --split validation \
+  --sample-size 4 \
+  --max-decode-failure-rate 0 \
+  --max-file-decode-failure-rate 0 \
+  --out runs/external_validation_preflight.json
+```
+
+## Re-materialize manually
 
 ```bash
 source .venv/bin/activate
@@ -41,14 +71,4 @@ PYTHONPATH=src python scripts/materialize_external_validation.py \
   --overwrite
 ```
 
-Then run the validation preflight:
-
-```bash
-rsna-knee preflight \
-  --data-root fixtures/external_validation \
-  --split validation \
-  --sample-size 4 \
-  --out runs/external_validation_preflight.json
-```
-
-This fixture must never be merged into the competition training data or used to choose final competition hyperparameters.
+Never append these four studies to the competition training data and never use their predictions to select final competition hyperparameters.
