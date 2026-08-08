@@ -114,6 +114,9 @@ def pretrain_ssl(config: dict) -> Path:
     )
     scaler = make_scaler(runtime)
     epochs = int(config.get("ssl_epochs", 4))
+    max_batches = int(config.get("ssl_max_batches_per_epoch", 300))
+    if max_batches < 1:
+        raise ValueError("ssl_max_batches_per_epoch must be >=1")
     temperature = float(config.get("ssl_temperature", 0.15))
     meta_weight = float(config.get("ssl_metadata_weight", 0.25))
     outdir = Path(config.get("ssl_output_dir", "runs/ssl"))
@@ -131,7 +134,9 @@ def pretrain_ssl(config: dict) -> Path:
         epoch_start = time.monotonic()
         model.train()
         total, steps = 0.0, 0
-        for batch in loader:
+        for batch_index, batch in enumerate(loader):
+            if batch_index >= max_batches:
+                break
             volumes = batch["volumes"].to(runtime.device, non_blocking=True)
             present = batch["present"].to(runtime.device, non_blocking=True)
             b, k, s, c, h, w = volumes.shape
@@ -160,7 +165,13 @@ def pretrain_ssl(config: dict) -> Path:
 
         epoch_seconds = time.monotonic() - epoch_start
         epoch_times.append(epoch_seconds)
-        row = {"epoch": epoch + 1, "loss": total / max(steps, 1), "epoch_seconds": epoch_seconds}
+        row = {
+            "epoch": epoch + 1,
+            "loss": total / max(steps, 1),
+            "epoch_seconds": epoch_seconds,
+            "batches": int(steps),
+            "max_batches": int(max_batches),
+        }
         history.append(row)
         print(row)
 
