@@ -30,6 +30,16 @@ def validate_competition_config(config: dict, *, purpose: str) -> None:
                 "competition_mode requires ssl_checkpoint_source=competition_training_data "
                 "for attached SSL weights when external pretrained artifacts are disabled"
             )
+        # During actual training the attached file is present, so verify its
+        # embedded provenance. When validating a saved checkpoint later, its
+        # original training path may not be mounted; the saved config declaration
+        # still remains part of the checkpoint policy contract.
+        path = Path(str(ssl_path))
+        if purpose == "train" and path.is_file():
+            import torch
+
+            payload = torch.load(path, map_location="cpu", weights_only=False)
+            validate_ssl_payload(payload, config)
 
     if purpose == "infer":
         expected = str(config.get("submission_filename", "submission.csv"))
