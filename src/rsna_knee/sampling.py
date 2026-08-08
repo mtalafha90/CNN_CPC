@@ -18,6 +18,13 @@ ENV_RUN_DEADLINE = "RSNA_RUN_DEADLINE_MONOTONIC"
 class TwoPoolBatchSampler(Sampler[list[int]]):
     """Deterministically mix trusted/general studies with hard work/time caps.
 
+    For even batch sizes the trusted quota is emitted in pairs. This preserves
+    the requested trusted-row fraction to within at most one pair over an epoch,
+    while allowing confidence-gated pairwise ranking to see positive/negative
+    trusted examples in the same minibatch. With the production batch size of
+    two, batches are therefore either a trusted pair or a general pair rather
+    than almost always containing exactly one trusted study.
+
     ``deadline_monotonic`` is the preferred production contract. The environment
     variable remains as a CLI/backward-compatible fallback, but direct calls to
     ``train_fold`` can now enforce the same deadline without relying on CLI state.
@@ -94,14 +101,29 @@ class TwoPoolBatchSampler(Sampler[list[int]]):
     def __iter__(self) -> Iterator[list[int]]:
         rng = np.random.default_rng(self.seed + 10007 * self.epoch)
         trusted_state, general_state = {}, {}
-        previous_quota = 0
+
+        # Pair-friendly quota for even batch sizes. Grouping is only needed when
+        # both pools are active; all-trusted/all-general cases keep exact legacy
+        # behavior. For B=2 and f=0.30 this emits two trusted rows in 30% of the
+        # batches (on average) and zero trusted rows in the remainder.
+        pair_group = 2 if self.batch_size % 2 == 0 and 0.0 < self.fraction < 1.0 else 1
+        previous_group_quota = 0
+
         for batch_index in range(self.n_batches):
             if not self._time_available():
                 break
-            cumulative = int(math.floor((batch_index + 1) * self.batch_size * self.fraction + 1e-9))
-            n_trusted = min(self.batch_size, max(0, cumulative - previous_quota))
-            previous_quota = cumulative
+
+            cumulative_groups = int(
+                math.floor(
+                    ((batch_index + 1) * self.batch_size * self.fraction) / pair_group
+                    + 1e-9
+                )
+            )
+            n_trusted = (cumulative_groups - previous_group_quota) * pair_group
+            previous_group_quota = cumulative_groups
+            n_trusted = min(self.batch_size, max(0, int(n_trusted)))
             n_general = self.batch_size - n_trusted
+
             batch = []
             if n_trusted:
                 batch.extend(self._draw(self.trusted, n_trusted, rng, trusted_state))
