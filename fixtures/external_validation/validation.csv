@@ -1,0 +1,5 @@
+StudyInstanceUID,Report,KnownFinding,ACL,MCL,Medial Meniscus,Lateral Meniscus,Medial OA,Lateral OA,PF OA,Effusion,Synovitis,Baker's,Contusion,Fracture
+EXTVAL_ACL_001,Anterior cruciate ligament rupture,Anterior cruciate ligament rupture,1.0,,,,,,,,,,,
+EXTVAL_MEDMEN_001,Grade 2 medial meniscal tear,Grade 2 medial meniscal tear,,,1.0,,,,,,,,,
+EXTVAL_BAKER_001,Baker cyst in a patient with ACL rupture,Baker cyst in a patient with ACL rupture,1.0,,,,,,,,,,1.0,,
+EXTVAL_REFERENCE_001,Reference sagittal PD TSE FS knee MRI; source provides no pathology label,Reference sagittal PD TSE FS knee MRI; source provides no pathology label,,,,,,,,,,,,
