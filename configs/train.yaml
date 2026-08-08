@@ -9,7 +9,7 @@ output_dir: runs/model
 seed: 2026
 n_folds: 3
 
-# Conservative Kaggle code-competition policy.
+# Conservative competition policy.
 competition_mode: true
 requested_gpus: 1
 runtime_budget_hours: 8.5
@@ -17,6 +17,7 @@ runtime_reserve_minutes: 10
 submission_filename: submission.csv
 allow_external_pretrained: false
 pretrained: false
+expected_checkpoint_stage: null
 
 # MRI/model: ConvNeXt slice encoder + cross-sequence Transformer + 12 pathology queries.
 n_slices: 16
@@ -24,6 +25,8 @@ image_size: 224
 triplet_gap: 1
 batch_size: 2
 inference_batch_size: 2
+oof_batch_size: 2
+weak_oof_batch_size: 2
 encoder_batch_size: 24
 gradient_checkpointing: true
 normalize_input: false
@@ -49,8 +52,7 @@ ssl_lr: 0.0002
 ssl_weight_decay: 0.0001
 ssl_noise_std: 0.01
 
-# Nested optimization. Epochs are bounded by batch count as well as wall time;
-# this makes the first timing sample safe on one GPU.
+# Nested optimization. Epochs are bounded by batch count as well as wall time.
 lr: 0.0001
 min_lr: 0.000001
 weight_decay: 0.0001
@@ -58,7 +60,16 @@ epochs: 8
 max_train_batches_per_epoch: 300
 patience: 2
 grad_clip: 1.0
-post_train_evaluation_epoch_fraction: 0.75
+
+# The remaining-work estimator reserves measured time for the full finish path:
+# Phase-B -> outer OOF -> Stage-1 weak OOF -> bootstrap -> serialization.
+finish_inference_safety_factor: 1.75
+finish_seconds_per_study_floor: 0.25
+finish_seconds_per_study_fallback: 5.0
+finish_bootstrap_reserve_seconds: 120
+finish_serialization_reserve_seconds: 180
+finish_loader_startup_reserve_seconds: 120
+prediction_initial_batch_guard_seconds: 180
 
 # Weak supervision / PU.
 calibrate_teacher: true
@@ -74,15 +85,23 @@ rank_positive_threshold: 0.75
 rank_negative_threshold: 0.25
 
 # Leakage-safe Stage 2.
-# Leave null for Stage 1. For Stage 2 set this to the Stage-1 output root.
-# Outer fold k reads ONLY fold{k}/weak_oof.csv. Phase-A epoch selection remains
-# report-only; the fold-local image teacher enters only the fresh Phase-B retrain.
+# Stage 1: leave both source fields null.
+# Stage 2 with one frozen Stage-1 method: set cotrain_stage1_root.
+# Stage 2 with candidate methods (recommended for random-vs-SSL): set
+# cotrain_stage1_candidates to both roots. Fold k is selected using ONLY that
+# fold's inner_macro_auc; outer OOF scores are never used for the choice.
 cotrain_stage1_root: null
+cotrain_stage1_candidates: null
 cotrain_positive_threshold: 0.80
 cotrain_negative_threshold: 0.20
 cotrain_agreement_weight: 0.90
 cotrain_disagreement_weight: 0.05
 cotrain_blend: 0.50
+cotrain_report_low_confidence: 0.10
+cotrain_image_only_positive_threshold: 0.95
+cotrain_image_only_negative_threshold: 0.05
+cotrain_image_only_weight: 0.20
+cotrain_image_only_blend: 0.75
 
 # Balanced study sampling.
 trusted_fraction: 0.30
@@ -99,10 +118,15 @@ scale_jitter: 0.05
 gamma_jitter: 0.12
 bias_field_strength: 0.08
 
-# Inference TTA. All views are generated from one DICOM decode; if projected
-# runtime threatens the budget, inference automatically falls back to center view.
+# Validation and submission use the SAME TTA policy. This is deliberate: epoch
+# selection and outer OOF measure the exact inference policy planned for submission.
 tta_center_offsets: [-1, 0, 1]
+validation_tta_offsets: [-1, 0, 1]
+allow_validation_submission_tta_mismatch: false
+# Weak OOF teachers are generated with one center view to protect the <9 h budget.
+weak_oof_tta_offsets: [0]
 auto_tta_budget: true
+allow_tta_fallback: true
 
 # DICOM safety / cache.
 preflight_before_train: true
