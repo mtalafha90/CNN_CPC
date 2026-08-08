@@ -23,6 +23,10 @@ MODEL_SPEC_KEYS = {
     "encoder_batch_size", "gradient_checkpointing", "transformer_layers",
     "transformer_heads", "transformer_ff_mult", "pathology_layers",
 }
+CHECKPOINT_REQUIRED_KEYS = {
+    "model", "model_spec", "stream_names", "config", "fold", "stage",
+    "validation_tta_offsets",
+}
 
 
 def _load_checkpoint_payload(path: str | Path) -> dict:
@@ -30,13 +34,16 @@ def _load_checkpoint_payload(path: str | Path) -> dict:
     if not path.is_file():
         raise FileNotFoundError(f"checkpoint not found: {path}")
     payload = torch.load(path, map_location="cpu", weights_only=False)
-    required = {"model", "model_spec", "stream_names", "config"}
-    missing = sorted(required.difference(payload))
+    missing = sorted(CHECKPOINT_REQUIRED_KEYS.difference(payload))
     if missing:
         raise ValueError(f"checkpoint {path} missing keys: {missing}")
     if not isinstance(payload["config"], dict):
         raise ValueError(f"checkpoint {path} has invalid training config")
     validate_competition_config(payload["config"], purpose="train")
+    if str(payload["stage"]) not in {"stage1", "stage2"}:
+        raise ValueError(f"checkpoint {path} has invalid stage={payload['stage']!r}")
+    if not isinstance(payload["validation_tta_offsets"], (list, tuple)):
+        raise ValueError(f"checkpoint {path} is missing its validation TTA contract")
     missing_spec = sorted(MODEL_SPEC_KEYS.difference(payload["model_spec"]))
     if missing_spec:
         raise ValueError(
@@ -97,6 +104,36 @@ def _central_view_index(offsets: list[int]) -> int:
     return offsets.index(0) if 0 in offsets else min(range(len(offsets)), key=lambda i: abs(offsets[i]))
 
 
+def _validate_ensemble_contract(paths: list[Path], payloads: list[dict], config: dict) -> tuple[list[Path], list[dict]]:
+    n_folds = int(config.get("n_folds", 3))
+    if len(paths) != n_folds:
+        raise ValueError(f"expected exactly {n_folds} fold checkpoints, received {len(paths)}")
+    folds = [int(payload["fold"]) for payload in payloads]
+    expected_folds = list(range(n_folds))
+    if sorted(folds) != expected_folds:
+        raise ValueError(f"checkpoint folds must be exactly {expected_folds}; received {sorted(folds)}")
+
+    stages = {str(payload["stage"]) for payload in payloads}
+    if len(stages) != 1:
+        raise ValueError(f"cannot mix checkpoint stages in one ensemble: {sorted(stages)}")
+    stage = next(iter(stages))
+    expected_stage = config.get("expected_checkpoint_stage")
+    if expected_stage and str(expected_stage) != stage:
+        raise ValueError(f"expected {expected_stage} checkpoints but received stage={stage}")
+
+    requested_offsets = tuple(int(x) for x in (config.get("tta_center_offsets", [-1, 0, 1]) or [0]))
+    for path, payload in zip(paths, payloads):
+        trained_offsets = tuple(int(x) for x in payload["validation_tta_offsets"])
+        if trained_offsets != requested_offsets:
+            raise ValueError(
+                f"checkpoint {path} validated TTA offsets {trained_offsets}, but submission requests "
+                f"{requested_offsets}; retrain/re-evaluate instead of changing TTA after OOF"
+            )
+
+    ordered = sorted(zip(paths, payloads), key=lambda item: int(item[1]["fold"]))
+    return [item[0] for item in ordered], [item[1] for item in ordered]
+
+
 @torch.no_grad()
 def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> pd.DataFrame:
     """One-pass image-only inference under a strict wall-clock budget."""
@@ -109,6 +146,8 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
     if not paths:
         raise ValueError("at least one checkpoint is required")
     payloads = [_load_checkpoint_payload(path) for path in paths]
+    paths, payloads = _validate_ensemble_contract(paths, payloads, config)
+
     spec = payloads[0]["model_spec"]
     if list(payloads[0]["stream_names"]) != DUAL_STREAMS:
         raise ValueError("checkpoint stream order mismatch")
@@ -141,9 +180,16 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
     uid_rows = []
     steady_batch_times: list[float] = []
     auto_tta = bool(config.get("auto_tta_budget", True))
+    allow_fallback = bool(config.get("allow_tta_fallback", True))
     tta_fallback = False
+    initial_guard = float(config.get("prediction_initial_batch_guard_seconds", 180.0))
 
     for batch_index, batch in enumerate(loader):
+        guard = initial_guard if not steady_batch_times else max(
+            5.0, float(np.mean(steady_batch_times[-5:])) * 1.35
+        )
+        budget.require(guard, label=f"submission inference batch {batch_index + 1}")
+
         batch_start = time.monotonic()
         volumes = batch["volumes"]
         present = batch["present"].to(runtime.device, non_blocking=True)
@@ -165,9 +211,13 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
         if batch_index == 0 and auto_tta and len(view_indices) > 1:
             projected = max(elapsed, 1e-3) * len(loader) * 1.35
             if projected + budget.reserve_seconds > budget.remaining_seconds:
+                if not allow_fallback:
+                    raise RuntimeError(
+                        f"projected TTA inference {projected/3600:.2f} h exceeds the safe runtime budget"
+                    )
                 print(
                     f"[budget] projected multi-view inference {projected/3600:.2f} h; "
-                    "falling back to central view"
+                    "falling back to the center view to guarantee completion"
                 )
                 probability = per_view_model[central]
                 view_indices = [central]
@@ -188,17 +238,13 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
         remaining_batches = len(loader) - batch_index - 1
         if remaining_batches and steady_batch_times:
             mean_batch = float(np.mean(steady_batch_times[-5:]))
-            if not budget.can_start(mean_batch * remaining_batches * 1.25):
+            if not budget.can_start(mean_batch * remaining_batches * 1.35):
                 raise RuntimeError(
                     "inference cannot finish safely inside the configured runtime budget; "
                     "reduce preprocessing cost or inference batch overhead before submission"
                 )
 
-    probabilities = (
-        np.concatenate(probability_rows, axis=0)
-        if probability_rows
-        else np.empty((0, len(TARGETS)))
-    )
+    probabilities = np.concatenate(probability_rows, axis=0) if probability_rows else np.empty((0, len(TARGETS)))
     if not np.isfinite(probabilities).all():
         raise RuntimeError("non-finite probabilities")
     submission = pd.DataFrame(probabilities, columns=TARGETS)
@@ -206,7 +252,8 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
     validate_submission(submission)
     print(
         f"[runtime] inference elapsed={budget.elapsed_seconds/3600:.2f} h "
-        f"budget={budget.max_hours:.2f} h tta_fallback={tta_fallback}"
+        f"budget={budget.max_hours:.2f} h tta_fallback={tta_fallback} "
+        f"stage={payloads[0]['stage']} folds={[int(p['fold']) for p in payloads]}"
     )
     return submission[SUBMISSION_COLUMNS]
 
