@@ -26,6 +26,7 @@ class PreflightResult:
     metadata_fields_missing: int
     metadata_fields_repaired: int
     decode_failure_rate: float
+    file_decode_failure_rate: float
     missing_stream_rate: float
 
     def to_dict(self) -> dict:
@@ -36,7 +37,8 @@ class PreflightResult:
             f"preflight split={self.split} studies={self.studies_sampled} "
             f"selected={self.streams_selected}/{self.streams_possible} "
             f"decoded={self.streams_decoded}/{self.streams_selected} "
-            f"decode_failure_rate={self.decode_failure_rate:.1%} "
+            f"stream_decode_failure_rate={self.decode_failure_rate:.1%} "
+            f"file_decode_failure_rate={self.file_decode_failure_rate:.1%} "
             f"missing_stream_rate={self.missing_stream_rate:.1%} "
             f"metadata_fields_repaired={self.metadata_fields_repaired}/{self.metadata_fields_missing}"
         )
@@ -54,12 +56,13 @@ def run_preflight(
     triplet_gap: int = 1,
     seed: int = 2026,
     max_decode_failure_rate: float = 0.05,
+    max_file_decode_failure_rate: float = 0.05,
     strict: bool = True,
 ) -> PreflightResult:
     if sample_size < 1 or image_size < 1 or triplet_gap < 1:
         raise ValueError("sample_size, image_size and triplet_gap must be positive")
-    if not 0 <= max_decode_failure_rate <= 1:
-        raise ValueError("max_decode_failure_rate must be in [0,1]")
+    if not 0 <= max_decode_failure_rate <= 1 or not 0 <= max_file_decode_failure_rate <= 1:
+        raise ValueError("decode failure rates must be in [0,1]")
     if stream_mode not in {"best", "dual"}:
         raise ValueError("stream_mode must be best or dual")
 
@@ -120,6 +123,8 @@ def run_preflight(
     metadata_fields_repaired = int(
         repair["repaired_plane"] + repair["repaired_fluid"] + repair["repaired_fat_suppression"]
     )
+    stream_failure_rate = float(1.0 - decoded / max(selected, 1))
+    file_failure_rate = float(file_failures / max(candidate_files, 1))
     result = PreflightResult(
         split=split,
         studies_sampled=len(chosen),
@@ -133,14 +138,21 @@ def run_preflight(
         decoded_frames=frames,
         metadata_fields_missing=metadata_fields_missing,
         metadata_fields_repaired=metadata_fields_repaired,
-        decode_failure_rate=float(1.0 - decoded / max(selected, 1)),
+        decode_failure_rate=stream_failure_rate,
+        file_decode_failure_rate=file_failure_rate,
         missing_stream_rate=float(missing / max(possible, 1)),
     )
     if selected == 0:
         raise RuntimeError(result.summary() + "; no MRI streams were selectable")
-    if strict and result.decode_failure_rate > max_decode_failure_rate:
+    if strict and stream_failure_rate > max_decode_failure_rate:
         raise RuntimeError(
             result.summary()
-            + f" exceeds max_decode_failure_rate={max_decode_failure_rate:.1%}; fix DICOM/path/codec issues before training"
+            + f" exceeds max_decode_failure_rate={max_decode_failure_rate:.1%}; fix DICOM/path/codec issues"
+        )
+    if strict and file_failure_rate > max_file_decode_failure_rate:
+        raise RuntimeError(
+            result.summary()
+            + f" exceeds max_file_decode_failure_rate={max_file_decode_failure_rate:.1%}; "
+            "partial series corruption must be resolved before training"
         )
     return result
