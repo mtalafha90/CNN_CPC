@@ -1,0 +1,5 @@
+StudyInstanceUID,SeriesInstanceUID,Fluid_Sensitive,Fat_Suppression,Anatomical_Plane
+EXTVAL_ACL_001,EXTVAL_ACL_001_SAG_PDW,true,false,Sagittal
+EXTVAL_MEDMEN_001,EXTVAL_MEDMEN_001_COR_PDW,true,false,Coronal
+EXTVAL_BAKER_001,EXTVAL_BAKER_001_AX_MR,true,true,Axial
+EXTVAL_REFERENCE_001,EXTVAL_REFERENCE_001_SAG_PDFS,true,true,Sagittal
