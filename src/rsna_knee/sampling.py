@@ -18,9 +18,9 @@ ENV_RUN_DEADLINE = "RSNA_RUN_DEADLINE_MONOTONIC"
 class TwoPoolBatchSampler(Sampler[list[int]]):
     """Deterministically mix trusted/general studies with hard work/time caps.
 
-    The production CLI sets both a maximum batch count and an absolute monotonic
-    deadline. The sampler stops scheduling new GPU batches once that deadline is
-    reached, leaving the configured reserve for checkpointing/evaluation.
+    ``deadline_monotonic`` is the preferred production contract. The environment
+    variable remains as a CLI/backward-compatible fallback, but direct calls to
+    ``train_fold`` can now enforce the same deadline without relying on CLI state.
     """
 
     def __init__(
@@ -32,6 +32,7 @@ class TwoPoolBatchSampler(Sampler[list[int]]):
         seed: int = 2026,
         drop_last: bool = True,
         max_batches: int | None = None,
+        deadline_monotonic: float | None = None,
     ) -> None:
         mask = np.asarray(trusted_mask, dtype=bool)
         if mask.ndim != 1:
@@ -47,8 +48,11 @@ class TwoPoolBatchSampler(Sampler[list[int]]):
         if int(max_batches) < 1:
             raise ValueError("max_batches must be >=1")
 
-        deadline_text = os.environ.get(ENV_RUN_DEADLINE)
-        self.deadline = float(deadline_text) if deadline_text else None
+        if deadline_monotonic is None:
+            deadline_text = os.environ.get(ENV_RUN_DEADLINE)
+            deadline_monotonic = float(deadline_text) if deadline_text else None
+        self.deadline = None if deadline_monotonic is None else float(deadline_monotonic)
+
         self.trusted = np.flatnonzero(mask)
         self.general = np.flatnonzero(~mask)
         if trusted_fraction > 0 and len(self.trusted) == 0:
