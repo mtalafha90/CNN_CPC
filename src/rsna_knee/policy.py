@@ -2,16 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+SSL_COMPETITION_SOURCE = "competition_training_data"
+
 
 def validate_competition_config(config: dict, *, purpose: str) -> None:
-    """Validate the conservative production contract used for Kaggle runs.
-
-    The default policy intentionally assumes the strictest safe interpretation
-    until competition-specific allowances are explicitly verified: one GPU,
-    Internet-independent execution, runtime budget strictly below 9 h, and no
-    external pretrained weights. Self-produced checkpoints/SSL weights trained
-    only from competition data remain allowed.
-    """
+    """Validate the conservative production contract used for Kaggle runs."""
     if not bool(config.get("competition_mode", True)):
         return
 
@@ -28,10 +23,34 @@ def validate_competition_config(config: dict, *, purpose: str) -> None:
     if int(config.get("requested_gpus", 1)) != 1:
         raise ValueError("production competition mode is single-GPU only")
 
+    ssl_path = config.get("ssl_encoder_checkpoint")
+    if ssl_path and not bool(config.get("allow_external_pretrained", False)):
+        if str(config.get("ssl_checkpoint_source", "")) != SSL_COMPETITION_SOURCE:
+            raise ValueError(
+                "competition_mode requires ssl_checkpoint_source=competition_training_data "
+                "for attached SSL weights when external pretrained artifacts are disabled"
+            )
+
     if purpose == "infer":
         expected = str(config.get("submission_filename", "submission.csv"))
         if Path(expected).name != "submission.csv":
             raise ValueError("competition submission filename must be submission.csv")
+
+
+def validate_ssl_payload(payload: dict, config: dict) -> None:
+    """Verify that an attached SSL checkpoint matches the declared safe source."""
+    if not bool(config.get("competition_mode", True)):
+        return
+    if bool(config.get("allow_external_pretrained", False)):
+        return
+    if payload.get("source") != SSL_COMPETITION_SOURCE:
+        raise ValueError(
+            "attached SSL checkpoint is missing competition-training-data provenance"
+        )
+    ssl_config = payload.get("config")
+    if not isinstance(ssl_config, dict):
+        raise ValueError("attached SSL checkpoint is missing its training config")
+    validate_competition_config(ssl_config, purpose="train")
 
 
 def validate_submission_path(path: str | Path, config: dict) -> None:
