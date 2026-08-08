@@ -1,13 +1,13 @@
 """Kaggle one-GPU training template.
 
-Train exactly ONE fold per committed notebook run. Use separate runs for folds
-0, 1 and 2 so each execution stays safely below the competition runtime ceiling.
-
-For Stage 1 leave STAGE1_MODEL_ROOT=None. For Stage 2 attach the completed
-Stage-1 model dataset and point STAGE1_MODEL_ROOT at its ``runs/model`` folder.
+Train exactly ONE fold per committed notebook run. The attached repository is
+executed directly via PYTHONPATH, so the committed run does not need pip/network
+installation.
 """
 from pathlib import Path
+import os
 import subprocess
+import sys
 
 import yaml
 
@@ -16,12 +16,9 @@ DATA_ROOT = "/kaggle/input/rsna-knee-abnormality-detection"
 CONFIG_SRC = CODE_ROOT / "configs/train.yaml"
 CONFIG_RUN = Path("/kaggle/working/train.yaml")
 
-# EDIT ONE VALUE PER NOTEBOOK COPY: 0, 1, or 2.
-FOLD = 0
-# Stage 2 example: "/kaggle/input/<stage1-model-dataset>/runs/model"
-STAGE1_MODEL_ROOT = None
-# Optional attached competition-data SSL checkpoint.
-SSL_CHECKPOINT = None
+FOLD = 0  # edit to 0, 1, or 2 in separate notebook copies
+STAGE1_MODEL_ROOT = None  # Stage 2: "/kaggle/input/<stage1-model-dataset>/runs/model"
+SSL_CHECKPOINT = None     # optional competition-data SSL checkpoint
 SMOKE = False
 
 stage_name = "cotrain" if STAGE1_MODEL_ROOT else "model"
@@ -39,9 +36,11 @@ config["cotrain_stage1_root"] = STAGE1_MODEL_ROOT
 config["ssl_encoder_checkpoint"] = SSL_CHECKPOINT
 CONFIG_RUN.write_text(yaml.safe_dump(config, sort_keys=False))
 
-command = ["rsna-knee", "train", "--config", str(CONFIG_RUN), "--fold", str(FOLD)]
+env = os.environ.copy()
+env["PYTHONPATH"] = str(CODE_ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
+command = [sys.executable, "-m", "rsna_knee.cli", "train", "--config", str(CONFIG_RUN), "--fold", str(FOLD)]
 if SMOKE:
     command.append("--smoke")
-subprocess.run(command, check=True)
+subprocess.run(command, check=True, env=env)
 
 print(f"Completed {stage_name} fold {FOLD}: {output_root}/fold{FOLD}")
