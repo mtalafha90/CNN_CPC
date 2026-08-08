@@ -1,0 +1,5 @@
+{
+  "studies": 4,
+  "purpose": "external technical validation only",
+  "warning": "single published slices are repeated into synthetic multi-frame DICOMs; do not use for leaderboard/scientific AUC"
+}
