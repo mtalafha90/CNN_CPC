@@ -4,6 +4,7 @@ import argparse
 import copy
 import json
 import os
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -18,7 +19,7 @@ from .policy import validate_submission_path
 from .preflight import run_preflight
 from .report_labels import label_dataframe
 from .runtime import resolve_runtime
-from .sampling import ENV_MAX_BATCHES
+from .sampling import ENV_MAX_BATCHES, ENV_RUN_DEADLINE
 from .ssl import pretrain_ssl
 from .training import train_fold
 
@@ -45,11 +46,20 @@ def _smoke_config(config: dict) -> dict:
     return smoke
 
 
-def _set_training_batch_cap(config: dict) -> None:
+def _set_training_limits(config: dict) -> None:
     cap = int(config.get("max_train_batches_per_epoch", 300))
     if cap < 1:
         raise ValueError("max_train_batches_per_epoch must be >=1")
+    budget_hours = float(config.get("runtime_budget_hours", 8.5))
+    reserve_minutes = float(config.get("runtime_reserve_minutes", 10.0))
+    if not 0 < budget_hours < 9.0:
+        raise ValueError("runtime_budget_hours must be >0 and <9")
+    if reserve_minutes < 0 or reserve_minutes >= budget_hours * 60:
+        raise ValueError("runtime reserve must be non-negative and shorter than the run budget")
     os.environ[ENV_MAX_BATCHES] = str(cap)
+    # Stop scheduling new training batches at the beginning of the reserve.
+    deadline = time.monotonic() + budget_hours * 3600.0 - reserve_minutes * 60.0
+    os.environ[ENV_RUN_DEADLINE] = f"{deadline:.9f}"
 
 
 def main() -> None:
@@ -164,7 +174,7 @@ def main() -> None:
         config = read_config(args.config)
         if args.smoke:
             config = _smoke_config(config)
-        _set_training_batch_cap(config)
+        _set_training_limits(config)
         print(train_fold(config, args.fold))
         return
 
