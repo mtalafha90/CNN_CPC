@@ -21,7 +21,7 @@ jobs:
           pip install -e .
           pip install pytest
       - name: Compile Python sources
-        run: python -m compileall -q src tests kaggle
+        run: python -m compileall -q src tests kaggle scripts
       - name: Verify dependencies
         run: pip check
       - name: CLI/runtime import smoke
