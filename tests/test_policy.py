@@ -36,6 +36,21 @@ def test_external_pretrained_is_off_by_default():
         )
 
 
+def test_attached_ssl_requires_explicit_competition_data_source():
+    base = {
+        "competition_mode": True,
+        "runtime_budget_hours": 8.5,
+        "requested_gpus": 1,
+        "pretrained": False,
+        "allow_external_pretrained": False,
+        "ssl_encoder_checkpoint": "/kaggle/input/ssl/ssl_encoder.pt",
+    }
+    with pytest.raises(ValueError, match="ssl_checkpoint_source"):
+        validate_competition_config(base, purpose="train")
+    safe = {**base, "ssl_checkpoint_source": "competition_training_data"}
+    validate_competition_config(safe, purpose="train")
+
+
 def test_submission_filename_is_enforced():
     config = {
         "competition_mode": True,
