@@ -19,6 +19,7 @@ from .runtime import autocast, make_scaler, resolve_runtime
 
 PLANE_LABELS = torch.tensor([0, 0, 1, 1, 2, 2], dtype=torch.long)
 SEQUENCE_LABELS = torch.tensor([0, 1, 0, 1, 0, 1], dtype=torch.long)
+SSL_SOURCE = "competition_training_data"
 
 
 class MRIRepresentationLearner(nn.Module):
@@ -103,7 +104,7 @@ def pretrain_ssl(config: dict) -> Path:
 
     model = MRIRepresentationLearner(
         pretrained=bool(config.get("pretrained", False)),
-        normalize_input=bool(config.get("normalize_input", True)),
+        normalize_input=bool(config.get("normalize_input", False)),
         projection_dim=int(config.get("ssl_projection_dim", 256)),
     ).to(runtime.device)
     optimizer = torch.optim.AdamW(
@@ -112,7 +113,7 @@ def pretrain_ssl(config: dict) -> Path:
         weight_decay=float(config.get("ssl_weight_decay", 1e-4)),
     )
     scaler = make_scaler(runtime)
-    epochs = int(config.get("ssl_epochs", 5))
+    epochs = int(config.get("ssl_epochs", 4))
     temperature = float(config.get("ssl_temperature", 0.15))
     meta_weight = float(config.get("ssl_metadata_weight", 0.25))
     outdir = Path(config.get("ssl_output_dir", "runs/ssl"))
@@ -130,7 +131,7 @@ def pretrain_ssl(config: dict) -> Path:
         epoch_start = time.monotonic()
         model.train()
         total, steps = 0.0, 0
-        for batch_idx, batch in enumerate(loader):
+        for batch in loader:
             volumes = batch["volumes"].to(runtime.device, non_blocking=True)
             present = batch["present"].to(runtime.device, non_blocking=True)
             b, k, s, c, h, w = volumes.shape
@@ -169,6 +170,7 @@ def pretrain_ssl(config: dict) -> Path:
         {
             "encoder": model.encoder.state_dict(),
             "config": config,
+            "source": SSL_SOURCE,
             "non_gold_studies": len(non_gold),
             "completed_epochs": len(history),
             "budget": budget.to_dict(),
