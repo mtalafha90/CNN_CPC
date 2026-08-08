@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import yaml
 
@@ -18,6 +18,7 @@ from .policy import validate_submission_path
 from .preflight import run_preflight
 from .report_labels import label_dataframe
 from .runtime import resolve_runtime
+from .sampling import ENV_MAX_BATCHES
 from .ssl import pretrain_ssl
 from .training import train_fold
 
@@ -32,11 +33,23 @@ def read_config(path: str | Path) -> dict:
 def _smoke_config(config: dict) -> dict:
     smoke = copy.deepcopy(config)
     smoke["epochs"] = min(2, int(smoke.get("epochs", 2)))
+    smoke["max_train_batches_per_epoch"] = min(
+        20, int(smoke.get("max_train_batches_per_epoch", 20))
+    )
     smoke["patience"] = 1
     smoke["n_bootstrap"] = min(100, int(smoke.get("n_bootstrap", 100)))
-    smoke["runtime_budget_hours"] = min(2.0, float(smoke.get("runtime_budget_hours", 2.0)))
+    smoke["runtime_budget_hours"] = min(
+        2.0, float(smoke.get("runtime_budget_hours", 2.0))
+    )
     smoke["output_dir"] = str(Path(smoke.get("output_dir", "runs/model")) / "smoke")
     return smoke
+
+
+def _set_training_batch_cap(config: dict) -> None:
+    cap = int(config.get("max_train_batches_per_epoch", 300))
+    if cap < 1:
+        raise ValueError("max_train_batches_per_epoch must be >=1")
+    os.environ[ENV_MAX_BATCHES] = str(cap)
 
 
 def main() -> None:
@@ -56,7 +69,9 @@ def main() -> None:
     p.add_argument("--no-strict", action="store_true")
     p.add_argument("--out", default=None)
 
-    p = sub.add_parser("audit", help="full teacher/fold/stream/DICOM audit using CPU multiprocessing")
+    p = sub.add_parser(
+        "audit", help="full teacher/fold/stream/DICOM audit using CPU multiprocessing"
+    )
     p.add_argument("--config", required=True)
     p.add_argument("--out-dir", default="runs/audit")
     p.add_argument("--metadata-only", action="store_true")
@@ -72,7 +87,7 @@ def main() -> None:
     p = sub.add_parser("train", help="train one nested outer fold on one GPU")
     p.add_argument("--config", required=True)
     p.add_argument("--fold", type=int, required=True)
-    p.add_argument("--smoke", action="store_true", help="2-epoch integration run")
+    p.add_argument("--smoke", action="store_true", help="2-epoch/20-batch integration run")
 
     p = sub.add_parser("evaluate", help="bootstrap official gold OOF macro AUC")
     p.add_argument("--train-csv", required=True)
@@ -149,6 +164,7 @@ def main() -> None:
         config = read_config(args.config)
         if args.smoke:
             config = _smoke_config(config)
+        _set_training_batch_cap(config)
         print(train_fold(config, args.fold))
         return
 
