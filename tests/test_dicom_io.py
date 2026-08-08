@@ -67,6 +67,18 @@ def test_reads_mixed_supported_suffixes_in_one_series(tmp_path: Path):
     assert read_dicom_series(tmp_path).shape == (3, 8, 8)
 
 
+def test_partial_corruption_is_counted_even_when_series_decodes(tmp_path: Path):
+    ds = _dataset(value=2)
+    ds.ImagePositionPatient = [0.0, 0.0, 0.0]
+    _write(ds, tmp_path / "valid.dcm")
+    (tmp_path / "broken.dcm").write_bytes(b"not-a-dicom-pixel-file")
+    volume, stats = read_dicom_series(tmp_path, return_stats=True)
+    assert volume.shape == (1, 8, 8)
+    assert stats["candidate_files"] == 2
+    assert stats["decode_failures"] == 1
+    assert stats["decoded_frames"] == 1
+
+
 def test_reads_an_enhanced_multiframe_instance(tmp_path: Path):
     _write(_dataset(frames=5), tmp_path / "multiframe.dcm")
     volume = read_dicom_series(tmp_path)
