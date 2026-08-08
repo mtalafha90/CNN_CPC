@@ -1,8 +1,7 @@
 """Kaggle one-GPU training template.
 
-IMPORTANT: train exactly ONE fold per committed notebook run. Run separate
-notebooks/commits for fold 0, 1 and 2 so every execution remains below the
-competition's GPU runtime ceiling.
+Train exactly ONE fold per committed notebook run. Use separate runs for folds
+0, 1 and 2 so each execution stays safely below the competition runtime ceiling.
 
 For Stage 1 leave STAGE1_MODEL_ROOT=None. For Stage 2 attach the completed
 Stage-1 model dataset and point STAGE1_MODEL_ROOT at its ``runs/model`` folder.
@@ -21,13 +20,16 @@ CONFIG_RUN = Path("/kaggle/working/train.yaml")
 FOLD = 0
 # Stage 2 example: "/kaggle/input/<stage1-model-dataset>/runs/model"
 STAGE1_MODEL_ROOT = None
-# Optional attached SSL checkpoint produced by pretrain_template.py.
+# Optional attached competition-data SSL checkpoint.
 SSL_CHECKPOINT = None
 SMOKE = False
 
+stage_name = "cotrain" if STAGE1_MODEL_ROOT else "model"
+output_root = f"/kaggle/working/runs/{stage_name}"
+
 config = yaml.safe_load(CONFIG_SRC.read_text())
 config["data_root"] = DATA_ROOT
-config["output_dir"] = "/kaggle/working/runs/model"
+config["output_dir"] = output_root
 config["competition_mode"] = True
 config["requested_gpus"] = 1
 config["runtime_budget_hours"] = 8.5
@@ -42,4 +44,4 @@ if SMOKE:
     command.append("--smoke")
 subprocess.run(command, check=True)
 
-print(f"Completed fold {FOLD}: /kaggle/working/runs/model/fold{FOLD}")
+print(f"Completed {stage_name} fold {FOLD}: {output_root}/fold{FOLD}")
