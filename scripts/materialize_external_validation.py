@@ -80,9 +80,6 @@ SOURCES = [
 
 
 def _candidate_urls(source: dict) -> list[str]:
-    # Wikimedia's upload CDN may rate-limit cloud-runner IPs. Start from the
-    # Commons Special:Redirect endpoint, which resolves the canonical file, and
-    # retain the direct upload URL as a fallback.
     escaped = urllib.parse.quote(source["commons_file"], safe="")
     return [
         f"https://commons.wikimedia.org/wiki/Special:Redirect/file/{escaped}?width=1024",
@@ -161,9 +158,9 @@ def _write_dicom(jpeg_bytes: bytes, destination: Path, source: dict) -> None:
     ds.StudyInstanceUID = _uid(source["study_uid"])
     ds.SeriesInstanceUID = _uid(source["series_uid"])
     ds.Modality = "MR"
-    ds.PatientName = "EXTERNAL^VALIDATION"
+    ds.PatientName = "EXTERNAL^TEST"
     ds.PatientID = source["study_uid"]
-    ds.SeriesDescription = "Open-license knee MRI validation fixture"
+    ds.SeriesDescription = "Open-license knee MRI technical fixture"
     ds.Rows = int(frames.shape[1])
     ds.Columns = int(frames.shape[2])
     ds.NumberOfFrames = int(frames.shape[0])
@@ -187,6 +184,7 @@ def _write_dicom(jpeg_bytes: bytes, destination: Path, source: dict) -> None:
 
 def _write_csvs(root: Path, records: list[dict]) -> None:
     validation_rows = []
+    test_rows = []
     series_rows = []
     source_rows = []
     for source in records:
@@ -198,6 +196,7 @@ def _write_csvs(root: Path, records: list[dict]) -> None:
         for target in TARGETS:
             row[target] = source["known_targets"].get(target, np.nan)
         validation_rows.append(row)
+        test_rows.append({"StudyInstanceUID": source["study_uid"]})
         series_rows.append(
             {
                 "StudyInstanceUID": source["study_uid"],
@@ -223,7 +222,10 @@ def _write_csvs(root: Path, records: list[dict]) -> None:
     import pandas as pd
 
     pd.DataFrame(validation_rows).to_csv(root / "validation.csv", index=False)
-    pd.DataFrame(series_rows).to_csv(root / "validation_series.csv", index=False)
+    pd.DataFrame(test_rows).to_csv(root / "test.csv", index=False)
+    series_frame = pd.DataFrame(series_rows)
+    series_frame.to_csv(root / "validation_series.csv", index=False)
+    series_frame.to_csv(root / "test_series.csv", index=False)
     pd.DataFrame(source_rows).to_csv(root / "sources.csv", index=False)
 
 
@@ -241,15 +243,19 @@ def main() -> None:
     for source in SOURCES:
         source = dict(source)
         jpg_path = source_dir / source["filename"]
-        dcm_path = root / "validation_images" / source["study_uid"] / source["series_uid"] / "image.dcm"
         if args.overwrite or not jpg_path.is_file():
             jpeg_bytes = _download(source)
             jpg_path.write_bytes(jpeg_bytes)
         else:
             jpeg_bytes = jpg_path.read_bytes()
         source["sha256"] = hashlib.sha256(jpeg_bytes).hexdigest()
-        if args.overwrite or not dcm_path.is_file():
-            _write_dicom(jpeg_bytes, dcm_path, source)
+
+        validation_dcm = root / "validation_images" / source["study_uid"] / source["series_uid"] / "image.dcm"
+        test_dcm = root / "test_images" / source["study_uid"] / source["series_uid"] / "image.dcm"
+        if args.overwrite or not validation_dcm.is_file():
+            _write_dicom(jpeg_bytes, validation_dcm, source)
+        if args.overwrite or not test_dcm.is_file():
+            _write_dicom(jpeg_bytes, test_dcm, source)
         materialized.append(source)
 
     _write_csvs(root, materialized)
@@ -257,7 +263,7 @@ def main() -> None:
         json.dumps(
             {
                 "studies": len(materialized),
-                "purpose": "external technical validation only",
+                "purpose": "external technical test/sparse-validation fixture only",
                 "warning": "single published slices are repeated into synthetic multi-frame DICOMs; do not use for leaderboard/scientific AUC",
             },
             indent=2,
