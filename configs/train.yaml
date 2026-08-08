@@ -39,6 +39,7 @@ ssl_encoder_checkpoint: null
 ssl_checkpoint_source: null
 ssl_output_dir: runs/ssl
 ssl_epochs: 4
+ssl_max_batches_per_epoch: 300
 ssl_batch_size: 4
 ssl_n_slices: 5
 ssl_projection_dim: 256
@@ -48,12 +49,13 @@ ssl_lr: 0.0002
 ssl_weight_decay: 0.0001
 ssl_noise_std: 0.01
 
-# Nested optimization. The budget guard may stop Phase A early while preserving
-# enough estimated time for Phase B and evaluation.
+# Nested optimization. Epochs are bounded by batch count as well as wall time;
+# this makes the first timing sample safe on one GPU.
 lr: 0.0001
 min_lr: 0.000001
 weight_decay: 0.0001
 epochs: 8
+max_train_batches_per_epoch: 300
 patience: 2
 grad_clip: 1.0
 post_train_evaluation_epoch_fraction: 0.75
