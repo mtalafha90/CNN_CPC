@@ -2,7 +2,7 @@
 
 Production PyTorch pipeline for the **2026 RSNA Knee Abnormality Detection** challenge.
 
-The repository exposes one production methodology: PU-aware report supervision, optional competition-data MRI SSL, 2.5D multi-sequence Transformer fusion, leakage-safe nested validation, and fold-local image/report co-training.
+The repository exposes one conservative production methodology: PU-aware report supervision, optional competition-data MRI SSL, 2.5D multi-sequence Transformer fusion, nested validation, fold-local image/report co-training, one-GPU execution, and explicit sub-nine-hour runtime protection.
 
 ## Production contract
 
@@ -10,58 +10,72 @@ The repository exposes one production methodology: PU-aware report supervision, 
 SUPERVISION
 report -> positive / negated / uncertain / unmentioned
        -> fold-safe calibration
-       -> reliability = evidence × information beyond prevalence
-       -> unmentioned = unlabeled (zero direct BCE by default)
-       -> official gold cells override teacher cells
+       -> confidence = evidence × information beyond prevalence
+       -> unmentioned = unlabeled by default
+       -> official finite gold cells override weak supervision
 
 MRI
 DICOM -> metadata repair -> six semantic streams
       -> stochastic 2.5D triplets
-      -> ConvNeXt-Tiny slice encoder
+      -> ConvNeXt-Tiny encoder
       -> cross-sequence Transformer
       -> 12 interacting pathology queries
       -> 12 logits
 
 LOSS
-per-target confidence-weighted BCE
-+ confidence-gated ranking loss
-+ per-pathology ranking-pair diagnostics
+planned-epoch per-target weighted BCE
++ confidence-gated ranking auxiliary
++ effective supervision/ranking diagnostics
 
 VALIDATION
-outer gold fold untouched
-inner gold fold selects epoch count
-fresh model retrains for fixed selected duration
-outer gold fold evaluated once
-study bootstrap macro-AUC
+outer gold fold = untouched OOF evaluation
+inner gold fold = epoch-count selection
+Phase A discarded
+fresh Phase B retrain for selected epoch count
+validation TTA == submission TTA
+OOF bootstrap macro-AUC
+
+STAGE-1 CANDIDATES
+random vs competition-data SSL
+outer fold k candidate chosen by fold-k INNER AUC only
+outer OOF is never used to choose the Stage-1 teacher for that fold
 
 STAGE 2
-outer fold k uses ONLY stage1/fold{k}/weak_oof.csv
 Phase A = report-only epoch selection
-Phase B = fresh image/report-consensus retraining
-wrong-fold weak teachers are rejected
+Phase B = fresh report + fold-local cross-fitted image teacher
+very confident image teacher may modestly supervise report-silent cells
+wrong-fold/incomplete/legacy-incompatible teachers are rejected
 Stage 2 never exports another weak_oof.csv
 
-INFERENCE
+RUNTIME
 one GPU
 CPU multiprocessing for DICOM/data work
-all TTA views generated from one DICOM decode
-all fold models consume the same decoded batch
+8.5 h software budget
+training and prediction batch deadlines
+measured finish-time reserve includes outer OOF + weak OOF + bootstrap + serialization
+
+INFERENCE
+exactly folds {0,1,2}
+one checkpoint stage only
+checkpoint validation TTA must equal requested submission TTA
+one DICOM decode supplies all requested TTA views
 exact submission.csv
 ```
 
 ## Competition execution policy
 
-The production config is deliberately conservative:
+The production configuration is intentionally stricter than unverified allowances:
 
 - **one GPU only**;
 - no DDP / no `torchrun`;
-- CPU multiprocessing for DICOM/data preparation;
-- `runtime_budget_hours: 8.5`, strictly below a 9 h notebook ceiling;
-- Internet-independent runtime;
+- CPU multiprocessing for data work;
+- `runtime_budget_hours: 8.5`, below the 9 h ceiling supplied for this workflow;
+- Internet-independent submission runtime;
 - external pretrained weights **off by default**;
-- final file exactly `submission.csv`.
+- competition-data SSL provenance is checked;
+- final output is exactly `submission.csv`.
 
-See `docs/competition_policy.md`. `docs/competition.md` remains preserved and is not modified by the execution-policy work.
+See `docs/competition_policy.md`. `docs/competition.md` is preserved separately and is not modified by production-policy changes.
 
 ## Repository layout
 
@@ -69,28 +83,28 @@ See `docs/competition_policy.md`. `docs/competition.md` remains preserved and is
 configs/train.yaml
 src/rsna_knee/
   audit.py          full teacher/fold/stream/DICOM audit
-  budget.py         <9 h wall-clock guard
-  calibration.py    fold-safe reliability-aware report calibration
-  cli.py            production commands
-  constants.py      targets and six-stream contract
-  cotrain.py        fold-local leakage-safe image/report teacher
+  budget.py         absolute work/hard deadline and remaining-work guard
+  calibration.py    fold-safe report calibration
+  cli.py            production commands + nested Stage-1 selector
+  constants.py      target and stream contracts
+  cotrain.py        fold-safe candidate selection and image/report fusion
   data.py           CSV validation, folds, metadata repair, routing
-  dataset.py        deterministic worker RNG, DICOM LRU, augmentation/TTA
-  dicom.py          decoding, physical ordering, 2.5D sampling
-  dicom_meta.py     DICOM-derived plane/contrast metadata
-  evaluation.py     NaN-safe AUC/bootstrap/paired comparisons
-  inference.py      one-pass fold ensemble/TTA inference
+  dataset.py        worker RNG, DICOM LRU, augmentation/TTA
+  dicom.py          decoding, slice ordering, 2.5D preprocessing
+  dicom_meta.py     plane/contrast metadata recovery
+  evaluation.py     NaN-safe AUC/bootstrap/paired comparison
+  inference.py      fold/stage/TTA-validated ensemble inference
   model.py          ConvNeXt + MRI Transformer + pathology queries
   policy.py         competition execution safeguards
-  preflight.py      sampled real-pixel safety audit
-  report_labels.py  multilingual deterministic report teacher
+  preflight.py      sampled real-pixel DICOM gate
+  report_labels.py  deterministic multilingual report teacher
   runtime.py        one GPU + CPU multiprocessing runtime
-  sampling.py       trusted/general single-GPU batch sampler
-  ssl.py            non-gold competition-data MRI SSL
-  training.py       nested Stage-1/Stage-2 training
+  sampling.py       trusted/general deterministic batch sampler
+  ssl.py            competition-data MRI SSL
+  training.py       nested Stage-1/Stage-2 production training
 ```
 
-## Install
+## Install and test
 
 ```bash
 git clone https://github.com/mtalafha90/CNN_CPC.git
@@ -102,157 +116,156 @@ pip install pytest
 pytest -q
 ```
 
-Edit machine-specific paths in `configs/train.yaml`.
+The test suite includes unit contracts, a two-process DataLoader test, checkpoint round-trip validation, fold/stage/TTA inference-contract tests, and a synthetic DICOM -> nested train-fold -> OOF/artifact integration test.
+
+For real data, follow **`docs/LOCAL_REAL_DATA_TRAINING.md`** rather than improvising commands.
 
 ## 1. Full data audit
 
-Run this before expensive experiments:
-
 ```bash
-rsna-knee audit \
-  --config configs/train.yaml \
-  --out-dir runs/audit
+rsna-knee audit --config configs/train.yaml --out-dir runs/audit
 ```
 
-It reports:
+The audit reports report-state/confidence coverage, gold fold balance, six-stream availability, every selected series' decode status, and per-series/global partial DICOM corruption. Incomplete audits or failures beyond configured gates raise errors.
 
-- report-state counts for all 12 targets;
-- calibrated confidence histograms;
-- gold fold class counts;
-- selected/missing six-stream counts;
-- every selected series' DICOM decode status;
-- candidate-file failures and per-series/global partial-corruption rates.
+## 2. Stage-1 random baseline
 
-The audit uses CPU processes. It is a hard gate: incomplete audits, undecodable selected series, or corruption rates beyond the configured thresholds fail the run.
+Run one fold per job. Start with fold-0 smoke:
 
-## 2. Optional competition-data SSL
+```bash
+rsna-knee train --config configs/train.yaml --fold 0 --smoke
+```
 
-Run SSL separately:
+Then run production folds sequentially:
+
+```bash
+rsna-knee train --config configs/train.yaml --fold 0
+rsna-knee train --config configs/train.yaml --fold 1
+rsna-knee train --config configs/train.yaml --fold 2
+```
+
+Each Stage-1 fold writes at least:
+
+- `best.pt`;
+- `oof.csv` — primary TTA OOF, using the same offsets as submission;
+- `oof_center.csv` — center-only diagnostic;
+- `weak_oof.csv` — cross-fitted non-gold image teacher;
+- `selection.json`;
+- `history.csv`;
+- `training_diagnostics.json`;
+- `supervision_plan.json`;
+- `bootstrap.json`;
+- `runtime.json` and data/calibration metadata.
+
+`training_diagnostics.json` contains per-pathology ranking-pair counts and effective supervision participation/weight mass.
+
+## 3. Optional competition-data SSL Stage-1 candidate
 
 ```bash
 rsna-knee pretrain --config configs/train.yaml
 ```
 
-Then attach the generated model artifact and set:
+Attach the resulting encoder in a second Stage-1 config and train all three folds using the **same fold definitions and validation TTA policy** as random initialization.
 
-```yaml
-ssl_encoder_checkpoint: /path/to/ssl_encoder.pt
-```
+Do not choose random vs SSL globally from the three outer OOF folds and then reuse that decision inside the same OOF estimate.
 
-The conservative production config starts ConvNeXt without external pretrained weights. Compare random initialization versus competition-data SSL on identical Stage-1 outer OOF before deciding whether SSL is beneficial.
+## 4. Leakage-safe Stage-1 candidate selection
 
-## 3. Stage-1 smoke test
-
-Run each fold separately:
+After random and SSL Stage-1 folds exist:
 
 ```bash
-rsna-knee train --config configs/train.yaml --fold 0 --smoke
-rsna-knee train --config configs/train.yaml --fold 1 --smoke
-rsna-knee train --config configs/train.yaml --fold 2 --smoke
+rsna-knee select-stage1 \
+  --candidate-root /path/to/runs/stage1_random \
+  --candidate-root /path/to/runs/stage1_ssl \
+  --n-folds 3 \
+  --out runs/stage1_selection.json
 ```
 
-Smoke mode caps selection to two epochs, shortens bootstrap, and uses a shorter runtime budget. It verifies the complete Phase-A -> Phase-B -> OOF -> weak-OOF path.
-
-## 4. Stage-1 production training
-
-Use **one fold per notebook/job**:
-
-```bash
-rsna-knee train --config configs/train.yaml --fold 0
-```
-
-Repeat in separate runs for folds 1 and 2. Do not put all folds into one Kaggle GPU notebook.
-
-Each Stage-1 fold writes:
-
-- `best.pt`;
-- untouched outer-gold `oof.csv`;
-- fold-local non-gold `weak_oof.csv`;
-- `selection.json`;
-- `history.csv`;
-- `ranking_pairs.json`;
-- calibration/sampling/preflight/runtime metadata;
-- bootstrap uncertainty.
+For outer fold `k`, this command uses only that candidate fold's `inner_macro_auc`. `outer_macro_auc` is deliberately ignored. Candidates must have the same inner-fold and validation-TTA contracts.
 
 ## 5. Stage-2 leakage-safe co-training
 
-After all Stage-1 folds are available, use a new output directory and set only the Stage-1 root:
+Recommended candidate configuration:
 
 ```yaml
-output_dir: runs/cotrain
-cotrain_stage1_root: /path/to/stage1/runs/model
+output_dir: runs/stage2
+cotrain_stage1_root: null
+cotrain_stage1_candidates:
+  - /path/to/runs/stage1_random
+  - /path/to/runs/stage1_ssl
 ```
 
-For outer fold `k`, training automatically reads only:
+For each outer fold, the appropriate Stage-1 candidate is selected from inner AUC only. Only its fold-local `fold{k}/weak_oof.csv` may enter Stage-2 fold `k`.
 
-```text
-cotrain_stage1_root/fold{k}/weak_oof.csv
-```
+Stage-2 Phase A remains report-only. Fresh Phase B uses all non-outer gold plus the independent fold-local image teacher. Strong image/report agreement gets high weight; conflict is suppressed; a very confident cross-fitted image prediction may receive a modest BCE weight when report confidence is near zero.
 
-Using all three weak-OOF files for every outer fold would leak outer-gold information indirectly and is rejected.
+Every Stage-2 fold writes `stage2_supervision.json`, including `zero_to_nonzero_weight` counts per pathology, so additional image-only supervision is measured rather than assumed.
 
-Stage-2 Phase A stays report-only so its inner fold remains a clean epoch selector. The fresh Phase-B model then includes the fold-`k` weak studies with image/report consensus targets. Those rows are safe because the Stage-1 fold-`k` model excluded both them and outer-gold fold `k`.
+Stage 2 intentionally does **not** write another `weak_oof.csv`.
 
-Stage 2 writes `best.pt` and outer `oof.csv`, but intentionally **does not write a new `weak_oof.csv`** because its image-teacher rows were used for training and are no longer OOF.
+## 6. OOF evaluation
 
-Run Stage-2 folds separately, again one run per fold.
-
-## 6. Evaluate and compare
+Primary `oof.csv` already uses submission-matched TTA. `oof_center.csv` is only a diagnostic comparison and must not be used to retroactively change the algorithm after looking at outer labels.
 
 ```bash
 rsna-knee evaluate \
   --train-csv /path/to/train.csv \
-  --oof runs/cotrain/fold0/oof.csv \
-        runs/cotrain/fold1/oof.csv \
-        runs/cotrain/fold2/oof.csv \
-  --compare-oof runs/model/fold0/oof.csv \
-                runs/model/fold1/oof.csv \
-                runs/model/fold2/oof.csv \
-  --out runs/cotrain/evaluation.json
+  --oof runs/stage2/fold0/oof.csv \
+        runs/stage2/fold1/oof.csv \
+        runs/stage2/fold2/oof.csv \
+  --out runs/stage2/evaluation.json
 ```
 
-Use paired bootstrap differences; do not infer an improvement from a tiny raw AUC change on 58 gold studies.
+Use paired bootstrap for controlled comparisons. Once an outer OOF comparison is used to choose the final competition method, treat the resulting score as **model-selection CV**, not a pristine independent generalization estimate.
 
-## 7. Submission inference
+## 7. Final inference
+
+A final inference config should declare the expected stage, for example:
+
+```yaml
+expected_checkpoint_stage: stage2
+```
+
+Then:
 
 ```bash
 rsna-knee infer \
-  --config configs/train.yaml \
-  --checkpoints runs/cotrain/fold0/best.pt \
-                runs/cotrain/fold1/best.pt \
-                runs/cotrain/fold2/best.pt \
+  --config configs/final_infer.yaml \
+  --checkpoints runs/stage2/fold0/best.pt \
+                runs/stage2/fold1/best.pt \
+                runs/stage2/fold2/best.pt \
   --out submission.csv
 ```
 
-Inference decodes each MRI series once per study, constructs all requested TTA views from that decode, and evaluates every fold model before releasing the batch. If projected multi-view runtime threatens the budget, it automatically falls back to the central slice view. It fails if even that projected path cannot finish safely.
+Inference rejects duplicate/missing folds, mixed checkpoint stages, mismatched architecture/stream order, and any checkpoint whose validation TTA differs from requested submission TTA. Runtime prediction is guarded batch-by-batch; if configured to allow it, a time-critical submission may fall back to the center view to guarantee completion.
 
 ## Kaggle templates
 
 ```text
-kaggle/audit_template.py      separate audit run
+kaggle/audit_template.py      separate CPU audit run
 kaggle/pretrain_template.py   separate SSL run
-kaggle/train_template.py      exactly one fold per run
-kaggle/submit_template.py     final one-pass submission run
+kaggle/train_template.py      exactly one Stage-1/Stage-2 fold per run
+kaggle/submit_template.py     final stage-validated submission run
 ```
 
 ## Methodological guarantees
 
-- report silence is not a negative label;
-- teacher confidence measures informativeness as well as calibration sample size;
-- missing official target cells remain unknown;
-- outer gold folds never choose their own epoch/model;
+- report silence is not converted into a negative;
+- finite official labels override weak labels cell-by-cell;
+- outer gold never selects its own epoch;
 - Phase B reinitializes before outer evaluation;
-- Stage-2 outer fold `k` can only use the Stage-1 fold-`k` weak teacher;
+- random-vs-SSL fold selection uses inner AUC only;
 - Stage-2 Phase A never uses the image teacher;
-- Stage-2 image-teacher rows enter Phase B and are never re-exported as OOF;
-- duplicate normalized reports stay inside held-out report-group boundaries;
-- BCE is normalized per pathology before macro averaging;
-- ranking-pair utilization is recorded per pathology;
-- missing sequence metadata stays unknown until DICOM backfill;
-- worker RNG is deterministic for fixed seeds/settings;
-- DICOM decoding has a bounded per-worker LRU cache;
-- TTA does not multiply DICOM reads;
-- model checkpoints self-describe the Transformer architecture;
+- Stage-2 outer fold `k` can only consume safe fold-`k` weak OOF predictions;
+- Stage-2 image-teacher rows are not re-exported as OOF;
+- validation TTA is predeclared and matches submission TTA;
+- planned-epoch BCE balances pathology supervision mass;
+- ranking/effective-supervision utilization is recorded per pathology;
+- normalized duplicate reports stay in the same held-out report group;
+- training and prediction have explicit wall-clock guards;
+- Stage-1 finish budgeting includes weak OOF generation;
+- DICOM decode failures are audited before long GPU work;
+- checkpoints self-describe stage/fold/architecture/TTA contract;
 - submission inference is image-only and Internet-independent.
 
-The repository does not claim leaderboard superiority until the real audit, smoke runs, Stage-1 ablations, and official OOF comparisons have been executed.
+The repository does **not** claim leaderboard superiority or a 9.5/10 empirical model score until real-data audit, smoke runs, OOF experiments, runtime measurements, and the actual competition submission have been executed.
