@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from rsna_knee.constants import SUBMISSION_COLUMNS, TARGETS
-from rsna_knee.data import make_balanced_gold_folds
+from rsna_knee.data import build_validation_manifest, make_balanced_gold_folds
 from rsna_knee.evaluation import macro_auc_from_arrays
 from rsna_knee.inference import validate_submission
 from rsna_knee.report_labels import predict_target
@@ -27,13 +27,18 @@ def test_report_negation():
     assert predict_target("No tear of the anterior cruciate ligament.", "ACL").probability < 0.2
 
 
-def test_gold_folds_and_submission():
+def _gold_rows(n=18):
     rows = []
-    for i in range(18):
+    for i in range(n):
         row = {"StudyInstanceUID": str(i), "Report": f"report {i}"}
         for j, target in enumerate(TARGETS):
             row[target] = int((i + j) % 3 == 0)
         rows.append(row)
+    return rows
+
+
+def test_gold_folds_and_submission():
+    rows = _gold_rows()
     rows.append({"StudyInstanceUID": "u", "Report": "unlabeled", **{t: np.nan for t in TARGETS}})
     folds = make_balanced_gold_folds(pd.DataFrame(rows), n_splits=3)
     assert folds.iloc[-1] == -1
@@ -42,6 +47,17 @@ def test_gold_folds_and_submission():
     assert int(gold_counts.max() - gold_counts.min()) <= 1
     submission = pd.DataFrame([["x", *([0.5] * 12)]], columns=SUBMISSION_COLUMNS)
     validate_submission(submission)
+
+
+def test_validation_manifest_exposes_outer_inner_and_training_roles():
+    df = pd.DataFrame(_gold_rows())
+    manifest = build_validation_manifest(df, outer_fold=0, n_splits=3, seed=2026, inner_fold=1)
+    assert len(manifest) == len(df)
+    assert set(manifest["role"]) == {"outer_validation", "inner_selection", "gold_train"}
+    assert set(manifest.loc[manifest["role"].eq("outer_validation"), "fold"]) == {0}
+    assert set(manifest.loc[manifest["role"].eq("inner_selection"), "fold"]) == {1}
+    assert set(manifest.loc[manifest["role"].eq("gold_train"), "fold"]) == {2}
+    assert manifest["StudyInstanceUID"].is_unique
 
 
 def test_symmetric_gold_labels_do_not_starve_a_fold():
