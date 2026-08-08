@@ -57,15 +57,10 @@ def choose_fold_candidate_root(
     stage1_source: str | Path | Iterable[str | Path],
     fold: int,
 ) -> tuple[Path, dict]:
-    """Choose a Stage-1 candidate using only the current fold's inner score.
-
-    This is the nested model-selection contract. Outer OOF AUC is deliberately
-    ignored, even if it is present in ``selection.json``. Random-init vs SSL (or
-    any future candidate methods) can therefore be selected independently for
-    outer fold ``k`` without using outer-fold labels.
-    """
+    """Choose a Stage-1 candidate using only the current fold's inner score."""
     candidates = []
     inner_fold = None
+    validation_offsets = None
     for order, root in enumerate(_candidate_roots(stage1_source)):
         fold_dir = root / f"fold{int(fold)}"
         selection_path = fold_dir / "selection.json"
@@ -90,6 +85,17 @@ def choose_fold_candidate_root(
             inner_fold = candidate_inner
         elif candidate_inner != inner_fold:
             raise ValueError("Stage-1 candidates used for nested selection have different inner folds")
+
+        offsets_raw = payload.get("validation_tta_offsets")
+        if not isinstance(offsets_raw, list) or not offsets_raw:
+            raise ValueError(
+                f"candidate {fold_dir} predates the validation-TTA contract; retrain it before Stage-2"
+            )
+        candidate_offsets = tuple(int(value) for value in offsets_raw)
+        if validation_offsets is None:
+            validation_offsets = candidate_offsets
+        elif candidate_offsets != validation_offsets:
+            raise ValueError("Stage-1 candidates were evaluated with different validation TTA policies")
         candidates.append((score, -order, root, payload))
 
     score, _, root, payload = max(candidates, key=lambda item: (item[0], item[1]))
@@ -100,6 +106,7 @@ def choose_fold_candidate_root(
         "inner_macro_auc": float(score),
         "n_candidates": len(candidates),
         "criterion": "inner_macro_auc_only",
+        "validation_tta_offsets": list(validation_offsets or ()),
     }
     return root, metadata
 
@@ -112,7 +119,6 @@ def load_fold_image_teacher(
     *,
     return_source: bool = False,
 ):
-    """Load exactly the weak OOF predictions safe for one outer fold."""
     if "crossfit_fold" not in df.columns:
         raise ValueError("crossfit_fold must be assigned before loading Stage-2 teacher")
     selected_root, source = choose_fold_candidate_root(stage1_source, fold)
@@ -146,13 +152,7 @@ def consensus_arrays(
     image_only_weight: float = 0.20,
     image_only_blend: float = 0.75,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Fuse independent image/report teachers while preserving uncertainty.
-
-    Strong report/image agreement receives high weight, direct conflict is
-    downweighted, and a very confident *cross-fitted* image teacher may provide a
-    modest pseudo-label when the report teacher is silent/low-confidence. The
-    latter is intentionally much weaker than agreement supervision.
-    """
+    """Fuse independent image/report teachers while preserving uncertainty."""
     report_p = np.asarray(report_p, np.float32)
     report_conf = np.asarray(report_conf, np.float32)
     image_p = np.asarray(image_p, np.float32)
