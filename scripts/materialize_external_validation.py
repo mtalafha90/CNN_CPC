@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import io
 import json
+import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -18,6 +20,7 @@ SOURCES = [
         "study_uid": "EXTVAL_ACL_001",
         "series_uid": "EXTVAL_ACL_001_SAG_PDW",
         "filename": "acl_tear_pdw.jpg",
+        "commons_file": "MRT_VKB-Riss_PDW.jpg",
         "image_url": "https://upload.wikimedia.org/wikipedia/commons/5/51/MRT_VKB-Riss_PDW.jpg",
         "source_page": "https://commons.wikimedia.org/wiki/File:MRT_VKB-Riss_PDW.jpg",
         "author": "Hellerhoff",
@@ -32,6 +35,7 @@ SOURCES = [
         "study_uid": "EXTVAL_MEDMEN_001",
         "series_uid": "EXTVAL_MEDMEN_001_COR_PDW",
         "filename": "medial_meniscus_tear_pdw.jpg",
+        "commons_file": "Proton density MRI of a grade 2 medial meniscal tear.jpg",
         "image_url": "https://upload.wikimedia.org/wikipedia/commons/2/25/Proton_density_MRI_of_a_grade_2_medial_meniscal_tear.jpg",
         "source_page": "https://commons.wikimedia.org/wiki/File:Proton_density_MRI_of_a_grade_2_medial_meniscal_tear.jpg",
         "author": "Nicolas Lefevre, Jean Francois Naouri, Serge Herman, Antoine Gerometta, Shahnaz Klouche, Yoann Bohu",
@@ -46,6 +50,7 @@ SOURCES = [
         "study_uid": "EXTVAL_BAKER_001",
         "series_uid": "EXTVAL_BAKER_001_AX_MR",
         "filename": "baker_cyst.jpg",
+        "commons_file": "MRT_Bakerzyste.jpg",
         "image_url": "https://upload.wikimedia.org/wikipedia/commons/3/32/MRT_Bakerzyste.jpg",
         "source_page": "https://commons.wikimedia.org/wiki/File:MRT_Bakerzyste.jpg",
         "author": "Hellerhoff",
@@ -60,6 +65,7 @@ SOURCES = [
         "study_uid": "EXTVAL_REFERENCE_001",
         "series_uid": "EXTVAL_REFERENCE_001_SAG_PDFS",
         "filename": "reference_sagittal_pdfs.jpg",
+        "commons_file": "Knee MRI PD TSE FS Sagittal.jpg",
         "image_url": "https://upload.wikimedia.org/wikipedia/commons/d/dc/Knee_MRI_PD_TSE_FS_Sagittal.jpg",
         "source_page": "https://commons.wikimedia.org/wiki/File:Knee_MRI_PD_TSE_FS_Sagittal.jpg",
         "author": "Ptrump16",
@@ -73,10 +79,48 @@ SOURCES = [
 ]
 
 
-def _download(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "CNN-CPC-validation-fixture/1.0"})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        return response.read()
+def _candidate_urls(source: dict) -> list[str]:
+    # Wikimedia's upload CDN may rate-limit cloud-runner IPs. Start from the
+    # Commons Special:Redirect endpoint, which resolves the canonical file, and
+    # retain the direct upload URL as a fallback.
+    escaped = urllib.parse.quote(source["commons_file"], safe="")
+    return [
+        f"https://commons.wikimedia.org/wiki/Special:Redirect/file/{escaped}?width=1024",
+        f"https://commons.wikimedia.org/wiki/Special:Redirect/file/{escaped}",
+        source["image_url"],
+    ]
+
+
+def _download(source: dict) -> bytes:
+    headers = {
+        "User-Agent": "CNN-CPC-validation-fixture/0.4 (+https://github.com/mtalafha90/CNN_CPC)",
+        "Accept": "image/avif,image/webp,image/apng,image/jpeg,image/png,image/*,*/*;q=0.8",
+        "Referer": source["source_page"],
+    }
+    errors: list[str] = []
+    for url in _candidate_urls(source):
+        for attempt in range(4):
+            request = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    payload = response.read()
+                    content_type = str(response.headers.get("Content-Type", "")).lower()
+                if len(payload) < 1024:
+                    raise RuntimeError(f"download from {url} is unexpectedly small ({len(payload)} bytes)")
+                if "image" not in content_type and payload[:2] not in {b"\xff\xd8", b"\x89P"}:
+                    raise RuntimeError(f"download from {url} is not an image ({content_type})")
+                return payload
+            except urllib.error.HTTPError as exc:
+                errors.append(f"{url} attempt {attempt + 1}: HTTP {exc.code}")
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                if exc.code not in {429, 500, 502, 503, 504}:
+                    break
+                delay = float(retry_after) if retry_after and retry_after.isdigit() else min(15.0, 2.0 ** attempt)
+                time.sleep(delay)
+            except (urllib.error.URLError, TimeoutError, RuntimeError) as exc:
+                errors.append(f"{url} attempt {attempt + 1}: {type(exc).__name__}: {exc}")
+                time.sleep(min(15.0, 2.0 ** attempt))
+    raise RuntimeError("all Wikimedia download routes failed:\n" + "\n".join(errors))
 
 
 def _orientation(plane: str) -> list[float]:
@@ -102,7 +146,7 @@ def _write_dicom(jpeg_bytes: bytes, destination: Path, source: dict) -> None:
     image = Image.open(io.BytesIO(jpeg_bytes)).convert("L")
     image = ImageOps.fit(image, (384, 384))
     base = np.asarray(image, dtype=np.uint16) * np.uint16(257)
-    # The public files are single published slices, not original DICOM series.
+    # These public files are single published slices, not original DICOM series.
     # Repeat the same slice to exercise the production multi-frame DICOM path.
     frames = np.stack([base] * 7, axis=0)
 
@@ -199,7 +243,7 @@ def main() -> None:
         jpg_path = source_dir / source["filename"]
         dcm_path = root / "validation_images" / source["study_uid"] / source["series_uid"] / "image.dcm"
         if args.overwrite or not jpg_path.is_file():
-            jpeg_bytes = _download(source["image_url"])
+            jpeg_bytes = _download(source)
             jpg_path.write_bytes(jpeg_bytes)
         else:
             jpeg_bytes = jpg_path.read_bytes()
