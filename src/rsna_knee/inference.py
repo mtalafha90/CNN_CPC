@@ -97,12 +97,7 @@ def _central_view_index(offsets: list[int]) -> int:
 
 @torch.no_grad()
 def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> pd.DataFrame:
-    """One-pass image-only inference.
-
-    Each DICOM series is decoded once per study. All requested TTA views are
-    produced from that decoded volume, and all fold models consume the same CPU
-    batch before it is released.
-    """
+    """One-pass image-only inference under a strict wall-clock budget."""
     validate_competition_config(config, purpose="infer")
     budget = RuntimeBudget(
         max_hours=float(config.get("runtime_budget_hours", 8.5)),
@@ -137,15 +132,14 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
         **runtime.loader_kwargs(seed=int(config.get("seed", 2026)) + 900_000),
     )
 
-    # Three ConvNeXt-Tiny fold models comfortably fit on a normal Kaggle GPU;
-    # keeping them resident lets one decoded batch serve every checkpoint.
     models = [load_checkpoint(path, runtime.device)[0] for path in paths]
     view_indices = list(range(len(offsets)))
     central = _central_view_index(offsets)
     probability_rows = []
     uid_rows = []
-    batch_times = []
+    steady_batch_times: list[float] = []
     auto_tta = bool(config.get("auto_tta_budget", True))
+    tta_fallback = False
 
     for batch_index, batch in enumerate(loader):
         batch_start = time.monotonic()
@@ -154,8 +148,6 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
         if volumes.ndim != 7:
             raise RuntimeError("inference dataset must return [B,V,K,S,C,H,W]")
 
-        # On the first batch benchmark all requested views. If projected runtime
-        # is too close to the budget, use only the central view for every study.
         per_view_model = []
         for view in view_indices:
             model_probs = []
@@ -167,38 +159,46 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
             per_view_model.append(torch.stack(model_probs).mean(dim=0))
 
         elapsed = time.monotonic() - batch_start
-        batch_times.append(elapsed)
+        fallback_this_batch = False
         if batch_index == 0 and auto_tta and len(view_indices) > 1:
-            estimated_batch = max(elapsed, 1e-3)
-            projected = estimated_batch * len(loader) * 1.35
+            projected = max(elapsed, 1e-3) * len(loader) * 1.35
             if projected + budget.reserve_seconds > budget.remaining_seconds:
                 print(
                     f"[budget] projected multi-view inference {projected/3600:.2f} h; "
-                    "falling back to central-view TTA"
+                    "falling back to central view"
                 )
-                view_indices = [central]
                 probability = per_view_model[central]
+                view_indices = [central]
+                tta_fallback = True
+                fallback_this_batch = True
             else:
                 probability = torch.stack(per_view_model).mean(dim=0)
+        elif len(view_indices) == 1:
+            probability = per_view_model[0]
         else:
-            if len(view_indices) == 1:
-                # per_view_model follows current view_indices after the first batch.
-                probability = per_view_model[0]
-            else:
-                probability = torch.stack(per_view_model).mean(dim=0)
+            probability = torch.stack(per_view_model).mean(dim=0)
 
         probability_rows.append(probability.cpu().numpy())
         uid_rows.extend(list(batch["study_uid"]))
 
-        mean_batch = float(np.mean(batch_times[-5:]))
+        # The first fallback batch deliberately benchmarks every view, so its
+        # duration is not representative of subsequent center-only batches.
+        if not fallback_this_batch:
+            steady_batch_times.append(elapsed)
         remaining_batches = len(loader) - batch_index - 1
-        if remaining_batches and not budget.can_start(mean_batch * remaining_batches * 1.25):
-            raise RuntimeError(
-                "inference cannot finish safely inside the configured runtime budget; "
-                "reduce TTA, batch size overhead, or preprocessing cost before submission"
-            )
+        if remaining_batches and steady_batch_times:
+            mean_batch = float(np.mean(steady_batch_times[-5:]))
+            if not budget.can_start(mean_batch * remaining_batches * 1.25):
+                raise RuntimeError(
+                    "inference cannot finish safely inside the configured runtime budget; "
+                    "reduce preprocessing cost or inference batch overhead before submission"
+                )
 
-    probabilities = np.concatenate(probability_rows, axis=0) if probability_rows else np.empty((0, len(TARGETS)))
+    probabilities = (
+        np.concatenate(probability_rows, axis=0)
+        if probability_rows
+        else np.empty((0, len(TARGETS)))
+    )
     if not np.isfinite(probabilities).all():
         raise RuntimeError("non-finite probabilities")
     submission = pd.DataFrame(probabilities, columns=TARGETS)
@@ -206,7 +206,7 @@ def infer_checkpoints(data_root: str | Path, checkpoint_paths, config: dict) -> 
     validate_submission(submission)
     print(
         f"[runtime] inference elapsed={budget.elapsed_seconds/3600:.2f} h "
-        f"budget={budget.max_hours:.2f} h"
+        f"budget={budget.max_hours:.2f} h tta_fallback={tta_fallback}"
     )
     return submission[SUBMISSION_COLUMNS]
 
