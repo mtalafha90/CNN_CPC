@@ -15,9 +15,6 @@ requested_gpus: 1
 runtime_budget_hours: 8.5
 runtime_reserve_minutes: 10
 submission_filename: submission.csv
-# External pretrained weights remain OFF unless the competition-specific rules
-# are explicitly verified to allow them. Competition-data SSL is permitted by
-# this repository's conservative policy because it uses only supplied training data.
 allow_external_pretrained: false
 pretrained: false
 
@@ -36,9 +33,7 @@ transformer_heads: 8
 transformer_ff_mult: 2.0
 pathology_layers: 1
 
-# In-domain SSL. Run this in a separate <=8.5 h notebook/job:
-#   rsna-knee pretrain --config configs/train.yaml
-# Then attach/cache the generated checkpoint and set the path below.
+# In-domain SSL. Run this in a separate <=8.5 h notebook/job.
 ssl_encoder_checkpoint: null
 ssl_output_dir: runs/ssl
 ssl_epochs: 4
@@ -51,14 +46,15 @@ ssl_lr: 0.0002
 ssl_weight_decay: 0.0001
 ssl_noise_std: 0.01
 
-# Nested optimization. The budget guard can stop Phase A early while preserving
-# enough estimated time for final retraining and outer/weak evaluation.
+# Nested optimization. The budget guard may stop Phase A early while preserving
+# enough estimated time for Phase B and evaluation.
 lr: 0.0001
 min_lr: 0.000001
 weight_decay: 0.0001
 epochs: 8
 patience: 2
 grad_clip: 1.0
+post_train_evaluation_epoch_fraction: 0.75
 
 # Weak supervision / PU.
 calibrate_teacher: true
@@ -74,10 +70,9 @@ rank_positive_threshold: 0.75
 rank_negative_threshold: 0.25
 
 # Leakage-safe Stage 2.
-# Leave null for Stage 1. For Stage 2 set this to the Stage-1 output root, e.g.
-# /kaggle/input/<stage1-models>/runs/model . Outer fold k will ONLY read
-# fold{k}/weak_oof.csv, whose generating model excluded both outer-gold fold k
-# and those weak studies.
+# Leave null for Stage 1. For Stage 2 set this to the Stage-1 output root.
+# Outer fold k reads ONLY fold{k}/weak_oof.csv. Phase-A epoch selection remains
+# report-only; the fold-local image teacher enters only the fresh Phase-B retrain.
 cotrain_stage1_root: null
 cotrain_positive_threshold: 0.80
 cotrain_negative_threshold: 0.20
@@ -109,12 +104,16 @@ auto_tta_budget: true
 preflight_before_train: true
 preflight_sample_size: 24
 preflight_max_decode_failure_rate: 0.05
+preflight_max_file_decode_failure_rate: 0.05
 strict_dicom: false
 strict_dicom_inference: true
 series_cache_mb_per_worker: 256
 
-# Full audit uses CPU processes in a separate run.
+# Full audit uses CPU processes in a separate run. The global file-failure rate
+# and any individual series with substantial partial corruption are hard gates.
 audit_workers: 4
+audit_max_global_file_decode_failure_rate: 0.02
+audit_max_series_file_decode_failure_rate: 0.20
 
 # Evaluation.
 n_bootstrap: 2000
