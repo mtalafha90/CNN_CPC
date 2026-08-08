@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Iterator
 
 import numpy as np
 from torch.utils.data import Sampler
 
+DEFAULT_MAX_BATCHES_PER_EPOCH = 300
+ENV_MAX_BATCHES = "RSNA_MAX_TRAIN_BATCHES"
+
 
 class TwoPoolBatchSampler(Sampler[list[int]]):
-    """Deterministically mix trusted/general studies with a hard epoch-work cap."""
+    """Deterministically mix trusted/general studies with a hard epoch-work cap.
+
+    ``max_batches`` can be supplied by library callers. The production CLI sets
+    ``RSNA_MAX_TRAIN_BATCHES`` from ``max_train_batches_per_epoch``. Direct API
+    callers that do neither still receive the conservative 300-batch ceiling.
+    """
 
     def __init__(
         self,
@@ -29,8 +38,13 @@ class TwoPoolBatchSampler(Sampler[list[int]]):
             raise ValueError("batch_size must be positive")
         if not 0.0 <= trusted_fraction <= 1.0:
             raise ValueError("trusted_fraction must be in [0,1]")
-        if max_batches is not None and int(max_batches) < 1:
-            raise ValueError("max_batches must be >=1 or null")
+
+        if max_batches is None:
+            env_value = os.environ.get(ENV_MAX_BATCHES)
+            max_batches = int(env_value) if env_value else DEFAULT_MAX_BATCHES_PER_EPOCH
+        if int(max_batches) < 1:
+            raise ValueError("max_batches must be >=1")
+
         self.trusted = np.flatnonzero(mask)
         self.general = np.flatnonzero(~mask)
         if trusted_fraction > 0 and len(self.trusted) == 0:
@@ -44,7 +58,7 @@ class TwoPoolBatchSampler(Sampler[list[int]]):
         self.drop_last = bool(drop_last)
         self.epoch = 0
         full_batches = self.n // self.batch_size if self.drop_last else math.ceil(self.n / self.batch_size)
-        self.n_batches = min(full_batches, int(max_batches)) if max_batches is not None else full_batches
+        self.n_batches = min(full_batches, int(max_batches))
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
