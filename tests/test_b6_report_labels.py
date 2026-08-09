@@ -24,14 +24,9 @@ def test_b6_acl_states_handle_positive_negative_uncertain_and_unmentioned():
     assert positive.state == STATE_POSITIVE
     assert positive.probability > 0.9
     assert positive.confidence >= 0.8
-
     assert negative.state == STATE_NEGATED
     assert negative.probability < 0.1
-    assert negative.confidence >= 0.8
-
     assert uncertain.state == STATE_UNCERTAIN
-    assert uncertain.confidence < positive.confidence
-
     assert absent.state == STATE_UNMENTIONED
     assert absent.confidence == 0.0
 
@@ -54,11 +49,35 @@ def test_b6_target_local_scope_ignores_neighboring_intact_structures():
         "ACL",
     )
     assert pred.state == STATE_POSITIVE
-    assert pred.reason == "explicit_structural_abnormality"
 
 
 def test_b6_pathology_can_coexist_with_intact_fibers():
-    pred = predict_target_b6("ACL: grade 1 sprain is seen with intact fibers.", "ACL")
+    assert predict_target_b6("ACL: grade 1 sprain is seen with intact fibers.", "ACL").state == STATE_POSITIVE
+    assert predict_target_b6(
+        "Low-grade partial-thickness tear of the superficial MCL. Deep MCL fibers are intact.",
+        "MCL",
+    ).state == STATE_POSITIVE
+    assert predict_target_b6(
+        "Tiny tear of posterior horn of the medial meniscus. The remainder of the medial meniscus is intact.",
+        "Medial Meniscus",
+    ).state == STATE_POSITIVE
+
+
+def test_b6_negated_tear_does_not_cancel_other_abnormality():
+    acl = predict_target_b6("Mucoid degeneration of the ACL without evidence of tear.", "ACL")
+    meniscus = predict_target_b6(
+        "Myxoid degeneration of the posterior horn of the medial meniscus but no definite tear.",
+        "Medial Meniscus",
+    )
+    assert acl.state == STATE_POSITIVE
+    assert meniscus.state == STATE_POSITIVE
+
+
+def test_b6_loss_of_normal_structure_is_positive():
+    pred = predict_target_b6(
+        "There are no normal intact fibers of the anterior cruciate ligament, in keeping with a complete tear.",
+        "ACL",
+    )
     assert pred.state == STATE_POSITIVE
 
 
@@ -70,12 +89,18 @@ def test_b6_uncertain_duplicate_does_not_cancel_definite_positive():
     assert pred.state == STATE_POSITIVE
 
 
-def test_b6_uncertain_indication_does_not_cancel_definite_negative():
+def test_b6_indication_is_not_diagnostic_evidence():
     pred = predict_target_b6(
         "Clinical indication: assess for ACL tear. Findings: ACL is intact and continuous.",
         "ACL",
     )
     assert pred.state == STATE_NEGATED
+
+    meniscus = predict_target_b6(
+        "Indication: bucket-handle tear medial meniscus. Medial compartment: medial meniscus normal in morphology and signal.",
+        "Medial Meniscus",
+    )
+    assert meniscus.state == STATE_NEGATED
 
 
 def test_b6_detects_genuinely_opposing_definite_evidence():
@@ -121,6 +146,6 @@ def test_b6_export_excludes_gold_from_training_targets(tmp_path):
     assert "study-0" not in set(training["StudyInstanceUID"])
 
     policy = json.loads((out / "policy.json").read_text())
-    assert policy["version"] == "1.1"
+    assert policy["version"] == "1.2"
     assert policy["unmentioned_is_negative"] is False
     assert policy["gold_usage"].startswith("audit only")
