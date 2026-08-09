@@ -1,6 +1,6 @@
 # Modeling strategy
 
-> **Snapshot: 2026-08-09.** Canonical measured results are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). B5 image-report representation learning is currently running; it has no OOF score yet.
+> **Snapshot: 2026-08-09.** Canonical measured results are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). B5 image-report representation training has completed all four predefined epochs; its frozen B4 probe is pending, so it has no OOF score yet.
 
 ## Core principle
 
@@ -21,9 +21,9 @@ The verified release contains 4,407 training studies, of which only 58 are fully
 | B4.2 grouped policies | `0.4901` | still too rigid/noisy |
 | B4.3 two-way CV selector | `0.4966` | selector stabilization did not help |
 | B1+B4 rank 50:50 | `0.5167` | highest numerical score, statistically tied with B4 |
-| B5 image-report SSL | pending | running |
+| B5 image-report SSL | pending | representation training complete; frozen probe pending |
 
-The main strategic conclusion is that the next useful lever is **representation learning from the report-only corpus**, not more downstream policy search on the same 58 gold labels.
+The main strategic conclusion is that the current useful lever is **representation quality from the report-only corpus**, not more downstream policy search on the same 58 gold labels.
 
 ## 1. Reports are training supervision, not inference inputs
 
@@ -181,11 +181,11 @@ P(ensemble > B4)              = 0.5544
 
 Therefore the rank ensemble is kept as a fixed candidate but is not claimed to improve B4. No weight search is permitted on these 58 labels.
 
-## 12. B5 strategy: learn report semantics without hard pseudo-labels
+## 12. B5 strategy and completed pretraining
 
 B5 changes the representation rather than the downstream classifier.
 
-Only the 4,349 report-only studies are used for B5 pretraining; all 58 gold studies are excluded.
+Only the 4,349 report-only studies were used for B5 pretraining; all 58 gold studies were excluded.
 
 Text representation:
 
@@ -205,13 +205,30 @@ strong SSL image-image objective
 + cosine report alignment
 ```
 
-A report embedding queue supplies additional semantic negatives for small MRI batches. Exact duplicate normalized report hashes are masked as false negatives.
+A report embedding queue of 256 supplies additional semantic negatives for small MRI batches. Exact duplicate normalized report hashes are masked as false negatives.
 
-No external language model and no external image weights are used. The report branch is discarded after training; the saved artifact is an MRI encoder.
+No external language model and no external image weights were used. The report branch is discarded after training; the saved artifact is an MRI encoder.
 
-## 13. Fixed B5 evaluation rule
+Completed B5 run:
 
-B5 must first be tested with the **original B4 probe unchanged**:
+```text
+checkpoint              runs/b5_report_ssl/b5_encoder.pt
+epochs                  4
+batches               4000
+study draws          16000
+active 2.5D examples 158886
+total loss    5.5204 -> 4.7049
+image loss    3.0068 -> 2.8937
+report NCE    4.6031 -> 3.2901
+report cosine 0.8015 -> 0.5924
+budget limited          false
+```
+
+All logged objectives improved monotonically. This is stable optimization evidence, not yet a gold-label performance result.
+
+## 13. Fixed B5 evaluation rule — current next step
+
+B5 must now be tested with the **original B4 probe unchanged**:
 
 ```text
 B4 encoder -> B4 frozen probe
@@ -219,7 +236,7 @@ versus
 B5 encoder -> same B4 frozen probe
 ```
 
-This isolates representation quality. Do not modify B4 feature modes, PCA grid, logistic grid, target groupings or ensemble weights for the first B5 comparison.
+This isolates representation quality. Do not modify B4 feature modes, PCA grid, logistic grid, target groupings, ensemble weights, or B5 epoch count based on the upcoming outer OOF and then reuse the same OOF as a pristine estimate.
 
 ## 14. Validation campaign caveat
 
