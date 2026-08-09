@@ -2,7 +2,7 @@
 
 `CNN_CPC` is a production-oriented PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The project is built around the released supervision regime: 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and macro ROC AUC across 12 pathologies.
 
-> **Current experiment snapshot — 2026-08-09:** B4 frozen strong-SSL features + target-wise PCA/logistic regression is the best clean standalone point estimate (`0.5137567459`). A fixed equal-weight B1+B4 rank ensemble is numerically highest (`0.5167`) but is statistically tied with B4 (`P=0.5544`). **B5 image-report representation learning is currently running; no B5 AUC is available yet.**
+> **Current experiment snapshot — 2026-08-09:** B4 frozen strong-SSL features + target-wise PCA/logistic regression is the best clean standalone point estimate (`0.5137567459`). A fixed equal-weight B1+B4 rank ensemble is numerically highest (`0.5167`) but is statistically tied with B4 (`P=0.5544`). **B5 image-report representation training completed all four predefined epochs cleanly; its frozen gold probe is now pending, so no B5 AUC is available yet.**
 
 The canonical measured-results table is [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md).
 
@@ -80,7 +80,7 @@ strong SSL encoder frozen
 -> mean/std/max stream features
 -> target-specific PCA + logistic regression
 
-B5 (running)
+B5 (representation training complete; frozen probe pending)
 strong SSL encoder
 + competition reports represented by TF-IDF -> TruncatedSVD
 + image-image SSL
@@ -107,7 +107,7 @@ Reports are training supervision only. The hidden/test inference path remains MR
 | B4.3 | two-way-CV target selector | `0.4966083942` | rejected |
 | B1+B4 raw | fixed 50:50 probability average | `0.5050` | rejected |
 | B1+B4 rank | fixed 50:50 rank average | `0.5167` | numerically best; tied with B4 |
-| **B5** | image-report representation learning | pending | **running** |
+| **B5** | image-report representation learning | pending | **training complete; frozen probe pending** |
 
 ### Current statistical interpretation
 
@@ -135,9 +135,9 @@ B4's target-wise inner selections are unstable because each inner fold contains 
 
 The next scientific question is therefore representation quality, not another downstream selector.
 
-## B5 — current running experiment
+## B5 — representation training complete
 
-B5 uses only the 4,349 report-only competition studies for representation training. The 58 gold studies are excluded completely.
+B5 used only the 4,349 report-only competition studies for representation training. The 58 gold studies were excluded completely.
 
 Text branch:
 
@@ -157,18 +157,28 @@ strong competition-only SSL ConvNeXt
 -> image-report alignment objective
 ```
 
-No external language model and no external pretrained image weights are used. The report branch is discarded after training; the saved downstream artifact is an MRI encoder.
+No external language model and no external pretrained image weights were used. The report branch is discarded after training; the saved downstream artifact is an MRI encoder.
 
-Run:
+Completed checkpoint:
 
-```bash
-rsna-knee-b5 \
-  --config configs/train_local_ssl_strong.yaml \
-  --checkpoint runs/ssl_strong/ssl_encoder.pt \
-  --out-root runs/b5_report_ssl
+```text
+runs/b5_report_ssl/b5_encoder.pt
 ```
 
-After B5 finishes, the first evaluation deliberately reuses the **unchanged original B4 probe**. See [`docs/B5_IMAGE_REPORT_SSL.md`](docs/B5_IMAGE_REPORT_SSL.md).
+Training summary:
+
+```text
+epochs                  4
+batches               4000
+study draws          16000
+active 2.5D examples 158886
+loss          5.5204 -> 4.7049
+report NCE    4.6031 -> 3.2901
+report cosine 0.8015 -> 0.5924
+budget limited          false
+```
+
+The optimization was stable and monotonic, but the B5 representation has **not yet been assigned a macro AUC**. The first evaluation deliberately reuses the unchanged original B4 probe. See [`docs/B5_IMAGE_REPORT_SSL.md`](docs/B5_IMAGE_REPORT_SSL.md).
 
 ## Installation
 
@@ -213,6 +223,14 @@ rsna-knee-b4 nested \
   --features runs/b4_frozen_ssl/gold_features.npz \
   --out-root runs/b4_frozen_ssl \
   --n-bootstrap 5000
+
+# B5 frozen probe — current next step
+mkdir -p runs/b5_frozen_probe
+rsna-knee-b4 extract \
+  --config configs/train_local_ssl_strong.yaml \
+  --checkpoint runs/b5_report_ssl/b5_encoder.pt \
+  --split train --scope gold \
+  --out runs/b5_frozen_probe/gold_features.npz
 ```
 
 ## Documentation map
@@ -247,6 +265,7 @@ Do not:
 - select target-specific post-hoc model winners from outer OOF;
 - create further B4 selector variants from observed outer results;
 - report a B5 score before its fixed frozen probe completes;
+- choose extra B5 epochs after seeing gold OOF and then treat the same OOF as pristine;
 - claim leaderboard superiority without an actual competition submission result.
 
 ## Competition execution policy
