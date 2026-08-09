@@ -1,4 +1,10 @@
-"""In-domain self-supervised pretraining on non-gold knee MRI studies."""
+"""In-domain self-supervised pretraining on non-gold knee MRI studies.
+
+The SSL path deliberately excludes all gold studies so outer-fold validation
+images are never seen by the representation learner.  Version 0.6 adds
+multi-position sequence sampling and stronger coverage diagnostics while keeping
+all pretraining data inside the competition training corpus.
+"""
 
 from __future__ import annotations
 
@@ -41,6 +47,60 @@ class MRIRepresentationLearner(nn.Module):
         )
 
 
+def ssl_position_indices(n_slices: int, positions_per_stream: int) -> torch.Tensor:
+    """Return deterministic distributed indices over the sampled 2.5D stack.
+
+    The dataset already applies stochastic centre jitter/gap and MRI-consistent
+    augmentation.  SSL therefore samples several spatially distributed triplets
+    from each available sequence rather than using only the middle triplet.
+    """
+    n_slices = int(n_slices)
+    positions_per_stream = int(positions_per_stream)
+    if n_slices < 1 or positions_per_stream < 1:
+        raise ValueError("n_slices and positions_per_stream must be >=1")
+    count = min(n_slices, positions_per_stream)
+    if count == 1:
+        return torch.tensor([n_slices // 2], dtype=torch.long)
+    values = torch.linspace(0, n_slices - 1, steps=count).round().long()
+    return torch.unique_consecutive(values)
+
+
+def _ssl_examples(volumes: torch.Tensor, present: torch.Tensor, positions_per_stream: int):
+    """Expand [B,K,S,C,H,W] into active multi-position SSL examples."""
+    if volumes.ndim != 6:
+        raise ValueError(f"expected SSL volumes [B,K,S,C,H,W], got {tuple(volumes.shape)}")
+    b, k, s, c, h, w = volumes.shape
+    if present.shape != (b, k):
+        raise ValueError(f"present mask shape {tuple(present.shape)} != {(b, k)}")
+
+    positions = ssl_position_indices(s, positions_per_stream).to(volumes.device)
+    p = int(positions.numel())
+    selected = volumes.index_select(2, positions)
+
+    active = present.to(dtype=torch.bool).unsqueeze(-1).expand(b, k, p).reshape(-1)
+    x = selected.reshape(b * k * p, c, h, w)[active]
+
+    stream_idx = (
+        torch.arange(k, device=volumes.device)
+        .view(1, k, 1)
+        .expand(b, k, p)
+        .reshape(-1)[active]
+    )
+    study_ids = (
+        torch.arange(b, device=volumes.device)
+        .view(b, 1, 1)
+        .expand(b, k, p)
+        .reshape(-1)[active]
+    )
+    position_idx = (
+        torch.arange(p, device=volumes.device)
+        .view(1, 1, p)
+        .expand(b, k, p)
+        .reshape(-1)[active]
+    )
+    return x, stream_idx, study_ids, position_idx, positions
+
+
 def _contrastive_same_study(z: torch.Tensor, study_ids: torch.Tensor, temperature: float = 0.15) -> torch.Tensor:
     if z.shape[0] < 2:
         return z.sum() * 0.0
@@ -72,12 +132,18 @@ def pretrain_ssl(config: dict) -> Path:
     series = load_series_csv(root / config.get("train_series_csv", "train_series.csv"))
     series, _ = backfill_series_metadata(series, root, split="train")
     index = build_series_index(series, non_gold, mode="dual")
+
+    ssl_n_slices = int(config.get("ssl_n_slices", 5))
+    positions_per_stream = int(config.get("ssl_positions_per_stream", 1))
+    if positions_per_stream < 1 or positions_per_stream > ssl_n_slices:
+        raise ValueError("ssl_positions_per_stream must be in [1, ssl_n_slices]")
+
     ds = KneeStudyDataset(
         non_gold,
         index,
         DatasetConfig(
             data_root=str(root), split="train",
-            n_slices=int(config.get("ssl_n_slices", 5)),
+            n_slices=ssl_n_slices,
             image_size=int(config.get("image_size", 224)),
             noise_std=float(config.get("ssl_noise_std", 0.01)),
             slice_dropout=0.0,
@@ -94,9 +160,10 @@ def pretrain_ssl(config: dict) -> Path:
         ),
         train=True,
     )
+    ssl_batch_size = int(config.get("ssl_batch_size", 4))
     loader = DataLoader(
         ds,
-        batch_size=int(config.get("ssl_batch_size", 4)),
+        batch_size=ssl_batch_size,
         shuffle=True,
         drop_last=True,
         **runtime.loader_kwargs(seed=int(config.get("seed", 2026)) + 700_000),
@@ -112,8 +179,13 @@ def pretrain_ssl(config: dict) -> Path:
         lr=float(config.get("ssl_lr", 2e-4)),
         weight_decay=float(config.get("ssl_weight_decay", 1e-4)),
     )
-    scaler = make_scaler(runtime)
     epochs = int(config.get("ssl_epochs", 4))
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=max(1, epochs),
+        eta_min=float(config.get("ssl_min_lr", 1e-6)),
+    )
+    scaler = make_scaler(runtime)
     max_batches = int(config.get("ssl_max_batches_per_epoch", 300))
     if max_batches < 1:
         raise ValueError("ssl_max_batches_per_epoch must be >=1")
@@ -126,6 +198,10 @@ def pretrain_ssl(config: dict) -> Path:
     history = []
     epoch_times = []
     budget_exhausted = False
+    total_study_draws = 0
+    total_active_examples = 0
+    total_batches = 0
+
     for epoch in range(epochs):
         if epoch_times:
             estimate = float(torch.tensor(epoch_times).median().item())
@@ -135,6 +211,9 @@ def pretrain_ssl(config: dict) -> Path:
         epoch_start = time.monotonic()
         model.train()
         total, steps = 0.0, 0
+        epoch_study_draws = 0
+        epoch_active_examples = 0
+
         for batch_index, batch in enumerate(loader):
             if batch_index >= max_batches:
                 break
@@ -142,15 +221,17 @@ def pretrain_ssl(config: dict) -> Path:
                 budget_exhausted = True
                 print("[budget] stopping SSL batches before the wall-clock reserve")
                 break
+
             volumes = batch["volumes"].to(runtime.device, non_blocking=True)
             present = batch["present"].to(runtime.device, non_blocking=True)
-            b, k, s, c, h, w = volumes.shape
-            active = present.reshape(-1) > 0
-            if int(active.sum().item()) < 2:
+            x, stream_idx, study_ids, _, _ = _ssl_examples(
+                volumes,
+                present,
+                positions_per_stream=positions_per_stream,
+            )
+            if int(x.shape[0]) < 2:
                 continue
-            x = volumes[:, :, s // 2].reshape(b * k, c, h, w)[active]
-            stream_idx = torch.arange(k, device=runtime.device).repeat(b)[active]
-            study_ids = torch.arange(b, device=runtime.device).repeat_interleave(k)[active]
+
             plane = PLANE_LABELS.to(runtime.device)[stream_idx]
             sequence = SEQUENCE_LABELS.to(runtime.device)[stream_idx]
 
@@ -165,18 +246,29 @@ def pretrain_ssl(config: dict) -> Path:
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+
             total += float(loss.item())
             steps += 1
+            epoch_study_draws += int(volumes.shape[0])
+            epoch_active_examples += int(x.shape[0])
 
         epoch_seconds = time.monotonic() - epoch_start
         epoch_times.append(epoch_seconds)
         if steps > 0:
+            scheduler.step()
+            total_study_draws += epoch_study_draws
+            total_active_examples += epoch_active_examples
+            total_batches += steps
             row = {
                 "epoch": epoch + 1,
                 "loss": total / steps,
+                "lr": float(optimizer.param_groups[0]["lr"]),
                 "epoch_seconds": epoch_seconds,
                 "batches": int(steps),
                 "max_batches": int(max_batches),
+                "study_draws": int(epoch_study_draws),
+                "active_2p5d_examples": int(epoch_active_examples),
+                "positions_per_stream": int(positions_per_stream),
                 "budget_limited": bool(budget_exhausted),
             }
             history.append(row)
@@ -186,6 +278,17 @@ def pretrain_ssl(config: dict) -> Path:
 
     if not history:
         raise RuntimeError("SSL did not complete one training batch inside the runtime budget")
+
+    coverage = {
+        "non_gold_studies": int(len(non_gold)),
+        "total_study_draws": int(total_study_draws),
+        "approx_corpus_passes": float(total_study_draws / max(len(non_gold), 1)),
+        "total_batches": int(total_batches),
+        "total_active_2p5d_examples": int(total_active_examples),
+        "ssl_n_slices": int(ssl_n_slices),
+        "positions_per_stream": int(positions_per_stream),
+        "batch_size": int(ssl_batch_size),
+    }
     torch.save(
         {
             "encoder": model.encoder.state_dict(),
@@ -193,9 +296,11 @@ def pretrain_ssl(config: dict) -> Path:
             "source": SSL_SOURCE,
             "non_gold_studies": len(non_gold),
             "completed_epochs": len(history),
+            "coverage": coverage,
             "budget": budget.to_dict(),
         },
         checkpoint_path,
     )
     (outdir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+    (outdir / "coverage.json").write_text(json.dumps(coverage, indent=2), encoding="utf-8")
     return checkpoint_path
