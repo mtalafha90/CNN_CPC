@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from rsna_knee.constants import DUAL_STREAMS, TARGETS
+from rsna_knee import frozen_features as b4
 from rsna_knee.frozen_features import (
     TARGET_STREAM_SUBSETS,
     _candidate_grid,
@@ -82,3 +83,58 @@ def test_candidate_grid_is_deterministic_and_validates():
         ("prior", 8, 0.1),
         ("prior", 8, 1.0),
     ]
+
+
+def test_nested_classical_oof_writes_complete_outer_predictions(tmp_path, monkeypatch):
+    n = 12
+    uids = np.asarray([f"study-{i:02d}" for i in range(n)], dtype=str)
+    fold_ids = np.asarray([0, 1, 2] * 4, dtype=int)
+
+    rows = {"StudyInstanceUID": uids, "Report": [f"report {i}" for i in range(n)]}
+    # Every fold contains both classes for every target.
+    for j, target in enumerate(TARGETS):
+        rows[target] = np.asarray([(i // 3 + j) % 2 for i in range(n)], dtype=int)
+    train = pd.DataFrame(rows)
+
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    train.to_csv(data_root / "train.csv", index=False)
+
+    rng = np.random.default_rng(9)
+    features = rng.normal(size=(n, len(DUAL_STREAMS), 12)).astype(np.float32)
+    present = np.ones((n, len(DUAL_STREAMS)), dtype=np.float32)
+    feature_path = tmp_path / "features.npz"
+    np.savez_compressed(
+        feature_path,
+        study_uids=uids,
+        features=features,
+        present=present,
+        stream_names=np.asarray(DUAL_STREAMS, dtype=str),
+        pool_names=np.asarray(["mean", "std", "max"], dtype=str),
+    )
+
+    monkeypatch.setattr(
+        b4,
+        "make_balanced_gold_folds",
+        lambda df, n_splits, seed: pd.Series(fold_ids, index=df.index, dtype=int),
+    )
+
+    out_root = tmp_path / "b4"
+    payload = b4.nested_classical_oof(
+        {"data_root": str(data_root), "seed": 2026, "n_folds": 3, "n_bootstrap": 20},
+        feature_path=feature_path,
+        out_root=out_root,
+        pca_components=[2],
+        c_values=[0.1],
+        feature_modes=["all"],
+        n_bootstrap=20,
+    )
+
+    combined = pd.read_csv(out_root / "oof.csv")
+    assert len(combined) == n
+    assert combined["StudyInstanceUID"].nunique() == n
+    assert np.isfinite(combined[TARGETS].to_numpy(float)).all()
+    assert set(payload["folds"]) == {"0", "1", "2"}
+    for fold in range(3):
+        fold_oof = pd.read_csv(out_root / f"fold{fold}" / "oof.csv")
+        assert len(fold_oof) == int((fold_ids == fold).sum())
