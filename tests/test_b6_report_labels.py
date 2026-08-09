@@ -61,6 +61,10 @@ def test_b6_pathology_can_coexist_with_intact_fibers():
         "Tiny tear of posterior horn of the medial meniscus. The remainder of the medial meniscus is intact.",
         "Medial Meniscus",
     ).state == STATE_POSITIVE
+    assert predict_target_b6(
+        "Complete proximal ACL tear. The tibial insertion of the ACL is intact.",
+        "ACL",
+    ).state == STATE_POSITIVE
 
 
 def test_b6_negated_tear_does_not_cancel_other_abnormality():
@@ -146,6 +150,6 @@ def test_b6_export_excludes_gold_from_training_targets(tmp_path):
     assert "study-0" not in set(training["StudyInstanceUID"])
 
     policy = json.loads((out / "policy.json").read_text())
-    assert policy["version"] == "1.2"
+    assert policy["version"] == "1.2.1"
     assert policy["unmentioned_is_negative"] is False
     assert policy["gold_usage"].startswith("audit only")
