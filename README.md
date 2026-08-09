@@ -1,115 +1,44 @@
 # CNN_CPC — RSNA Knee Abnormality Detection
 
-`CNN_CPC` is a production-oriented PyTorch pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The design targets the unusual supervision regime of this dataset: a very small trusted gold set, thousands of report-only studies, multiple MRI series per knee, and a macro-AUC objective across 12 pathologies.
+`CNN_CPC` is a production-oriented PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The project is built around the released supervision regime: 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and macro ROC AUC across 12 pathologies.
 
-The current implementation combines leakage-aware report supervision, six-stream MRI routing, distributed 2.5D sampling, ConvNeXt-Tiny encoding, cross-sequence Transformer fusion, pathology-query attention, nested gold validation, fold-safe image/report co-training, optional competition-data SSL, and strict one-GPU runtime control.
+> **Current experiment snapshot — 2026-08-09:** B4 frozen strong-SSL features + target-wise PCA/logistic regression is the best clean standalone point estimate (`0.5137567459`). A fixed equal-weight B1+B4 rank ensemble is numerically highest (`0.5167`) but is statistically tied with B4 (`P=0.5544`). **B5 image-report representation learning is currently running; no B5 AUC is available yet.**
 
-> `docs/competition.md` is a preserved competition-summary document and is intentionally not changed by implementation or workflow updates.
+The canonical measured-results table is [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md).
 
-## Verified real-data status — 2026-08-08
+`docs/competition.md` is a preserved competition-summary document and is intentionally not changed by implementation or experiment updates.
 
-The downloaded competition data and current pipeline have now been exercised on real files.
+## Verified data status
 
 | Check | Verified result |
-|---|---|
+|---|---:|
 | Training studies | 4,407 |
-| Fully gold-labeled studies | 58 |
+| Fully gold-labelled studies | 58 |
 | Report-only studies | 4,349 |
 | Training series rows | 24,371 |
-| Train preflight | 24 studies, 121/121 selected streams decoded, 4,045/4,045 files decoded |
-| Local test preflight | all 3 studies, 14/14 selected streams decoded, 533/533 files decoded |
-| Full selected-series audit | 21,886/21,886 series decoded |
-| Full DICOM audit | 732,554/732,556 files decoded successfully |
-| Global file decode failure rate | 2.73e-6 |
-| Series lost to corruption | 0 |
-| OA weak supervision | fixed and verified on the real reports |
-| Smoke GPU | NVIDIA RTX A4500 Laptop GPU, BF16 |
-| Ranking auxiliary | active after pair-friendly trusted sampling |
+| Selected training series audited | 21,886 / 21,886 decoded |
+| Candidate DICOM files audited | 732,554 / 732,556 decoded |
+| Selected series lost to corruption | 0 |
+| Local test preflight | 3 studies, 14 / 14 selected streams decoded |
+| External pretrained weights | disabled |
+| Final inference | MRI-only |
 
-Two selected series each contained one unreadable DICOM file. Both series remained usable with 35/36 and 37/38 decoded frames respectively, well below the configured 20% per-series failure gate.
-
-The current paired-sampler fold-0 smoke run completed end-to-end and produced every required Stage-1 artifact. Its best inner macro-AUC was `0.55135`; the outer TTA smoke score was `0.51396`. These values are **smoke diagnostics only**, not production performance claims.
-
-Production Stage-1 results must come from the non-smoke three-fold runs and remain pending until those jobs finish.
-
-## Core production contract
-
-```text
-SUPERVISION
-report -> positive / negated / uncertain / unmentioned
-       -> compartment-aware OA parsing
-       -> fold-safe calibration
-       -> confidence = evidence × information beyond prevalence
-       -> unmentioned = zero direct weight by default
-       -> finite official cells override weak supervision
-
-MRI
-DICOM -> metadata repair -> six semantic streams
-      -> distributed 2.5D triplets
-      -> ConvNeXt-Tiny encoder
-      -> cross-sequence Transformer
-      -> 12 interacting pathology queries
-      -> 12 logits
-
-LOSS
-planned-epoch macro-balanced weighted BCE
-+ confidence-gated pairwise ranking
-
-SAMPLING
-trusted = gold or unusually high-confidence pseudo-label
-pair-friendly trusted batches for even batch sizes
-preserves requested trusted-row fraction
-keeps weak labels below the trusted/ranking gate unless justified
-
-VALIDATION
-outer gold fold = final OOF only
-inner gold fold = epoch-count selection
-Phase A discarded
-fresh Phase B retrain
-validation TTA == submission TTA
-study bootstrap macro-AUC
-
-STAGE 1
-random initialization
-or competition-data SSL initialization
-candidate choice per outer fold uses INNER AUC only
-
-STAGE 2
-Phase A report-only
-Phase B fresh report + fold-local cross-fitted image teacher
-wrong-fold or incomplete teachers rejected
-Stage 2 does not emit another weak_oof.csv
-
-RUNTIME
-one GPU
-CPU multiprocessing for DICOM/data work
-8.5 h software budget
-10 min reserve
-batch-level runtime guards
-finish-time reserve includes OOF, weak OOF, bootstrap and serialization
-
-INFERENCE
-exact fold set
-single checkpoint stage
-identical model/stream contract
-checkpoint validation TTA must match requested submission TTA
-exact submission.csv schema
-```
+Two selected series each contain one unreadable DICOM instance; both remain usable under the configured partial-corruption gate.
 
 ## Twelve targets
 
-- ACL
-- MCL
-- Medial Meniscus
-- Lateral Meniscus
-- Medial OA
-- Lateral OA
-- PF OA
-- Effusion
-- Synovitis
-- Baker's
-- Contusion
-- Fracture
+1. ACL
+2. MCL
+3. Medial Meniscus
+4. Lateral Meniscus
+5. Medial OA
+6. Lateral OA
+7. PF OA
+8. Effusion
+9. Synovitis
+10. Baker's
+11. Contusion
+12. Fracture
 
 ## Six MRI streams
 
@@ -119,7 +48,7 @@ coronal_fluid        coronal_structural
 axial_fluid          axial_structural
 ```
 
-Observed coverage on the 4,407 training studies:
+Observed coverage:
 
 | Stream | Selected | Missing |
 |---|---:|---:|
@@ -130,38 +59,118 @@ Observed coverage on the 4,407 training studies:
 | axial_fluid | 4,407 | 0 |
 | axial_structural | 1,094 | 3,313 |
 
-Missing streams are expected and are masked by the model; they are not fabricated.
+Missing streams are expected and explicitly masked; they are never fabricated.
 
-## Report teacher and OA update
-
-The initial report lexicon was too narrow for osteoarthritis and produced zero weak-label weight for all three OA targets. The parser is now compartment-aware and recognizes explicit OA/arthrosis terminology plus cartilage loss, chondrosis/chondromalacia, osteophytes and related compartment-specific degenerative wording while avoiding generic meniscal degeneration.
-
-Observed real-report states after the fix:
-
-| Target | Positive | Negated | Unmentioned |
-|---|---:|---:|---:|
-| Medial OA | 492 | 339 | 3,576 |
-| Lateral OA | 409 | 387 | 3,611 |
-| PF OA | 695 | 379 | 3,333 |
-
-The confidence remains deliberately conservative: these report-derived OA cells contribute to weighted BCE but do not automatically become gold-equivalent trusted examples.
-
-## Pair-friendly ranking sampler
-
-With production `batch_size: 2`, the earlier trusted/general sampler usually placed at most one trusted study in a minibatch. That made the pairwise ranking objective inactive because a trusted positive and trusted negative could not coexist in the same batch.
-
-The current sampler groups trusted rows in pairs for even batch sizes while preserving the requested trusted-row fraction. The verified fold-0 smoke run produced:
+## Current methodology
 
 ```text
-selection ranking pairs: 63
-retrain ranking pairs:   61
+COMPETITION MRI
+DICOM -> metadata repair -> six semantic streams
+      -> distributed 2.5D triplets
+      -> ConvNeXt-Tiny encoder
+
+B0/B1/B2
+encoder + Transformer/pathology heads -> 12 logits
+
+B3
+encoder + pathology-specific low-capacity MIL
+
+B4
+strong SSL encoder frozen
+-> mean/std/max stream features
+-> target-specific PCA + logistic regression
+
+B5 (running)
+strong SSL encoder
++ competition reports represented by TF-IDF -> TruncatedSVD
++ image-image SSL
++ acquisition metadata loss
++ image-report alignment
+-> MRI encoder only at inference
 ```
 
-All 12 targets contributed nonzero ranking pairs.
+Reports are training supervision only. The hidden/test inference path remains MRI-only.
+
+## Completed controlled experiments
+
+| ID | Method | Macro AUC | Decision |
+|---|---|---:|---|
+| B0 | random initialization | `0.4762536432` | baseline |
+| report teacher | fold-safe rules + TF-IDF | `0.49245` | rejected as general teacher |
+| B1 | strong competition-only SSL | `0.5030284974` | retained reference |
+| B2 | 0.1x encoder LR | `0.4993244663` | rejected |
+| B3 | pathology-aware MIL | `0.4944652486` | rejected globally |
+| B1+B3 rank | fixed 50:50 rank average | `0.5048038179` | neutral |
+| **B4** | frozen SSL + target-wise PCA/LR | **`0.5137567459`** | **best standalone point estimate** |
+| B4.1 | one shared policy | `0.4847792672` | rejected |
+| B4.2 | four pathology-group policies | `0.4901328905` | rejected |
+| B4.3 | two-way-CV target selector | `0.4966083942` | rejected |
+| B1+B4 raw | fixed 50:50 probability average | `0.5050` | rejected |
+| B1+B4 rank | fixed 50:50 rank average | `0.5167` | numerically best; tied with B4 |
+| **B5** | image-report representation learning | pending | **running** |
+
+### Current statistical interpretation
+
+B4 versus B1:
+
+```text
+median B4-B1 difference = +0.01021
+95% CI                  = [-0.05143, +0.07094]
+P(B4 > B1)              = 0.6378
+```
+
+Fixed B1+B4 rank ensemble versus B4:
+
+```text
+median difference       = +0.00276
+95% CI                  = [-0.03513, +0.04174]
+P(ensemble > B4)        = 0.5544
+```
+
+Therefore the ensemble is not claimed as an improvement despite its higher point estimate.
+
+## Why B4 selector tuning is closed
+
+B4's target-wise inner selections are unstable because each inner fold contains only about 18–20 studies. Three follow-ups tested shared, grouped, and two-way-CV policy selection. All three reduced pooled OOF performance. Further selector/grid variants based on the same 58 outer labels would increasingly meta-fit the validation campaign.
+
+The next scientific question is therefore representation quality, not another downstream selector.
+
+## B5 — current running experiment
+
+B5 uses only the 4,349 report-only competition studies for representation training. The 58 gold studies are excluded completely.
+
+Text branch:
+
+```text
+competition reports
+-> word TF-IDF (1-2 grams)
+-> TruncatedSVD (<=256 dimensions)
+-> normalized report embedding
+```
+
+MRI branch:
+
+```text
+strong competition-only SSL ConvNeXt
+-> image-image SSL objective
+-> plane/sequence metadata objectives
+-> image-report alignment objective
+```
+
+No external language model and no external pretrained image weights are used. The report branch is discarded after training; the saved downstream artifact is an MRI encoder.
+
+Run:
+
+```bash
+rsna-knee-b5 \
+  --config configs/train_local_ssl_strong.yaml \
+  --checkpoint runs/ssl_strong/ssl_encoder.pt \
+  --out-root runs/b5_report_ssl
+```
+
+After B5 finishes, the first evaluation deliberately reuses the **unchanged original B4 probe**. See [`docs/B5_IMAGE_REPORT_SSL.md`](docs/B5_IMAGE_REPORT_SSL.md).
 
 ## Installation
-
-Recommended Conda setup:
 
 ```bash
 conda create -n rsna-knee python=3.12 -y
@@ -169,151 +178,86 @@ conda activate rsna-knee
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e .
 python -m pip install pytest pillow
-```
-
-Check:
-
-```bash
-python -m rsna_knee.cli --help
 pytest -q
 ```
 
-## Local real-data workflow
-
-For a complete fresh-machine guide, use:
-
-- `docs/TRAINING_FROM_ZERO.md`
-
-For the concise current-machine production sequence, use:
-
-- `docs/LOCAL_REAL_DATA_TRAINING.md`
-
-The high-level order is:
-
-```text
-inspect
--> validation manifests
--> train/test DICOM preflight
--> full audit
--> fold-0 smoke
--> Stage-1 random folds 0/1/2
--> optional competition-data SSL
--> Stage-1 inner-AUC candidate selection
--> Stage-2 folds 0/1/2
--> paired OOF evaluation
--> freeze final stage
--> three-fold inference
-```
-
-## Current Stage-1 random command
+## Useful commands
 
 ```bash
-python -m rsna_knee.cli train \
-  --config configs/train_local.yaml \
-  --fold 0
+# Inspect data
+python -m rsna_knee.cli inspect --data-root "$DATA_ROOT"
+
+# Preflight
+python -m rsna_knee.cli preflight \
+  --data-root "$DATA_ROOT" \
+  --split train \
+  --sample-size 24
+
+# Strong competition-only SSL
+python -m rsna_knee.cli pretrain \
+  --config configs/train_local_ssl_pretrain.yaml
+
+# B1 Stage-1 folds
+python -m rsna_knee.cli train --config configs/train_local_ssl_strong.yaml --fold 0
+python -m rsna_knee.cli train --config configs/train_local_ssl_strong.yaml --fold 1
+python -m rsna_knee.cli train --config configs/train_local_ssl_strong.yaml --fold 2
+
+# B4 frozen probe
+rsna-knee-b4 extract \
+  --config configs/train_local_ssl_strong.yaml \
+  --split train --scope gold \
+  --out runs/b4_frozen_ssl/gold_features.npz
+
+rsna-knee-b4 nested \
+  --config configs/train_local_ssl_strong.yaml \
+  --features runs/b4_frozen_ssl/gold_features.npz \
+  --out-root runs/b4_frozen_ssl \
+  --n-bootstrap 5000
 ```
 
-Then folds 1 and 2 are run unchanged after the first production fold has been checked for computational correctness.
+## Documentation map
 
-## Important artifacts per Stage-1 fold
+- [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md) — canonical current results/status
+- [`docs/data.md`](docs/data.md) — verified data/DICOM contract
+- [`docs/strategy.md`](docs/strategy.md) — modeling strategy and decisions
+- [`docs/VALIDATION.md`](docs/VALIDATION.md) — validation protocol and caveats
+- [`docs/competition_policy.md`](docs/competition_policy.md) — conservative execution policy
+- [`docs/LOCAL_REAL_DATA_TRAINING.md`](docs/LOCAL_REAL_DATA_TRAINING.md) — current workstation runbook
+- [`docs/TRAINING_FROM_ZERO.md`](docs/TRAINING_FROM_ZERO.md) — fresh-machine runbook
+- [`docs/REPORT_TEACHER.md`](docs/REPORT_TEACHER.md) — report-teacher benchmark
+- [`docs/SSL_STRONG.md`](docs/SSL_STRONG.md) — strong SSL experiment
+- [`docs/B2_DISCRIMINATIVE_FINETUNE.md`](docs/B2_DISCRIMINATIVE_FINETUNE.md)
+- [`docs/B3_PATHOLOGY_AWARE_MIL.md`](docs/B3_PATHOLOGY_AWARE_MIL.md)
+- [`docs/B4_FROZEN_SSL_CLASSICAL.md`](docs/B4_FROZEN_SSL_CLASSICAL.md)
+- [`docs/B4_1_SHARED_POLICY.md`](docs/B4_1_SHARED_POLICY.md)
+- [`docs/B4_2_GROUPED_FROZEN_SSL.md`](docs/B4_2_GROUPED_FROZEN_SSL.md)
+- [`docs/B4_3_TWO_WAY_CV_FROZEN_SSL.md`](docs/B4_3_TWO_WAY_CV_FROZEN_SSL.md)
+- [`docs/B5_IMAGE_REPORT_SSL.md`](docs/B5_IMAGE_REPORT_SSL.md)
+- [`README_KAGGLE_METHODS.md`](README_KAGGLE_METHODS.md) — public methodology review/context
+- [`docs/references.md`](docs/references.md) — references and reviewed public work
+- [`docs/competition.md`](docs/competition.md) — preserved competition summary
 
-```text
-best.pt
-bootstrap.json
-calibration.json
-calibration_selection.json
-config.json
-fold_assignments.csv
-history.csv
-metadata_repair.json
-oof.csv
-oof_center.csv
-preflight.json
-runtime.json
-sampling.json
-selection.json
-supervision_plan.json
-training_diagnostics.json
-weak_oof.csv
-```
+## Validation caution
 
-`oof.csv` is the primary submission-policy TTA OOF file. `oof_center.csv` is diagnostic only. `weak_oof.csv` is the leakage-safe Stage-1 image teacher used downstream by Stage 2.
+Each individual candidate uses leakage-aware fold logic, but the same 58 gold studies have now supported multiple method decisions. The campaign as a whole is increasingly **model-selection cross-validation**, not a pristine independent estimate of hidden-test performance.
+
+Do not:
+
+- optimize ensemble weights on the 58 gold labels;
+- select target-specific post-hoc model winners from outer OOF;
+- create further B4 selector variants from observed outer results;
+- report a B5 score before its fixed frozen probe completes;
+- claim leaderboard superiority without an actual competition submission result.
 
 ## Competition execution policy
 
-The repository uses conservative defaults:
+The conservative defaults remain:
 
-- one GPU only;
-- no DDP or `torchrun`;
-- CPU multiprocessing for data work;
+- one GPU;
+- CPU multiprocessing for DICOM/data work;
 - `runtime_budget_hours: 8.5`;
-- ten-minute reserve;
-- external pretrained weights off by default;
-- competition-data SSL provenance checked;
-- Internet-independent final inference;
-- output file exactly `submission.csv`.
-
-See `docs/competition_policy.md`.
-
-## Repository map
-
-```text
-configs/train.yaml
-src/rsna_knee/
-  audit.py
-  budget.py
-  calibration.py
-  cli.py
-  constants.py
-  cotrain.py
-  data.py
-  dataset.py
-  dicom.py
-  dicom_meta.py
-  evaluation.py
-  inference.py
-  model.py
-  policy.py
-  preflight.py
-  report_labels.py
-  runtime.py
-  sampling.py
-  ssl.py
-  training.py
-
-docs/
-  TRAINING_FROM_ZERO.md
-  LOCAL_REAL_DATA_TRAINING.md
-  VALIDATION.md
-  data.md
-  strategy.md
-  competition_policy.md
-  references.md
-  competition.md              # preserved
-
-fixtures/external_validation/
-README_KAGGLE_METHODS.md
-main.tex
-```
-
-## Methodological guarantees
-
-- report silence is not converted into a negative;
-- official finite labels override weak labels cell-by-cell;
-- OA report rules are compartment-aware;
-- outer gold never selects its own epoch count;
-- Phase B starts from a fresh model;
-- random-vs-SSL Stage-1 selection uses inner AUC only;
-- Stage-2 Phase A does not use the image teacher;
-- Stage-2 fold `k` can consume only safe fold-`k` weak OOF predictions;
-- Stage 2 never re-exports its teacher rows as fresh OOF;
-- validation TTA is predeclared and matches submission TTA;
-- weighted BCE is macro-balanced over planned epoch supervision;
-- ranking pairs and effective supervision are recorded per pathology;
-- trusted sampling is pair-friendly without lowering confidence gates;
-- duplicate normalized reports remain grouped;
-- DICOM decode quality is audited before long GPU work;
-- checkpoints self-describe fold, stage, architecture, stream order and TTA contract;
-- final inference is MRI-only.
-
-This repository does **not** claim leaderboard superiority. Production AUC, runtime and leaderboard results should be reported only after the corresponding real runs have completed.
+- external pretrained weights disabled;
+- competition-data checkpoint provenance checked;
+- validation/submission contracts recorded in checkpoints;
+- final inference MRI-only;
+- final output exactly `submission.csv`.
