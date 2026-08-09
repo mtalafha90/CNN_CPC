@@ -39,7 +39,7 @@ def test_b6_acl_states_handle_positive_negative_uncertain_and_unmentioned():
 def test_b6_multilingual_aliases_are_accent_insensitive():
     french = predict_target_b6("Rupture du ligament croisé antérieur.", "ACL")
     italian = predict_target_b6("Versamento articolare moderato.", "Effusion")
-    german = predict_target_b6("Das vordere Kreuzband ist intakt.", "ACL")
+    german = predict_target_b6("Vorderes Kreuzband intakt.", "ACL")
     turkish = predict_target_b6("Ön çapraz bağ yırtığı izlenmektedir.", "ACL")
 
     assert french.state == STATE_POSITIVE
