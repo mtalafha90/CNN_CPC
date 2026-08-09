@@ -1,12 +1,14 @@
 # Test and validation workflow
 
-`CNN_CPC` uses three deliberately different validation resources. They answer different questions and must not be mixed.
+> **Snapshot: 2026-08-09.** The experiment campaign has completed B0-B4.3 plus fixed ensembles; B5 is running. Canonical scores are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
+
+`CNN_CPC` uses three distinct validation resources. They answer different questions and must not be mixed.
 
 ## 1. External four-study technical fixture
 
 `fixtures/external_validation/` contains four openly licensed knee MRI examples converted into a competition-like DICOM contract.
 
-Purpose:
+Use it for:
 
 - DICOM decoding;
 - directory discovery;
@@ -16,9 +18,7 @@ Purpose:
 - model/inference plumbing;
 - strict preflight testing.
 
-It is **not** a scientific benchmark and must not be used for macro-AUC model selection.
-
-Strict fixture command:
+It is **not** a scientific benchmark.
 
 ```bash
 python -m rsna_knee.cli preflight \
@@ -30,28 +30,24 @@ python -m rsna_knee.cli preflight \
   --out runs/external_test_preflight.json
 ```
 
-The sparse `validation.csv` copy contains only source-supported positive cells; unspecified cells remain `NaN`.
+## 2. Real downloaded local test surface
 
-## 2. Real downloaded local test set
-
-The current downloaded test metadata contains three studies. All three were preflighted on 2026-08-08:
+The current local test metadata contains three studies. All were preflighted:
 
 ```text
-studies sampled        3
-selected streams      14 / 18 possible
-selected decoded      14 / 14
-candidate files      533
-file failures           0
-stream failures         0
+selected streams  14 / 18 possible
+selected decoded  14 / 14
+candidate files   533
+file failures     0
 ```
 
-This verifies the complete locally supplied test surface available in the current download, but it does not provide gold labels and therefore cannot measure AUC.
+The local test set has no gold labels and therefore cannot measure AUC.
 
-## 3. Official gold nested validation
+## 3. Official gold set
 
-Scientific/competition validation uses the 58 official gold studies in `train.csv`.
+Scientific model comparison uses the 58 fully labelled training studies.
 
-The deterministic three-fold allocator produced:
+Three-fold allocation:
 
 | Outer fold | Gold train | Inner selection | Outer validation |
 |---|---:|---:|---:|
@@ -59,147 +55,130 @@ The deterministic three-fold allocator produced:
 | 1 | 18 | 20 | 20 |
 | 2 | 20 | 18 | 20 |
 
-Every target has both positive and negative examples in each outer fold, so every per-target outer AUC is defined.
+Every target has at least one positive and one negative in every outer fold.
 
-Generate manifests with:
+## 4. Original Stage-1 nested protocol
 
-```bash
-mkdir -p runs/validation
-for f in 0 1 2; do
-  python -m rsna_knee.cli validation-manifest \
-    --config configs/train_local.yaml \
-    --fold "$f" \
-    --out "runs/validation/fold${f}.csv"
-done
-```
-
-For each outer fold `k`:
-
-- `outer_validation` is used only for final fold OOF evaluation;
-- `inner_selection` selects the Phase-A epoch count;
-- `gold_train` supplies trusted Phase-A gold training examples.
-
-Phase A is discarded. Phase B starts from a fresh model and may use all non-outer gold studies.
-
-## 4. Weak-image cross-fitting is separate from gold validation
-
-Each non-gold report group receives a deterministic `crossfit_fold`.
-
-For Stage-1 fold `k`, `crossfit_fold=k` non-gold rows are excluded from training and later predicted into:
+For neural B0/B1/B2/B3 folds:
 
 ```text
-runs/<stage1_root>/fold{k}/weak_oof.csv
+outer gold       -> final fold OOF only
+inner gold       -> Phase-A epoch selection
+remaining gold   -> Phase-A training
+Phase A          -> discarded
+fresh Phase B    -> all non-outer gold for selected duration
 ```
 
-Those predictions are not official gold validation. They exist only to provide leakage-safe image teachers for Stage 2.
+The outer fold never chooses its own epoch count.
 
-Stage-2 fold `k` may consume only the safe Stage-1 fold-`k` weak teacher.
+`oof.csv` uses the predeclared production TTA. `oof_center.csv` is diagnostic only.
 
-## 5. Primary TTA versus center-only diagnostic
+## 5. Frozen B4 protocol
 
-The predeclared production validation policy is:
+B4 representation pretraining excludes all gold studies. After the encoder is frozen, the 58 gold rows are used in nested target-specific PCA/logistic classifiers.
 
-```yaml
-validation_tta_offsets: [-1, 0, 1]
-```
+For each outer fold, candidate feature mode/PCA/C are selected only from the designated inner fold and then refitted on all non-outer gold before one outer prediction.
 
-Therefore:
-
-- `oof.csv` = primary three-view TTA OOF;
-- `oof_center.csv` = center-only diagnostic.
-
-The center-only diagnostic must not be used to retroactively change the submission policy after inspecting outer labels.
-
-## 6. Verified paired-sampler smoke result
-
-The current fold-0 smoke run after the trusted-pair sampler fix produced:
+B4 reached:
 
 ```text
-selected epoch              2
-inner macro AUC       0.5513549
-outer TTA macro AUC   0.5139555
-outer center AUC      0.5228523
-selection gold train        20
-final gold train            40
-budget limited           false
+macro AUC = 0.5137567459
+95% CI   = [0.4619827141, 0.5642366629]
 ```
 
-Ranking utilization:
+## 6. B4 follow-up validation protocols
+
+Three attempts to reduce downstream selection variance were predefined and leakage-aware within each run:
+
+- B4.1: one shared policy per outer fold -> `0.4847792672`;
+- B4.2: four predefined pathology-group policies -> `0.4901328905`;
+- B4.3: target-wise two-way CV on the two non-outer folds -> `0.4966083942`.
+
+All were below B4. This branch is now closed. Further selector redesign based on these outer outcomes would risk campaign-level meta-overfitting.
+
+## 7. Fixed ensemble validation
+
+Only fixed 50:50 combinations were tested after B4:
 
 ```text
-selection ranking pairs = 63
-retrain ranking pairs   = 61
+B1+B4 raw probability average = 0.5050
+B1+B4 rank average            = 0.5167
 ```
 
-Every target had nonzero ranking pairs.
-
-These are **smoke-test diagnostics only**. The smoke run uses very few batches and a tiny validation sample; it must not be presented as the production model's expected performance.
-
-## 7. Why inner and outer smoke scores can differ strongly
-
-With only 18–20 gold studies in a fold, macro-AUC variance is large. A smoke model is additionally undertrained. Differences such as:
+B4 versus fixed rank ensemble:
 
 ```text
-inner AUC  > outer AUC
-center AUC > TTA AUC
+median ensemble-B4 difference = +0.00276
+95% CI                        = [-0.03513, +0.04174]
+P(ensemble > B4)              = 0.5544
 ```
 
-are therefore observations to record, not reasons to tune the algorithm on the outer fold.
+The ensemble is therefore treated as statistically tied with B4. No weight search is allowed on the 58 gold rows.
 
-The non-smoke three-fold experiment is required before any performance conclusion.
+## 8. B5 validation contract
 
-## 8. Production validation sequence
+B5 representation training excludes all 58 gold studies and uses only the 4,349 report-only competition studies.
 
-For Stage-1 random initialization:
+The first B5 evaluation is fixed in advance:
 
-```bash
-python -m rsna_knee.cli train --config configs/train_local.yaml --fold 0
-python -m rsna_knee.cli train --config configs/train_local.yaml --fold 1
-python -m rsna_knee.cli train --config configs/train_local.yaml --fold 2
-```
+1. train B5 representation without gold labels;
+2. freeze B5 encoder;
+3. extract the same deterministic six-stream mean/std/max features used by B4;
+4. run the **original B4 target-wise nested classifier protocol unchanged**;
+5. compare `runs/b5_frozen_probe/oof.csv` with `runs/b4_frozen_ssl/oof.csv` by paired bootstrap.
 
-Combine the three primary OOF files only after all folds finish:
+This makes B5 primarily a representation test rather than another downstream hyperparameter experiment.
+
+**Current B5 status:** running / score pending.
+
+## 9. Bootstrap comparisons
+
+Use study-level paired bootstrap when comparing aligned OOF files:
 
 ```bash
 python -m rsna_knee.cli evaluate \
   --train-csv "$DATA_ROOT/train.csv" \
-  --oof \
-    runs/stage1_random/fold0/oof.csv \
-    runs/stage1_random/fold1/oof.csv \
-    runs/stage1_random/fold2/oof.csv \
-  --n-bootstrap 2000 \
-  --out runs/stage1_random/evaluation.json
+  --oof <A.csv> \
+  --compare-oof <B.csv> \
+  --n-bootstrap 5000 \
+  --out <comparison.json>
 ```
 
-Use paired evaluation for controlled comparisons such as:
+The evaluator reports the median macro-AUC difference, a 95% interval and the bootstrap probability that B is better.
 
-- TTA versus center-only;
-- random initialization versus nested-selected SSL;
-- Stage 2 versus its nested-selected Stage-1 teacher configuration.
+A point-estimate win is not sufficient when the interval is wide.
 
-## 9. Candidate selection rule
+## 10. Current measured ranking
 
-If Stage-1 random and Stage-1 SSL both exist, candidate choice for outer fold `k` uses **only `inner_macro_auc` from fold `k`**.
+| Candidate | Macro AUC |
+|---|---:|
+| B0 | `0.4763` |
+| B3 | `0.4945` |
+| B4.1 | `0.4848` |
+| B4.2 | `0.4901` |
+| B4.3 | `0.4966` |
+| B2 | `0.4993` |
+| B1 | `0.5030` |
+| B1+B3 rank | `0.5048` |
+| B4 | `0.5138` |
+| B1+B4 rank | `0.5167` |
+| B5 | pending |
 
-`outer_macro_auc` is deliberately excluded from that choice.
+## 11. Campaign-level interpretation
 
-This is necessary so the outer fold remains an evaluation fold for the candidate actually used downstream.
+A crucial distinction now applies:
 
-## 10. Interpreting final cross-validation
+- each individual OOF procedure was designed to avoid direct outer-label leakage;
+- however, the same 58 gold studies have now informed multiple sequential method decisions.
 
-There are two distinct reporting regimes:
+Therefore the campaign as a whole is **model-selection cross-validation** rather than a pristine independent generalization estimate.
 
-1. **Before outer OOF is used for a method decision:** outer OOF is a leakage-controlled estimate for the predeclared method.
-2. **After outer OOF is used to choose the final competition method:** the same result becomes **model-selection cross-validation** and should not be described as a pristine independent generalization estimate.
+Do not:
 
-## Important separation
+- select target-specific post-hoc winners from outer OOF;
+- optimize ensemble weights;
+- invent more B4 selector/grouping variants from observed results;
+- tune B5 representation hyperparameters after reading B5 outer OOF without declaring a new experiment;
+- treat the local test surface or external fixture as scientific validation.
 
-Never:
-
-- append the external Wikimedia fixture to competition training;
-- use the three local test studies for model selection;
-- use weak OOF rows as official validation;
-- tune Stage-1 candidate choice from outer AUC;
-- tune submission TTA from `oof_center.csv` after seeing outer labels.
-
-The authoritative performance result for the current baseline will be the completed non-smoke three-fold OOF evaluation, not the technical fixtures or smoke runs.
+Actual Kaggle leaderboard results, when available, are a separate evidence source and must be labelled as such.
