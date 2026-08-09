@@ -1,12 +1,10 @@
 # B6 — structured multilingual report labels
 
-> **Status — 2026-08-10:** **V1.2.1 CORPUS-FROZEN / GOLD AUDIT NEXT.** B6 now produces 14,123 high-confidence target cells across 4,349 report-only studies, covering 27.06% of the 52,188 possible study-target cells. Parser changes are closed before the 58-gold audit so that the gold labels are not used to tune B6.
+> **Status — 2026-08-10:** **COMPLETE / FROZEN at v1.2.1.** B6 now serves as the weak-label source for B7. No additional parser or confidence-threshold tuning should be performed using the 58 gold studies.
 
 ## Goal
 
-B5 improved the MRI representation but still left the downstream classifier dependent on only 58 fully labelled studies. B6 converts competition reports into twelve target-level weak labels that can later supervise B7.
-
-For each study/target B6 exports:
+B6 converts each competition training report into auditable target-level weak labels for all 12 abnormalities:
 
 ```text
 positive
@@ -15,131 +13,108 @@ uncertain
 unmentioned
 ```
 
-plus a fixed soft probability, confidence weight, decision reason and local evidence snippet.
+Each cell also stores a fixed soft probability, confidence, reason, and evidence snippet. The 58 gold studies are retained only for audit and are excluded from `training_targets.csv`.
 
-The 58 gold studies are never included in `training_targets.csv`.
+## Frozen leakage contract
 
-## Leakage and tuning contract
-
-B6:
+B6 v1.2.1:
 
 - uses only competition `train.csv` reports;
-- uses no external model or external data;
-- does not fit report thresholds or calibration on gold labels;
-- never maps unmentioned findings to negative;
-- excludes all gold rows from the B6 weak-training artifact;
-- assigns low/zero training weight to uncertain/unmentioned cells;
-- was refined only from report-text review before the gold audit;
-- is **frozen at v1.2.1 before inspecting gold-label agreement**.
+- uses no external model, external language resource, or external data;
+- does not fit calibration on gold;
+- does not convert report silence to a negative;
+- excludes every gold row from the weak-training export;
+- keeps uncertain/unmentioned cells at low or zero confidence;
+- uses the audited confidence threshold `0.75`.
 
-After the gold audit, parser changes are not allowed. The audit is diagnostic only and must not become another round of report-rule tuning.
+## Corpus audit — v1.2.1
 
-## Fixed soft-label contract
+The final corpus run covered all 4,407 reports, with 58 gold rows audit-only and 4,349 report-only rows available to the weak-label exporter.
 
-| State | Probability | Confidence |
-|---|---:|---:|
-| positive | `0.97` | `0.90` |
-| negated | `0.03` | `0.90` |
-| uncertain | `0.50` | `0.25` |
-| unmentioned | `0.50` | `0.00` |
-| conflicting definite evidence | `0.50` | `0.20` |
-
-B7 must use the confidence column rather than treating every cell equally.
-
-## Corpus progression
-
-### V1.0
-
-```text
-usable cells = 13,823 / 52,188 = 26.5%
-```
-
-The review queue exposed excessive structural uncertainty caused by broad context scope and treating definite + uncertain repetitions as conflicts.
-
-### V1.1
-
-V1.1 introduced target-local context, arrow delimiters, direct negated structural findings, non-diagnostic indication handling, duplicate suppression and definite-only conflict logic.
-
-```text
-usable cells = 14,072
-```
-
-### V1.2 / V1.2.1
-
-Further non-gold report review showed three important patterns:
-
-1. abnormality may coexist with `intact fibers`;
-2. a directly negated tear does not negate a different abnormality such as mucoid degeneration;
-3. a focal abnormality can coexist with a normal component of the same target.
-
-V1.2 therefore made explicit structural abnormality dominate generic local normality and suppressed non-diagnostic history/indication text. V1.2.1 added component-aware aggregation so examples such as the following resolve correctly:
-
-```text
-superficial MCL tear + deep MCL intact -> positive
-posterior-horn meniscus tear + remainder intact -> positive
-proximal ACL tear + tibial insertion intact -> positive
-ACL intact + complete ACL tear -> conflict/uncertain
-```
-
-## V1.2.1 real-corpus audit
-
-The frozen corpus run contains all 4,407 training reports, with 58 gold rows retained only inside `structured_labels.csv` for the later audit and 4,349 report-only rows in `training_targets.csv`.
-
-At `min_confidence=0.75`:
-
-```text
-high-confidence usable cells = 14,123
-possible report-only cells   = 52,188
-usable fraction overall      = 27.06%
-```
-
-Target-wise usable supervision:
+At confidence `>=0.75`, v1.2.1 produced **14,123 usable target cells** across the report-only pool.
 
 | Target | Positive | Negative | Usable | Fraction |
 |---|---:|---:|---:|---:|
-| ACL | 572 | 1,089 | 1,661 | 38.19% |
-| MCL | 271 | 1,089 | 1,360 | 31.27% |
-| Medial Meniscus | 1,126 | 536 | 1,662 | 38.22% |
-| Lateral Meniscus | 448 | 1,182 | 1,630 | 37.48% |
-| Medial OA | 484 | 334 | 818 | 18.81% |
-| Lateral OA | 402 | 382 | 784 | 18.03% |
-| PF OA | 682 | 372 | 1,054 | 24.24% |
-| Effusion | 1,338 | 757 | 2,095 | 48.17% |
-| Synovitis | 399 | 17 | 416 | 9.57% |
-| Baker's | 557 | 476 | 1,033 | 23.75% |
-| Contusion | 389 | 466 | 855 | 19.66% |
-| Fracture | 203 | 552 | 755 | 17.36% |
+| ACL | 572 | 1,089 | 1,661 | 38.2% |
+| MCL | 271 | 1,089 | 1,360 | 31.3% |
+| Medial Meniscus | 1,126 | 536 | 1,662 | 38.2% |
+| Lateral Meniscus | 448 | 1,182 | 1,630 | 37.5% |
+| Medial OA | 484 | 334 | 818 | 18.8% |
+| Lateral OA | 402 | 382 | 784 | 18.0% |
+| PF OA | 682 | 372 | 1,054 | 24.2% |
+| Effusion | 1,338 | 757 | 2,095 | 48.2% |
+| Synovitis | 399 | 17 | 416 | 9.6% |
+| Baker's | 557 | 476 | 1,033 | 23.8% |
+| Contusion | 389 | 466 | 855 | 19.7% |
+| Fracture | 203 | 552 | 755 | 17.4% |
 
-Compared with v1.1, v1.2.1 adds 51 usable cells. The important improvement is qualitative: structural definite conflicts dropped sharply while obvious focal abnormalities with normal uninvolved components are retained as positive.
+The final review queue contained 107 definite-conflict cells. Remaining conflicts are now mostly real semantic/report disagreements rather than broad parser-scope errors, so further corpus-rule expansion was stopped.
 
-## Remaining review queue
+## Parser evolution
 
-The v1.2.1 review queue still contains 107 `conflicting_definite_evidence` cells:
+### v1.0
+
+The initial implementation established multilingual aliases, target states, negation, uncertainty, and an audit queue. It produced 13,823 usable report-only cells but over-produced structural uncertainty.
+
+### v1.1
+
+The first real-corpus review motivated target-local context, arrow delimiters, direct negated structural findings, non-diagnostic indication handling, deduplication, and the rule that uncertain duplicates do not cancel definite evidence.
+
+### v1.2 / v1.2.1
+
+The final corrections added:
+
+- pathology dominance over generic nearby normality;
+- preservation of abnormalities such as degeneration even when tear is explicitly absent;
+- detection of `loss of normal fibers` as abnormality;
+- suppression of clinical indication/history as diagnostic evidence;
+- component-aware structural aggregation, so a focal abnormality can coexist with normal uninvolved components.
+
+Examples resolved correctly include:
 
 ```text
-Contusion           32
-Medial Meniscus     20
-Lateral Meniscus    12
-ACL                 11
-Fracture            10
-Effusion             9
-MCL                  8
-Baker's              4
-Synovitis            1
+superficial MCL tear + deep MCL intact -> positive
+posterior-horn meniscal tear + remainder intact -> positive
+proximal ACL tear + tibial insertion intact -> positive
+ACL intact + complete ACL tear -> conflict
 ```
 
-Many are genuine report disagreements or temporal/semantic distinctions such as:
+## Gold audit — frozen v1.2.1
+
+The final parser was audited once against the 58 gold studies without fitting, threshold search, or post-audit parser changes.
+
+Across 251 high-confidence usable gold cells:
 
 ```text
-ACL normal / later low-grade ACL injury
-MCL intact / later grade-I sprain
-meniscus normal / later tear in impression
-no acute tear / chronic or degenerative tear
+TP = 116
+TN = 80
+FP = 52
+FN = 3
 ```
 
-At this stage, continuing to add corpus rules risks converting B6 into an increasingly hand-engineered labeler. The parser is therefore frozen before any gold comparison.
+Pooled metrics:
 
-## Frozen v1.2.1 outputs
+```text
+positive precision = 0.690476
+sensitivity        = 0.974790
+specificity        = 0.606061
+NPV                = 0.963855
+accuracy           = 0.780876
+balanced accuracy  = 0.790425
+coverage           = 0.360632
+```
+
+The main scientific conclusion is asymmetric: **B6 explicit negatives are much more reliable than B6 explicit positives.** This motivates the fixed B7-v1 weak-supervision policy:
+
+```text
+B6 positive -> B7 target 0.85, weight 0.50
+B6 negated  -> B7 target 0.05, weight 1.00
+uncertain/unmentioned -> ignored
+```
+
+The global B7 policy was chosen after inspecting the B6 gold audit, so subsequent B7 gold performance is development performance rather than pristine independent validation.
+
+## Frozen artifacts
 
 ```text
 runs/b6_report_labels_v121/
@@ -147,67 +122,15 @@ runs/b6_report_labels_v121/
 ├── training_targets.csv
 ├── review_queue.csv
 ├── audit.json
-└── policy.json
+├── policy.json
+└── gold_audit/
+    ├── gold_audit.json
+    ├── gold_usable_cells.csv
+    └── gold_mismatches.csv
 ```
 
-`training_targets.csv` contains only the 4,349 report-only studies and is the candidate B7 supervision artifact.
+## Final decision
 
-## Gold audit — next gate
+**B6 = PASS as asymmetric weak supervision.**
 
-A dedicated command evaluates the **already-frozen** B6 labels on the 58 gold studies. It does not fit, calibrate, search thresholds or change the parser.
-
-Install the latest editable package and run tests:
-
-```bash
-cd /media/talafha/Disk_1/CNN_CPC
-git pull
-python -m pip install -e .
-pytest -q tests/test_b6_report_labels.py tests/test_b6_gold_audit.py
-```
-
-Then run:
-
-```bash
-rsna-knee-b6-audit \
-  --train-csv "$DATA_ROOT/train.csv" \
-  --structured runs/b6_report_labels_v121/structured_labels.csv \
-  --out-root runs/b6_report_labels_v121/gold_audit \
-  --min-confidence 0.75
-```
-
-Outputs:
-
-```text
-runs/b6_report_labels_v121/gold_audit/
-├── gold_audit.json
-├── gold_usable_cells.csv
-└── gold_mismatches.csv
-```
-
-For each target, `gold_audit.json` reports:
-
-- number of gold labels defined;
-- number and coverage of high-confidence B6 cells;
-- TP / TN / FP / FN;
-- positive precision;
-- recall/sensitivity;
-- specificity;
-- negative predictive value;
-- accuracy;
-- balanced accuracy.
-
-It also reports pooled usable-cell metrics and macro averages across targets.
-
-## Interpretation rule
-
-The gold audit is a **measurement**, not a new tuning loop.
-
-After the audit:
-
-- do not modify B6 lexical rules from gold false positives/false negatives;
-- do not optimize `min_confidence` on the 58 labels;
-- do not select a new parser version from gold performance;
-- use the mismatch file only to understand the reliability limits of B6;
-- then design B7 with the frozen v1.2.1 labels and their confidence weights.
-
-This preserves a clean scientific narrative: B6 was built from competition report text, frozen, and only then checked against the small gold set.
+Do not create another B6 parser revision based on the existing gold audit. The next experiment is B7, documented in `docs/B7_WEAK_SUPERVISION.md`.
