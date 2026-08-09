@@ -153,11 +153,16 @@ def evaluate_b7_gold(
 def main() -> None:
     parser = argparse.ArgumentParser("rsna-knee-b7-eval")
     parser.add_argument("--config", required=True)
+    parser.add_argument("--data-root", default=None, help="override data_root from YAML")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--out-root", default="runs/b7_weak_supervision/gold_eval")
     args = parser.parse_args()
+    config = _read_config(args.config)
+    if args.data_root:
+        config = dict(config)
+        config["data_root"] = args.data_root
     payload = evaluate_b7_gold(
-        _read_config(args.config),
+        config,
         checkpoint=args.checkpoint,
         out_root=args.out_root,
     )
