@@ -48,10 +48,40 @@ def test_b6_multilingual_aliases_are_accent_insensitive():
     assert turkish.state == STATE_POSITIVE
 
 
-def test_b6_detects_conflicting_evidence():
-    pred = predict_target_b6("The ACL is intact. A focal ACL tear is also suspected.", "ACL")
+def test_b6_target_local_scope_ignores_neighboring_intact_structures():
+    pred = predict_target_b6(
+        "Quadriceps tendon intact. Patellar tendon intact. Intercondylar compartment: ACL: high grade tear.",
+        "ACL",
+    )
+    assert pred.state == STATE_POSITIVE
+    assert pred.reason == "explicit_structural_abnormality"
+
+
+def test_b6_pathology_can_coexist_with_intact_fibers():
+    pred = predict_target_b6("ACL: grade 1 sprain is seen with intact fibers.", "ACL")
+    assert pred.state == STATE_POSITIVE
+
+
+def test_b6_uncertain_duplicate_does_not_cancel_definite_positive():
+    pred = predict_target_b6(
+        "There is a complete tear of the ACL. Impression: possible ACL tear.",
+        "ACL",
+    )
+    assert pred.state == STATE_POSITIVE
+
+
+def test_b6_uncertain_indication_does_not_cancel_definite_negative():
+    pred = predict_target_b6(
+        "Clinical indication: assess for ACL tear. Findings: ACL is intact and continuous.",
+        "ACL",
+    )
+    assert pred.state == STATE_NEGATED
+
+
+def test_b6_detects_genuinely_opposing_definite_evidence():
+    pred = predict_target_b6("The ACL is intact. There is also a complete ACL tear.", "ACL")
     assert pred.state == STATE_UNCERTAIN
-    assert pred.reason == "conflicting_or_mixed_evidence"
+    assert pred.reason == "conflicting_definite_evidence"
     assert pred.confidence <= 0.25
 
 
@@ -91,5 +121,6 @@ def test_b6_export_excludes_gold_from_training_targets(tmp_path):
     assert "study-0" not in set(training["StudyInstanceUID"])
 
     policy = json.loads((out / "policy.json").read_text())
+    assert policy["version"] == "1.1"
     assert policy["unmentioned_is_negative"] is False
     assert policy["gold_usage"].startswith("audit only")
