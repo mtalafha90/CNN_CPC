@@ -2,7 +2,7 @@
 
 This is the clean end-to-end guide for setting up `CNN_CPC` on a fresh Linux machine and reproducing the current experiment path.
 
-> **Repository experiment snapshot — 2026-08-09:** B0-B4.3 and fixed B1/B4 ensembles are complete; B5 image-report representation learning is running. Measured scores are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
+> **Repository experiment snapshot — 2026-08-09:** B0-B4.3 and fixed B1/B4 ensembles are complete. B5 image-report representation training completed all four predefined epochs cleanly; the unchanged B4 frozen probe on the B5 encoder is now pending. Measured scores are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
 
 ## Current reproducible ladder
 
@@ -24,12 +24,12 @@ clone/update
 -> B4 frozen representation probe
 -> B4.1/B4.2/B4.3 selector diagnostics
 -> fixed B1+B4 ensemble check
--> B5 competition-only image-report representation learning
--> unchanged B4 probe on B5 encoder
+-> B5 competition-only image-report representation learning [complete]
+-> unchanged B4 probe on B5 encoder [current]
 -> paired B4-vs-B5 evaluation
 ```
 
-The earlier Stage-2/co-training code remains in the repository, but the current active experiment branch is B5 representation learning because the completed B0-B4 evidence points to representation quality / small-gold variance as the more useful next lever.
+The earlier Stage-2/co-training code remains in the repository, but the current active experiment is the B5 frozen representation probe because the completed B0-B4 evidence points to representation quality / small-gold variance as the more useful lever.
 
 ## 1. Clone/update
 
@@ -223,19 +223,6 @@ python -m rsna_knee.cli train --config configs/train_local.yaml --fold 1
 python -m rsna_knee.cli train --config configs/train_local.yaml --fold 2
 ```
 
-Evaluate:
-
-```bash
-python -m rsna_knee.cli evaluate \
-  --train-csv "$DATA_ROOT/train.csv" \
-  --oof \
-    runs/stage1_random/fold0/oof.csv \
-    runs/stage1_random/fold1/oof.csv \
-    runs/stage1_random/fold2/oof.csv \
-  --n-bootstrap 5000 \
-  --out runs/stage1_random/evaluation.json
-```
-
 Reference result:
 
 ```text
@@ -243,32 +230,6 @@ B0 macro AUC = 0.4762536432
 ```
 
 ## 11. Strong competition-only MRI SSL
-
-Create a strong SSL config from the verified local config. The completed reference schedule used:
-
-```yaml
-ssl_output_dir: runs/ssl_strong
-ssl_epochs: 8
-ssl_max_batches_per_epoch: 1000
-ssl_batch_size: 3
-ssl_n_slices: 9
-ssl_positions_per_stream: 2
-ssl_projection_dim: 256
-ssl_temperature: 0.15
-ssl_metadata_weight: 0.25
-ssl_lr: 0.0002
-ssl_min_lr: 0.000001
-ssl_weight_decay: 0.0001
-pretrained: false
-allow_external_pretrained: false
-```
-
-Run:
-
-```bash
-python -m rsna_knee.cli pretrain \
-  --config configs/train_local_ssl_pretrain.yaml
-```
 
 Reference checkpoint:
 
@@ -286,63 +247,17 @@ Reference coverage:
 238,274 active 2.5D examples
 ```
 
-## 12. B1 strong-SSL Stage-1
-
-Create `configs/train_local_ssl_strong.yaml` pointing to the strong checkpoint with source `competition_training_data` and train the same three folds.
-
-Reference result:
+## 12. B1-B3 references
 
 ```text
-B1 macro AUC = 0.5030284974
-95% CI      = [0.4474281231, 0.5566718294]
+B1 strong SSL       = 0.5030284974
+B2 lower encoder LR = 0.4993244663
+B3 pathology MIL    = 0.4944652486
 ```
 
-## 13. B2/B3 controlled alternatives
+B2 and B3 were rejected as replacements for B1.
 
-These are already implemented as separate commands:
-
-```bash
-rsna-knee-b2 --config configs/train_local_ssl_b2.yaml --fold <0|1|2>
-rsna-knee-b3 --config configs/train_local_ssl_b3.yaml --fold <0|1|2>
-```
-
-Completed reference results:
-
-```text
-B2 = 0.4993244663  -> rejected
-B3 = 0.4944652486  -> rejected globally
-```
-
-See the dedicated experiment docs for exact policies.
-
-## 14. B4 frozen representation probe
-
-Extract deterministic gold features:
-
-```bash
-rsna-knee-b4 extract \
-  --config configs/train_local_ssl_strong.yaml \
-  --split train \
-  --scope gold \
-  --out runs/b4_frozen_ssl/gold_features.npz
-```
-
-Expected:
-
-```text
-features = [58, 6, 2304]
-finite   = true
-```
-
-Run original B4 nested probe:
-
-```bash
-rsna-knee-b4 nested \
-  --config configs/train_local_ssl_strong.yaml \
-  --features runs/b4_frozen_ssl/gold_features.npz \
-  --out-root runs/b4_frozen_ssl \
-  --n-bootstrap 5000
-```
+## 13. B4 frozen representation probe
 
 Reference result:
 
@@ -351,67 +266,100 @@ B4 macro AUC = 0.5137567459
 95% CI      = [0.4619827141, 0.5642366629]
 ```
 
-## 15. B4.1-B4.3 diagnostics
+The deterministic frozen feature cache has shape `[58, 6, 2304]`.
 
-Commands:
-
-```bash
-rsna-knee-b4-shared   --config configs/train_local_ssl_strong.yaml --features runs/b4_frozen_ssl/gold_features.npz --out-root runs/b4_1_shared_ssl --n-bootstrap 5000
-rsna-knee-b4-grouped  --config configs/train_local_ssl_strong.yaml --features runs/b4_frozen_ssl/gold_features.npz --out-root runs/b4_2_grouped_ssl --n-bootstrap 5000
-rsna-knee-b4-crossval --config configs/train_local_ssl_strong.yaml --features runs/b4_frozen_ssl/gold_features.npz --out-root runs/b4_3_crossval_ssl --n-bootstrap 5000
-```
-
-Completed reference results:
+## 14. B4.1-B4.3 diagnostics
 
 ```text
-B4.1 = 0.4847792672
-B4.2 = 0.4901328905
-B4.3 = 0.4966083942
+B4.1 shared policy       = 0.4847792672
+B4.2 grouped policies    = 0.4901328905
+B4.3 two-way CV selector = 0.4966083942
 ```
 
 All were rejected. Do not create further B4 selector variants from the same outer labels.
 
-## 16. Fixed ensemble check
+## 15. Fixed ensemble check
 
 The fixed B1+B4 50:50 rank average reached `0.5167`, but paired bootstrap versus B4 gave only `P=0.5544`. Keep it as a fixed candidate; do not tune weights.
 
-## 17. B5 image-report representation learning
+## 16. B5 image-report representation learning — complete
 
-B5 is the current active stage.
+B5 used only the 4,349 report-only competition studies and excluded all 58 gold studies. No external language model or image weights were used.
 
-Run:
+Checkpoint:
 
-```bash
-rsna-knee-b5 \
-  --config configs/train_local_ssl_strong.yaml \
-  --checkpoint runs/ssl_strong/ssl_encoder.pt \
-  --out-root runs/b5_report_ssl
+```text
+runs/b5_report_ssl/b5_encoder.pt
 ```
 
-B5 uses only the 4,349 report-only competition studies and excludes all 58 gold studies. No external language model or image weights are used.
+Verified text/coverage contract:
 
-## 18. B5 frozen probe
+```text
+reports used                 4349
+gold studies excluded          58
+TF-IDF features             20000
+SVD dimension                 256
+SVD explained variance      0.58477
+unique report groups          4198
+duplicate report rows          151
+empty reports                    0
+study draws                  16000
+approx corpus passes        3.6790
+batches                       4000
+active 2.5D examples        158886
+report queue                   256
+```
 
-After B5 finishes:
+Training history:
+
+```text
+total loss    5.5204 -> 4.7049
+image contrast 3.0068 -> 2.8937
+metadata       0.4472 -> 0.3684
+report NCE     4.6031 -> 3.2901
+report cosine  0.8015 -> 0.5924
+budget limited false for all epochs
+```
+
+## 17. B5 frozen feature extraction — complete
+
+The B5 encoder has already been frozen and applied to all 58 gold studies with the unchanged B4 extractor.
+
+Verified artifact:
+
+```text
+runs/b5_frozen_probe/gold_features.npz
+```
+
+Contract:
+
+```text
+studies                         58
+feature shape        [58, 6, 2304]
+encoder frozen                  true
+encoder trainable parameters       0
+checkpoint source competition_training_data
+checkpoint epochs                 4
+external pretrained            false
+n_slices                          16
+image size                       224
+triplet gap                        1
+metadata repair needed             0
+```
+
+## 18. Current task: unchanged B4 nested probe on B5 features
 
 ```bash
-mkdir -p runs/b5_frozen_probe
-
-rsna-knee-b4 extract \
-  --config configs/train_local_ssl_strong.yaml \
-  --checkpoint runs/b5_report_ssl/b5_encoder.pt \
-  --split train \
-  --scope gold \
-  --out runs/b5_frozen_probe/gold_features.npz
-
 rsna-knee-b4 nested \
   --config configs/train_local_ssl_strong.yaml \
   --features runs/b5_frozen_probe/gold_features.npz \
   --out-root runs/b5_frozen_probe \
   --n-bootstrap 5000
+
+cat runs/b5_frozen_probe/evaluation.json
 ```
 
-Do not change the B4 probe for this first B5 comparison.
+Do not switch to B4.1/B4.2/B4.3. The first B5 test must use the original B4 protocol to isolate the representation change.
 
 ## 19. B4 versus B5
 
@@ -422,9 +370,18 @@ python -m rsna_knee.cli evaluate \
   --compare-oof runs/b5_frozen_probe/oof.csv \
   --n-bootstrap 5000 \
   --out runs/b4_vs_b5.json
+
+cat runs/b4_vs_b5.json
 ```
 
-This is the primary B5 representation test.
+Orientation:
+
+```text
+A = B4 image-only strong SSL representation
+B = B5 image-report representation
+```
+
+Positive `median_difference` and `probability_b_better > 0.5` favor B5.
 
 ## 20. Reporting discipline
 
@@ -439,4 +396,4 @@ Keep these terms distinct:
 
 Because many method decisions have now been informed by the same 58 gold studies, the campaign-level OOF table is model-selection CV. Do not claim it as a pristine independent hidden-test estimate.
 
-Do not enter a B5 score until its training, frozen feature extraction, unchanged B4 probe and paired B4-vs-B5 evaluation have completed.
+Do not enter a B5 score until the unchanged B4 nested probe and paired B4-vs-B5 evaluation have completed.
