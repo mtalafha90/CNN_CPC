@@ -2,12 +2,12 @@
 
 This candidate deliberately changes only the supervised optimizer: the
 competition-data SSL encoder receives a smaller learning rate than the randomly
-initialized Transformer/pathology layers.  All data splits, weak supervision,
+initialized Transformer/pathology layers. All data splits, weak supervision,
 losses, augmentation, TTA, early stopping and retraining remain delegated to
 ``training.train_fold``.
 
 The implementation patches the optimizer factory only for the duration of one
-call and restores it in ``finally``.  The production B0/B1 training path is
+call and restores it in ``finally``. The production B0/B1 training path is
 therefore unchanged.
 """
 
@@ -18,11 +18,10 @@ import json
 from pathlib import Path
 
 import torch
+import yaml
 
 from . import training
 from .runtime import make_scaler
-
-_BASE_OPTIMIZER_BUNDLE = training._optimizer_bundle
 
 
 def _discriminative_optimizer_bundle(model, config: dict, epochs: int, runtime):
@@ -109,11 +108,7 @@ def main() -> None:
     parser.add_argument("--fold", type=int, required=True)
     args = parser.parse_args()
 
-    config = training.yaml.safe_load(Path(args.config).read_text(encoding="utf-8")) if hasattr(training, "yaml") else None
-    if config is None:
-        import yaml
-
-        config = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    config = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise ValueError(f"config must be a YAML mapping: {args.config}")
     print(train_discriminative_fold(config, args.fold))
