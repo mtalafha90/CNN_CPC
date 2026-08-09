@@ -1,6 +1,6 @@
 # Experiment status
 
-**Snapshot:** 2026-08-09  
+**Snapshot:** 2026-08-10  
 **Package:** `0.10.0`  
 **Gold evaluation set:** 58 fully labelled studies  
 **Primary metric:** macro ROC AUC across 12 targets
@@ -9,10 +9,11 @@ This file is the canonical repository summary for measured experiment status. `d
 
 ## Current headline
 
-- **Best clean standalone point estimate:** B4 frozen strong-SSL features + target-wise PCA/logistic regression, macro AUC `0.5137567459`, 95% bootstrap CI `[0.4619827141, 0.5642366629]`.
-- **Best fixed ensemble point estimate:** equal-weight B1+B4 rank average, macro AUC `0.5167`, 95% bootstrap CI `[0.4629, 0.5723]`.
-- The fixed ensemble is statistically tied with B4: paired median difference `+0.00276`, 95% CI `[-0.03513, +0.04174]`, `P(ensemble > B4)=0.5544`.
-- **B5 representation training is complete.** The frozen B5 gold probe is now pending; no B5 macro AUC is available yet.
+- **Best standalone point estimate:** B5 image-report representation learning evaluated with the unchanged B4 frozen target-wise PCA/logistic-regression probe, macro AUC `0.5243650851`, 95% bootstrap CI `[0.4728108406, 0.5761619105]`.
+- B5 improves the observed point estimate over the image-only B4 representation (`0.5137567459`) by about `+0.0106` macro AUC under the same downstream probe.
+- The paired B4-vs-B5 bootstrap is positive but statistically inconclusive: median difference `+0.0105821232`, 95% CI `[-0.0408197338, +0.0622131599]`, `P(B5 > B4)=0.656`.
+- **B5 is now the main standalone representation baseline. B4 is retained as the critical image-only ablation.**
+- The previously retained fixed equal-weight B1+B4 rank ensemble has macro AUC `0.5167`; B5 is numerically higher, but no new ensemble tuning is performed on the same 58 gold studies.
 
 ## Completed experiments
 
@@ -24,13 +25,13 @@ This file is the canonical repository summary for measured experiment status. `d
 | B2 | B1 with 0.1x encoder LR | `0.4993244663` | rejected |
 | B3 | pathology-aware low-capacity MIL | `0.4944652486` | rejected globally |
 | B1+B3 rank | fixed 50:50 rank ensemble | `0.5048038179` | effectively neutral |
-| B4 | frozen strong-SSL features + target-wise PCA/LR | `0.5137567459` | best standalone point estimate |
+| B4 | frozen strong-SSL features + target-wise PCA/LR | `0.5137567459` | retained image-only ablation |
 | B4.1 | one shared downstream policy per fold | `0.4847792672` | rejected; too rigid |
 | B4.2 | four predefined pathology-group policies | `0.4901328905` | rejected |
 | B4.3 | target-wise two-way-CV policy selector | `0.4966083942` | rejected |
 | B1+B4 raw | fixed 50:50 probability average | `0.5050` | rejected |
-| B1+B4 rank | fixed 50:50 rank average | `0.5167` | highest numerical score; tied with B4 |
-| B5 | image-report representation learning | pending | representation training complete; frozen probe pending |
+| B1+B4 rank | fixed 50:50 rank average | `0.5167` | retained fixed ensemble; no weight tuning |
+| **B5** | **image-report SSL representation + unchanged B4 probe** | **`0.5243650851`** | **main standalone baseline; best point estimate** |
 
 ## Key paired comparisons
 
@@ -46,7 +47,7 @@ Using A=B1 and B=B4:
 - 95% CI: `[-0.0514266147, +0.0709432872]`
 - `P(B4 > B1)=0.6378`
 
-B4 has the best clean standalone point estimate, but the evidence is not statistically decisive.
+B4 improved the point estimate over B1, but the evidence was not statistically decisive.
 
 ### B4.1, B4.2 and B4.3 versus B4
 
@@ -66,7 +67,42 @@ Using A=B4 and B=fixed equal-rank ensemble:
 - 95% CI: `[-0.0351268280, +0.0417415623]`
 - `P(ensemble > B4)=0.5544`
 
-Decision: keep the ensemble as a fixed candidate because it has the highest numerical score, but do not tune weights and do not claim it improves B4.
+Decision: retain the ensemble as a fixed historical candidate, but do not tune weights and do not claim it improves B4.
+
+### B5 versus B4
+
+This is the controlled representation test. B4 and B5 use the same frozen-feature contract and the same original target-wise nested PCA/logistic-regression probe; only the encoder representation changes.
+
+Using A=B4 and B=B5:
+
+- B4 macro AUC: `0.5137567459`
+- B5 macro AUC: `0.5243650851`
+- B5 95% bootstrap CI: `[0.4728108406, 0.5761619105]`
+- paired median difference: `+0.0105821232`
+- paired 95% CI: `[-0.0408197338, +0.0622131599]`
+- `P(B5 > B4)=0.656`
+- valid paired bootstrap replicates: `5000/5000`
+
+Interpretation: report-aligned competition-only representation learning improves the observed point estimate, but the 58-study gold set does not establish a statistically decisive superiority over B4. B5 becomes the main standalone baseline because it has the highest controlled standalone point estimate; B4 remains the image-only ablation.
+
+### B5 target-level changes versus B4
+
+| Target | B4 AUC | B5 AUC | B5 - B4 |
+|---|---:|---:|---:|
+| ACL | `0.585784` | `0.667892` | `+0.082108` |
+| MCL | `0.480726` | `0.405896` | `-0.074830` |
+| Medial Meniscus | `0.542067` | `0.665865` | `+0.123798` |
+| Lateral Meniscus | `0.604969` | `0.617391` | `+0.012422` |
+| Medial OA | `0.550388` | `0.658915` | `+0.108527` |
+| Lateral OA | `0.398453` | `0.404255` | `+0.005803` |
+| PF OA | `0.638353` | `0.606178` | `-0.032175` |
+| Effusion | `0.444720` | `0.516770` | `+0.072050` |
+| Synovitis | `0.445639` | `0.555556` | `+0.109916` |
+| Baker's | `0.375000` | `0.385870` | `+0.010870` |
+| Contusion | `0.558704` | `0.399460` | `-0.159244` |
+| Fracture | `0.540278` | `0.408333` | `-0.131944` |
+
+B5 is higher on 8 of 12 target point estimates. The largest gains are Medial Meniscus, Synovitis, Medial OA, ACL and Effusion. The largest losses are Contusion and Fracture. These target-level differences are descriptive only and must not be used to choose post-hoc target-specific B4/B5 winners on the same outer OOF labels.
 
 ## Strong SSL representation
 
@@ -91,6 +127,8 @@ encoder = frozen competition-only strong SSL ConvNeXt
 ```
 
 The target-wise B4 selector is visibly unstable because the inner folds contain only 18-20 studies. B4.1-B4.3 showed that forcing more shared or cross-validated policies did not improve outer OOF.
+
+B4 is now retained primarily as the image-only representation ablation against B5.
 
 ## B5 — image-report representation learning
 
@@ -136,54 +174,47 @@ Totals:
 - final head LR: `1e-6`
 - budget limited: false for every epoch
 
-Every logged objective improved monotonically. This demonstrates stable optimization and successful image-report alignment training, but it is **not** yet evidence that B5 improves gold-label AUC.
+Every logged objective improved monotonically, establishing stable image-report alignment training.
 
-## B5 evaluation plan — current next step
+### B5 frozen gold probe
 
-Inspect the training artifacts:
+The feature-cache audit confirms:
 
-```bash
-cat runs/b5_report_ssl/policy.json
-cat runs/b5_report_ssl/report_semantics.json
-cat runs/b5_report_ssl/coverage.json
-cat runs/b5_report_ssl/history.json
+```text
+checkpoint = runs/b5_report_ssl/b5_encoder.pt
+studies = 58
+feature shape = [58, 6, 2304]
+pooling = mean + std + max
+encoder frozen = true
+completed representation epochs = 4
+external pretrained = false
 ```
 
-Then extract frozen B5 features with the existing B4 extractor:
+The unchanged original B4 nested probe produced:
 
-```bash
-mkdir -p runs/b5_frozen_probe
-
-rsna-knee-b4 extract \
-  --config configs/train_local_ssl_strong.yaml \
-  --checkpoint runs/b5_report_ssl/b5_encoder.pt \
-  --split train \
-  --scope gold \
-  --out runs/b5_frozen_probe/gold_features.npz
+```text
+macro AUC = 0.5243650851
+95% CI   = [0.4728108406, 0.5761619105]
 ```
 
-Run the unchanged original B4 target-wise nested probe:
+Per-target B5 AUCs:
 
-```bash
-rsna-knee-b4 nested \
-  --config configs/train_local_ssl_strong.yaml \
-  --features runs/b5_frozen_probe/gold_features.npz \
-  --out-root runs/b5_frozen_probe \
-  --n-bootstrap 5000
+```text
+ACL               0.6678921569
+MCL               0.4058956916
+Medial Meniscus   0.6658653846
+Lateral Meniscus  0.6173913043
+Medial OA         0.6589147287
+Lateral OA        0.4042553191
+PF OA             0.6061776062
+Effusion          0.5167701863
+Synovitis         0.5555555556
+Baker's           0.3858695652
+Contusion         0.3994601889
+Fracture          0.4083333333
 ```
 
-Finally compare B4 image-only representation (A) with B5 image-report representation (B):
-
-```bash
-python -m rsna_knee.cli evaluate \
-  --train-csv "$DATA_ROOT/train.csv" \
-  --oof runs/b4_frozen_ssl/oof.csv \
-  --compare-oof runs/b5_frozen_probe/oof.csv \
-  --n-bootstrap 5000 \
-  --out runs/b4_vs_b5.json
-```
-
-This comparison is intentionally controlled: the representation changes while the downstream B4 probe remains fixed.
+Decision: B5 is the main standalone representation baseline. Do not use these outer results to tune target-specific B4/B5 selection, B5 report-loss weights, extra epochs, or ensemble weights.
 
 ## Validation caveat
 
@@ -194,5 +225,6 @@ Therefore:
 - do not optimize ensemble weights on these 58 labels;
 - do not create further B4 selector variants from observed outer results;
 - do not choose target-specific post-hoc winners from B0-B5 outer OOF;
+- do not tune B5 hyperparameters or extra epochs from the completed outer B5 result;
 - report paired bootstrap uncertainty alongside point estimates;
 - use actual competition leaderboard results only when a real submission has been made.
