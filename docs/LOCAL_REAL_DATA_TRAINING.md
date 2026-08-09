@@ -1,6 +1,6 @@
 # Local Real-Data Training Runbook
 
-> **Current stage — 2026-08-09:** B0-B4.3 and fixed ensemble evaluations are complete. **B5 image-report representation learning is running.** See [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md) for measured results.
+> **Current stage — 2026-08-09:** B0-B4.3 and fixed ensemble evaluations are complete. **B5 image-report representation training has completed all four predefined epochs; the frozen B5 gold probe is now the current task.** See [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md) for measured results.
 
 This runbook is for the verified local workstation.
 
@@ -69,7 +69,7 @@ B4.2 grouped policies            0.4901328905
 B4.3 two-way CV selector         0.4966083942
 B1+B4 fixed raw 50:50            0.5050
 B1+B4 fixed rank 50:50           0.5167
-B5                               running / pending
+B5                               training complete; probe pending
 ```
 
 B4 remains the best clean standalone point estimate. The B1+B4 rank ensemble is numerically higher but statistically tied with B4.
@@ -92,36 +92,35 @@ Coverage:
 238,274 active 2.5D examples
 ```
 
-## Current task: B5 training
+## B5 representation training — complete
 
-B5 uses all 4,349 report-only competition studies and excludes all 58 gold studies.
+B5 used all 4,349 report-only competition studies and excluded all 58 gold studies.
 
-Run:
-
-```bash
-rsna-knee-b5 \
-  --config configs/train_local_ssl_strong.yaml \
-  --checkpoint runs/ssl_strong/ssl_encoder.pt \
-  --out-root runs/b5_report_ssl
-```
-
-Expected outputs:
+Completed checkpoint:
 
 ```text
 runs/b5_report_ssl/b5_encoder.pt
-runs/b5_report_ssl/history.json
-runs/b5_report_ssl/coverage.json
-runs/b5_report_ssl/policy.json
-runs/b5_report_ssl/report_semantics.json
-runs/b5_report_ssl/report_semantics.npz
-runs/b5_report_ssl/report_text_space.joblib
 ```
 
-Do not assign a B5 AUC while this training is still running.
+Training summary:
 
-## After B5 training finishes
+```text
+epochs                  4
+batches               4000
+study draws          16000
+active 2.5D examples 158886
+loss          5.5204 -> 4.7049
+image loss    3.0068 -> 2.8937
+report NCE    4.6031 -> 3.2901
+report cosine 0.8015 -> 0.5924
+final encoder LR       1e-6
+final head LR          1e-6
+budget limited          false
+```
 
-Inspect the representation-training artifacts first:
+All logged objectives improved monotonically. Do not assign a B5 AUC from the pretraining loss; the frozen gold probe below is the performance test.
+
+## Current task: inspect B5 artifacts
 
 ```bash
 cat runs/b5_report_ssl/policy.json
@@ -134,9 +133,10 @@ Check that:
 
 - source is competition-only;
 - no gold studies were used for B5 representation training;
+- `completed_epochs` is 4;
 - the encoder checkpoint exists;
-- training losses are finite;
-- coverage is substantial enough for evaluation.
+- losses are finite;
+- `budget_limited` is false for all completed epochs.
 
 ## Extract B5 frozen gold features
 
