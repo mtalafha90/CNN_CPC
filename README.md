@@ -2,7 +2,7 @@
 
 `CNN_CPC` is a production-oriented PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The project is built around the released supervision regime: 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and macro ROC AUC across 12 pathologies.
 
-> **Current experiment snapshot — 2026-08-09:** B4 frozen strong-SSL features + target-wise PCA/logistic regression is the best clean standalone point estimate (`0.5137567459`). A fixed equal-weight B1+B4 rank ensemble is numerically highest (`0.5167`) but is statistically tied with B4 (`P=0.5544`). **B5 image-report representation training completed all four predefined epochs cleanly; its frozen gold probe is now pending, so no B5 AUC is available yet.**
+> **Current experiment snapshot — 2026-08-10:** **B5 image-report representation learning is the main standalone baseline and the highest current standalone point estimate**, with macro AUC `0.5243650851` and 95% bootstrap CI `[0.4728108406, 0.5761619105]`. Under the unchanged B4 downstream probe, the paired B5-vs-B4 bootstrap gives median difference `+0.0105821232`, 95% CI `[-0.0408197338, +0.0622131599]`, and `P(B5 > B4)=0.656`: positive but statistically inconclusive evidence of improvement. B4 (`0.5137567459`) is retained as the image-only ablation. A previously fixed B1+B4 rank ensemble scored `0.5167`; no new ensemble-weight tuning is performed on the same 58 gold studies.
 
 The canonical measured-results table is [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md).
 
@@ -75,18 +75,21 @@ encoder + Transformer/pathology heads -> 12 logits
 B3
 encoder + pathology-specific low-capacity MIL
 
-B4
+B4 — image-only ablation
 strong SSL encoder frozen
 -> mean/std/max stream features
 -> target-specific PCA + logistic regression
 
-B5 (representation training complete; frozen probe pending)
+B5 — main standalone baseline
 strong SSL encoder
 + competition reports represented by TF-IDF -> TruncatedSVD
 + image-image SSL
 + acquisition metadata loss
 + image-report alignment
--> MRI encoder only at inference
+-> B5 MRI encoder frozen
+-> same mean/std/max stream features
+-> unchanged B4 target-specific PCA + logistic regression
+-> MRI-only at inference
 ```
 
 Reports are training supervision only. The hidden/test inference path remains MRI-only.
@@ -101,13 +104,13 @@ Reports are training supervision only. The hidden/test inference path remains MR
 | B2 | 0.1x encoder LR | `0.4993244663` | rejected |
 | B3 | pathology-aware MIL | `0.4944652486` | rejected globally |
 | B1+B3 rank | fixed 50:50 rank average | `0.5048038179` | neutral |
-| **B4** | frozen SSL + target-wise PCA/LR | **`0.5137567459`** | **best standalone point estimate** |
+| B4 | frozen SSL + target-wise PCA/LR | `0.5137567459` | retained image-only ablation |
 | B4.1 | one shared policy | `0.4847792672` | rejected |
 | B4.2 | four pathology-group policies | `0.4901328905` | rejected |
 | B4.3 | two-way-CV target selector | `0.4966083942` | rejected |
 | B1+B4 raw | fixed 50:50 probability average | `0.5050` | rejected |
-| B1+B4 rank | fixed 50:50 rank average | `0.5167` | numerically best; tied with B4 |
-| **B5** | image-report representation learning | pending | **training complete; frozen probe pending** |
+| B1+B4 rank | fixed 50:50 rank average | `0.5167` | retained fixed ensemble; no tuning |
+| **B5** | **image-report SSL + unchanged B4 probe** | **`0.5243650851`** | **main standalone baseline; best point estimate** |
 
 ### Current statistical interpretation
 
@@ -127,15 +130,26 @@ median difference       = +0.00276
 P(ensemble > B4)        = 0.5544
 ```
 
-Therefore the ensemble is not claimed as an improvement despite its higher point estimate.
+B5 versus B4, using the same downstream probe:
+
+```text
+B4 macro AUC            = 0.5137567459
+B5 macro AUC            = 0.5243650851
+B5 95% CI               = [0.4728108406, 0.5761619105]
+median B5-B4 difference = +0.0105821232
+95% paired CI           = [-0.0408197338, +0.0622131599]
+P(B5 > B4)              = 0.656
+```
+
+B5 has the highest standalone point estimate, but its superiority over B4 is not claimed as statistically established because the paired interval crosses zero.
 
 ## Why B4 selector tuning is closed
 
 B4's target-wise inner selections are unstable because each inner fold contains only about 18–20 studies. Three follow-ups tested shared, grouped, and two-way-CV policy selection. All three reduced pooled OOF performance. Further selector/grid variants based on the same 58 outer labels would increasingly meta-fit the validation campaign.
 
-The next scientific question is therefore representation quality, not another downstream selector.
+B4 is retained as the image-only ablation. The completed B5 result shifts the primary representation baseline to report-aligned B5 without reopening the downstream selector.
 
-## B5 — representation training complete
+## B5 — completed main representation baseline
 
 B5 used only the 4,349 report-only competition studies for representation training. The 58 gold studies were excluded completely.
 
@@ -178,7 +192,45 @@ report cosine 0.8015 -> 0.5924
 budget limited          false
 ```
 
-The optimization was stable and monotonic, but the B5 representation has **not yet been assigned a macro AUC**. The first evaluation deliberately reuses the unchanged original B4 probe. See [`docs/B5_IMAGE_REPORT_SSL.md`](docs/B5_IMAGE_REPORT_SSL.md).
+Frozen gold-feature audit:
+
+```text
+checkpoint             runs/b5_report_ssl/b5_encoder.pt
+studies                58
+feature shape          [58, 6, 2304]
+pooling                mean + std + max
+encoder frozen         true
+completed epochs       4
+external pretrained    false
+```
+
+Pooled B5 OOF result:
+
+```text
+macro AUC = 0.5243650851
+95% CI   = [0.4728108406, 0.5761619105]
+```
+
+Per-target AUC:
+
+| Target | B5 AUC |
+|---|---:|
+| ACL | `0.6678921569` |
+| MCL | `0.4058956916` |
+| Medial Meniscus | `0.6658653846` |
+| Lateral Meniscus | `0.6173913043` |
+| Medial OA | `0.6589147287` |
+| Lateral OA | `0.4042553191` |
+| PF OA | `0.6061776062` |
+| Effusion | `0.5167701863` |
+| Synovitis | `0.5555555556` |
+| Baker's | `0.3858695652` |
+| Contusion | `0.3994601889` |
+| Fracture | `0.4083333333` |
+
+B5 improves 8 of 12 target point estimates versus B4. The largest descriptive gains are Medial Meniscus, Synovitis, Medial OA, ACL and Effusion; the largest losses are Contusion and Fracture. These target-level differences are not used for post-hoc model selection.
+
+See [`docs/B5_IMAGE_REPORT_SSL.md`](docs/B5_IMAGE_REPORT_SSL.md) for the full controlled experiment and interpretation.
 
 ## Installation
 
@@ -212,7 +264,7 @@ python -m rsna_knee.cli train --config configs/train_local_ssl_strong.yaml --fol
 python -m rsna_knee.cli train --config configs/train_local_ssl_strong.yaml --fold 1
 python -m rsna_knee.cli train --config configs/train_local_ssl_strong.yaml --fold 2
 
-# B4 frozen probe
+# B4 image-only frozen probe
 rsna-knee-b4 extract \
   --config configs/train_local_ssl_strong.yaml \
   --split train --scope gold \
@@ -224,13 +276,32 @@ rsna-knee-b4 nested \
   --out-root runs/b4_frozen_ssl \
   --n-bootstrap 5000
 
-# B5 frozen probe — current next step
+# B5 frozen probe
 mkdir -p runs/b5_frozen_probe
 rsna-knee-b4 extract \
   --config configs/train_local_ssl_strong.yaml \
   --checkpoint runs/b5_report_ssl/b5_encoder.pt \
   --split train --scope gold \
   --out runs/b5_frozen_probe/gold_features.npz
+
+rsna-knee-b4 nested \
+  --config configs/train_local_ssl_strong.yaml \
+  --features runs/b5_frozen_probe/gold_features.npz \
+  --out-root runs/b5_frozen_probe \
+  --n-bootstrap 5000
+
+python -m rsna_knee.cli evaluate \
+  --train-csv "$DATA_ROOT/train.csv" \
+  --oof runs/b5_frozen_probe/oof.csv \
+  --n-bootstrap 5000 \
+  --out runs/b5_frozen_probe/eval.json
+
+python -m rsna_knee.cli evaluate \
+  --train-csv "$DATA_ROOT/train.csv" \
+  --oof runs/b4_frozen_ssl/oof.csv \
+  --compare-oof runs/b5_frozen_probe/oof.csv \
+  --n-bootstrap 5000 \
+  --out runs/b4_vs_b5.json
 ```
 
 ## Documentation map
@@ -264,8 +335,8 @@ Do not:
 - optimize ensemble weights on the 58 gold labels;
 - select target-specific post-hoc model winners from outer OOF;
 - create further B4 selector variants from observed outer results;
-- report a B5 score before its fixed frozen probe completes;
-- choose extra B5 epochs after seeing gold OOF and then treat the same OOF as pristine;
+- tune B5 report-loss weights, temperatures, or extra epochs from the completed outer B5 OOF result;
+- use the target-level B4/B5 differences to construct a post-hoc mixed predictor;
 - claim leaderboard superiority without an actual competition submission result.
 
 ## Competition execution policy
