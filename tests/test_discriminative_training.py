@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 import torch
 from torch import nn
@@ -18,7 +16,7 @@ class TinyModel(nn.Module):
 
 class DummyRuntime:
     device = torch.device("cpu")
-    precision = "fp32"
+    use_scaler = False
 
 
 def test_optimizer_uses_smaller_encoder_lr_and_disjoint_groups():
