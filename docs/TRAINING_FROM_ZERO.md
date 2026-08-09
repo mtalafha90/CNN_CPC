@@ -1,163 +1,95 @@
 # CNN_CPC Training From Zero
 
-This is the clean end-to-end guide for setting up and training `CNN_CPC` on the real RSNA Knee Abnormality Detection data from a fresh Linux machine.
+This is the clean end-to-end guide for setting up `CNN_CPC` on a fresh Linux machine and reproducing the current experiment path.
 
-The current repository has already been verified on one real-data workstation, but this document is intentionally machine-independent.
+> **Repository experiment snapshot — 2026-08-09:** B0-B4.3 and fixed B1/B4 ensembles are complete; B5 image-report representation learning is running. Measured scores are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
 
-## Workflow
+## Current reproducible ladder
 
 ```text
-clone/update repo
--> create Conda environment
--> install and test
--> verify GPU
+clone/update
+-> Conda environment
+-> install + tests
+-> verify one GPU
 -> place competition data
 -> create local config
 -> inspect CSVs
--> export nested validation manifests
--> train/test DICOM preflight
+-> DICOM preflight
 -> full selected-series audit
--> verify report supervision
--> fold-0 smoke
--> Stage-1 random folds 0/1/2
--> optional competition-data SSL
--> per-fold Stage-1 candidate selection from inner AUC only
--> Stage-2 folds 0/1/2
--> OOF evaluation
--> freeze final method
--> three-fold inference
+-> verify report parsing
+-> B0 random baseline
+-> strong competition-only MRI SSL
+-> B1 strong-SSL Stage-1
+-> B2/B3 controlled neural alternatives
+-> B4 frozen representation probe
+-> B4.1/B4.2/B4.3 selector diagnostics
+-> fixed B1+B4 ensemble check
+-> B5 competition-only image-report representation learning
+-> unchanged B4 probe on B5 encoder
+-> paired B4-vs-B5 evaluation
 ```
 
-Do not skip preflight, audit, or smoke on a new machine.
+The earlier Stage-2/co-training code remains in the repository, but the current active experiment branch is B5 representation learning because the completed B0-B4 evidence points to representation quality / small-gold variance as the more useful next lever.
 
-## 1. Clone or update the repository
-
-Choose a repository location:
+## 1. Clone/update
 
 ```bash
 export REPO="/path/to/CNN_CPC"
-```
-
-Clone once:
-
-```bash
 cd "$(dirname "$REPO")"
-git clone https://github.com/mtalafha90/CNN_CPC.git
-cd "$REPO"
-```
-
-Or update an existing checkout:
-
-```bash
+git clone https://github.com/mtalafha90/CNN_CPC.git  # first time only
 cd "$REPO"
 git checkout main
 git pull --ff-only origin main
 ```
 
-Check:
-
-```bash
-pwd
-git branch --show-current
-git status
-git log -5 --oneline
-```
-
-## 2. Create the Conda environment
+## 2. Environment
 
 ```bash
 conda create -n rsna-knee python=3.12 -y
 conda activate rsna-knee
-```
-
-If another virtual environment is active:
-
-```bash
-deactivate 2>/dev/null || true
-conda activate rsna-knee
-```
-
-Check:
-
-```bash
-which python
-python --version
-```
-
-## 3. Install the project
-
-```bash
-cd "$REPO"
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e .
 python -m pip install pytest pillow kaggle
 python -m pip check
 ```
 
-Verify import and CLI:
+Verify:
 
 ```bash
 python - <<'PY'
 import rsna_knee
-print(rsna_knee.__file__)
+print('version:', rsna_knee.__version__)
+print('package:', rsna_knee.__file__)
 PY
 
-python -m rsna_knee.cli --help
-```
-
-## 4. Run software tests
-
-```bash
 pytest -q
 python -m compileall -q src tests kaggle scripts
 ```
 
-Also run the focused methodology tests when modifying supervision/sampling:
+Current package version for B5 is `0.10.0`.
 
-```bash
-pytest -q tests/test_oa_report_labels.py
-pytest -q tests/test_sampling_pairing.py
-pytest -q tests/test_methodology.py
-```
-
-## 5. Verify GPU support
-
-```bash
-nvidia-smi
-```
-
-```bash
-python - <<'PY'
-import torch
-print("PyTorch:", torch.__version__)
-print("CUDA build:", torch.version.cuda)
-print("CUDA available:", torch.cuda.is_available())
-print("GPU count:", torch.cuda.device_count())
-if torch.cuda.is_available():
-    print("GPU:", torch.cuda.get_device_name(0))
-    print("VRAM GB:", torch.cuda.get_device_properties(0).total_memory / 1024**3)
-PY
-```
-
-Production training requires `CUDA available: True`.
-
-Use one GPU:
+## 3. GPU
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
+nvidia-smi
+python - <<'PY'
+import torch
+print('torch:', torch.__version__)
+print('CUDA available:', torch.cuda.is_available())
+print('GPU count:', torch.cuda.device_count())
+if torch.cuda.is_available():
+    print('GPU:', torch.cuda.get_device_name(0))
+PY
 ```
 
-Do not launch with `torchrun`.
+The conservative production path uses one GPU and no `torchrun`.
 
-## 6. Verify the committed external fixture
+## 4. External technical fixture
 
 ```bash
 pytest -q tests/test_external_fixture.py
-```
 
-Strict preflight:
-
-```bash
 mkdir -p runs
 python -m rsna_knee.cli preflight \
   --data-root fixtures/external_validation \
@@ -168,19 +100,17 @@ python -m rsna_knee.cli preflight \
   --out runs/external_test_preflight.json
 ```
 
-This fixture tests software plumbing only. Never use it as a competition validation set.
+This fixture validates software plumbing only. Never use it for scientific model selection.
 
-## 7. Place the competition data
+## 5. Competition data
 
-After accepting the competition rules, download through Kaggle or the website.
-
-Set:
+After accepting the competition rules, place the data locally and set:
 
 ```bash
 export DATA_ROOT="/path/to/rsna-knee-abnormality-detection"
 ```
 
-The root should contain at least:
+Expected metadata files:
 
 ```text
 train.csv
@@ -188,81 +118,37 @@ train_series.csv
 test.csv
 test_series.csv
 sample_submission.csv
-train_series/ or the supported training image tree
-test_series/ or the supported test image tree
 ```
 
-Check:
+Do not commit competition images, reports, credentials or machine-local paths.
+
+## 6. Create local config
 
 ```bash
-ls -lh "$DATA_ROOT"
-find "$DATA_ROOT" -maxdepth 2 -type d | head -30
-```
-
-Do not commit the competition images or machine-local data paths.
-
-## 8. Create `configs/train_local.yaml`
-
-```bash
-cd "$REPO"
 cp configs/train.yaml configs/train_local.yaml
 ```
 
-Patch machine-local fields:
+Patch at least:
 
-```bash
-python - <<'PY'
-import os
-from pathlib import Path
-import yaml
-
-p = Path("configs/train_local.yaml")
-c = yaml.safe_load(p.read_text())
-c["data_root"] = os.environ["DATA_ROOT"]
-c["output_dir"] = "runs/stage1_random"
-c["ssl_output_dir"] = "runs/ssl"
-c["competition_mode"] = True
-c["requested_gpus"] = 1
-c["runtime_budget_hours"] = 8.5
-c["pretrained"] = False
-c["allow_external_pretrained"] = False
-c["ssl_encoder_checkpoint"] = None
-c["ssl_checkpoint_source"] = None
-c["cotrain_stage1_root"] = None
-c["cotrain_stage1_candidates"] = None
-c["expected_checkpoint_stage"] = None
-p.write_text(yaml.safe_dump(c, sort_keys=False))
-PY
+```yaml
+data_root: /path/to/rsna-knee-abnormality-detection
+output_dir: runs/stage1_random
+competition_mode: true
+requested_gpus: 1
+runtime_budget_hours: 8.5
+pretrained: false
+allow_external_pretrained: false
 ```
 
-Verify TTA parity:
+Keep the validation/submission TTA contract unchanged unless a new experiment is explicitly declared.
 
-```bash
-python - <<'PY'
-import yaml
-from pathlib import Path
-c = yaml.safe_load(Path("configs/train_local.yaml").read_text())
-print(c["tta_center_offsets"])
-print(c["validation_tta_offsets"])
-print("match:", c["tta_center_offsets"] == c["validation_tta_offsets"])
-PY
-```
-
-Expected:
-
-```text
-[-1, 0, 1]
-[-1, 0, 1]
-match: True
-```
-
-## 9. Inspect official CSVs
+## 7. Inspect data
 
 ```bash
 python -m rsna_knee.cli inspect --data-root "$DATA_ROOT"
 ```
 
-The verified 2026-08-08 data release produced:
+Verified reference release:
 
 ```text
 studies=4407
@@ -272,29 +158,11 @@ reports_present=4407
 series=24371
 ```
 
-If your downloaded release differs, record the difference before training rather than forcing these counts.
+If a later release differs, document the difference before training.
 
-## 10. Export nested validation manifests
+## 8. Preflight
 
-```bash
-mkdir -p runs/validation
-for f in 0 1 2; do
-  python -m rsna_knee.cli validation-manifest \
-    --config configs/train_local.yaml \
-    --fold "$f" \
-    --out "runs/validation/fold${f}.csv"
-done
-```
-
-For the verified release, role sizes were:
-
-```text
-fold 0: 20 gold_train, 20 inner_selection, 18 outer_validation
-fold 1: 18 gold_train, 20 inner_selection, 20 outer_validation
-fold 2: 20 gold_train, 18 inner_selection, 20 outer_validation
-```
-
-## 11. Run train preflight
+Train:
 
 ```bash
 python -m rsna_knee.cli preflight \
@@ -306,24 +174,7 @@ python -m rsna_knee.cli preflight \
   --out runs/preflight_train.json
 ```
 
-Inspect:
-
-```bash
-python -m json.tool runs/preflight_train.json
-```
-
-Verified reference result:
-
-```text
-121 selected streams
-121 decoded streams
-4045 candidate files
-0 file failures
-```
-
-## 12. Run test preflight
-
-If the test tree is present:
+Test:
 
 ```bash
 python -m rsna_knee.cli preflight \
@@ -335,11 +186,14 @@ python -m rsna_knee.cli preflight \
   --out runs/preflight_test.json
 ```
 
-If fewer than 24 test studies exist locally, the command naturally checks the available set.
+Verified reference:
 
-The verified release contained three local test studies and decoded all 533 candidate files successfully.
+```text
+train: 121/121 selected streams, 4045/4045 files decoded
+test:   14/14 selected streams, 533/533 files decoded
+```
 
-## 13. Run the full audit
+## 9. Full audit
 
 ```bash
 python -m rsna_knee.cli audit \
@@ -347,94 +201,21 @@ python -m rsna_knee.cli audit \
   --out-dir runs/audit
 ```
 
-Inspect:
-
-```bash
-python - <<'PY'
-import json
-from pathlib import Path
-p = json.loads(Path("runs/audit/audit.json").read_text())
-for key in [
-    "decode_audit",
-    "selected_stream_counts",
-    "missing_stream_counts",
-    "teacher_confidence_counts",
-]:
-    print("\n=====", key, "=====")
-    print(json.dumps(p[key], indent=2))
-PY
-```
-
-Verified full audit reference:
+Verified reference:
 
 ```text
 21,886 selected series checked
-21,886 decoded
-0 failed series
-732,556 candidate DICOM files
-2 failed DICOM files
-2 series with one partial file failure each
-0 series above the 20% per-series gate
+21,886 selected series decoded
+732,554 / 732,556 candidate DICOM files decoded
+2 partial one-file failures
+0 selected series failed
 ```
 
-Do not repeat the full 700k-file audit after every documentation/config change. Repeat it when DICOM decoding, routing or the underlying data change.
+Repeat the full audit when the data, DICOM decoder or routing code changes—not after every documentation change.
 
-## 14. Check report supervision
+## 10. B0 random baseline
 
-The OA parser should produce nonzero supervision. Quick audit check:
-
-```bash
-python - <<'PY'
-import json
-from pathlib import Path
-p = json.loads(Path("runs/audit/audit.json").read_text())
-for t in ["Medial OA", "Lateral OA", "PF OA"]:
-    print(t, p["teacher_state_counts"][t])
-PY
-```
-
-The verified parser produced:
-
-```text
-Medial OA  positive=492 negated=339 unmentioned=3576
-Lateral OA positive=409 negated=387 unmentioned=3611
-PF OA      positive=695 negated=379 unmentioned=3333
-```
-
-## 15. Run fold-0 smoke
-
-```bash
-python -m rsna_knee.cli train \
-  --config configs/train_local.yaml \
-  --fold 0 \
-  --smoke
-```
-
-A successful smoke should generate the full Stage-1 artifact set under:
-
-```text
-runs/stage1_random/smoke/fold0/
-```
-
-The current paired-sampler reference smoke produced nonzero ranking pairs for all 12 targets and best inner macro-AUC `0.55135`. Treat this only as a software/GPU validation result.
-
-## 16. Verify ranking utilization
-
-```bash
-python - <<'PY'
-import json
-from pathlib import Path
-p = json.loads(Path("runs/stage1_random/smoke/fold0/training_diagnostics.json").read_text())
-for phase in ["selection", "retrain"]:
-    counts = p[phase]["rank_pairs"]
-    print(phase, "total=", sum(counts.values()))
-    print(counts)
-PY
-```
-
-The verified paired-sampler smoke produced 63 selection pairs and 61 retraining pairs.
-
-## 17. Run Stage-1 random production folds
+Train three folds:
 
 ```bash
 python -m rsna_knee.cli train --config configs/train_local.yaml --fold 0
@@ -442,11 +223,7 @@ python -m rsna_knee.cli train --config configs/train_local.yaml --fold 1
 python -m rsna_knee.cli train --config configs/train_local.yaml --fold 2
 ```
 
-Run sequentially on one GPU.
-
-Do not change the method after seeing fold-0 outer AUC. Inspect fold 0 only for computational/runtime correctness, then run folds 1 and 2 unchanged.
-
-## 18. Evaluate Stage-1 random OOF
+Evaluate:
 
 ```bash
 python -m rsna_knee.cli evaluate \
@@ -455,76 +232,211 @@ python -m rsna_knee.cli evaluate \
     runs/stage1_random/fold0/oof.csv \
     runs/stage1_random/fold1/oof.csv \
     runs/stage1_random/fold2/oof.csv \
-  --n-bootstrap 2000 \
+  --n-bootstrap 5000 \
   --out runs/stage1_random/evaluation.json
 ```
 
-## 19. Optional competition-data SSL
+Reference result:
 
-```bash
-python -m rsna_knee.cli pretrain --config configs/train_local.yaml
+```text
+B0 macro AUC = 0.4762536432
 ```
 
-Create an SSL Stage-1 config pointing to `runs/ssl/ssl_encoder.pt` with:
+## 11. Strong competition-only MRI SSL
+
+Create a strong SSL config from the verified local config. The completed reference schedule used:
 
 ```yaml
-ssl_checkpoint_source: competition_training_data
-output_dir: runs/stage1_ssl
+ssl_output_dir: runs/ssl_strong
+ssl_epochs: 8
+ssl_max_batches_per_epoch: 1000
+ssl_batch_size: 3
+ssl_n_slices: 9
+ssl_positions_per_stream: 2
+ssl_projection_dim: 256
+ssl_temperature: 0.15
+ssl_metadata_weight: 0.25
+ssl_lr: 0.0002
+ssl_min_lr: 0.000001
+ssl_weight_decay: 0.0001
+pretrained: false
+allow_external_pretrained: false
 ```
 
-Train all three folds using the same validation policy.
-
-## 20. Select Stage-1 candidate per outer fold
+Run:
 
 ```bash
-python -m rsna_knee.cli select-stage1 \
-  --candidate-root "$(pwd)/runs/stage1_random" \
-  --candidate-root "$(pwd)/runs/stage1_ssl" \
-  --n-folds 3 \
-  --out runs/stage1_selection.json
+python -m rsna_knee.cli pretrain \
+  --config configs/train_local_ssl_pretrain.yaml
 ```
 
-The only supported criterion is fold-local inner AUC.
+Reference checkpoint:
 
-## 21. Stage 2
-
-Create a Stage-2 config with the candidate roots and run folds 0, 1 and 2 sequentially.
-
-Stage-2 Phase A is report-only. Phase B starts fresh and consumes only safe fold-local image teachers.
-
-Inspect `stage2_supervision.json` to verify how much image-only supervision was actually added.
-
-## 22. Final inference
-
-After the final stage is frozen, create `configs/final_infer.yaml` and set:
-
-```yaml
-expected_checkpoint_stage: stage1
+```text
+runs/ssl_strong/ssl_encoder.pt
 ```
 
-or `stage2` as appropriate.
+Reference coverage:
 
-Then:
+```text
+8 epochs
+8,000 batches
+24,000 study draws
+~5.52 corpus passes
+238,274 active 2.5D examples
+```
+
+## 12. B1 strong-SSL Stage-1
+
+Create `configs/train_local_ssl_strong.yaml` pointing to the strong checkpoint with source `competition_training_data` and train the same three folds.
+
+Reference result:
+
+```text
+B1 macro AUC = 0.5030284974
+95% CI      = [0.4474281231, 0.5566718294]
+```
+
+## 13. B2/B3 controlled alternatives
+
+These are already implemented as separate commands:
 
 ```bash
-python -m rsna_knee.cli infer \
-  --config configs/final_infer.yaml \
-  --checkpoints \
-    runs/<final_stage>/fold0/best.pt \
-    runs/<final_stage>/fold1/best.pt \
-    runs/<final_stage>/fold2/best.pt \
-  --out submission.csv
+rsna-knee-b2 --config configs/train_local_ssl_b2.yaml --fold <0|1|2>
+rsna-knee-b3 --config configs/train_local_ssl_b3.yaml --fold <0|1|2>
 ```
 
-## 23. Reporting discipline
+Completed reference results:
 
-Keep these terms separate:
+```text
+B2 = 0.4993244663  -> rejected
+B3 = 0.4944652486  -> rejected globally
+```
 
-- audit result;
-- smoke result;
-- production fold result;
-- combined three-fold OOF result;
-- model-selection CV result;
-- leaderboard result.
+See the dedicated experiment docs for exact policies.
 
-Do not fill manuscript production-result placeholders from smoke runs.
+## 14. B4 frozen representation probe
+
+Extract deterministic gold features:
+
+```bash
+rsna-knee-b4 extract \
+  --config configs/train_local_ssl_strong.yaml \
+  --split train \
+  --scope gold \
+  --out runs/b4_frozen_ssl/gold_features.npz
+```
+
+Expected:
+
+```text
+features = [58, 6, 2304]
+finite   = true
+```
+
+Run original B4 nested probe:
+
+```bash
+rsna-knee-b4 nested \
+  --config configs/train_local_ssl_strong.yaml \
+  --features runs/b4_frozen_ssl/gold_features.npz \
+  --out-root runs/b4_frozen_ssl \
+  --n-bootstrap 5000
+```
+
+Reference result:
+
+```text
+B4 macro AUC = 0.5137567459
+95% CI      = [0.4619827141, 0.5642366629]
+```
+
+## 15. B4.1-B4.3 diagnostics
+
+Commands:
+
+```bash
+rsna-knee-b4-shared   --config configs/train_local_ssl_strong.yaml --features runs/b4_frozen_ssl/gold_features.npz --out-root runs/b4_1_shared_ssl --n-bootstrap 5000
+rsna-knee-b4-grouped  --config configs/train_local_ssl_strong.yaml --features runs/b4_frozen_ssl/gold_features.npz --out-root runs/b4_2_grouped_ssl --n-bootstrap 5000
+rsna-knee-b4-crossval --config configs/train_local_ssl_strong.yaml --features runs/b4_frozen_ssl/gold_features.npz --out-root runs/b4_3_crossval_ssl --n-bootstrap 5000
+```
+
+Completed reference results:
+
+```text
+B4.1 = 0.4847792672
+B4.2 = 0.4901328905
+B4.3 = 0.4966083942
+```
+
+All were rejected. Do not create further B4 selector variants from the same outer labels.
+
+## 16. Fixed ensemble check
+
+The fixed B1+B4 50:50 rank average reached `0.5167`, but paired bootstrap versus B4 gave only `P=0.5544`. Keep it as a fixed candidate; do not tune weights.
+
+## 17. B5 image-report representation learning
+
+B5 is the current active stage.
+
+Run:
+
+```bash
+rsna-knee-b5 \
+  --config configs/train_local_ssl_strong.yaml \
+  --checkpoint runs/ssl_strong/ssl_encoder.pt \
+  --out-root runs/b5_report_ssl
+```
+
+B5 uses only the 4,349 report-only competition studies and excludes all 58 gold studies. No external language model or image weights are used.
+
+## 18. B5 frozen probe
+
+After B5 finishes:
+
+```bash
+mkdir -p runs/b5_frozen_probe
+
+rsna-knee-b4 extract \
+  --config configs/train_local_ssl_strong.yaml \
+  --checkpoint runs/b5_report_ssl/b5_encoder.pt \
+  --split train \
+  --scope gold \
+  --out runs/b5_frozen_probe/gold_features.npz
+
+rsna-knee-b4 nested \
+  --config configs/train_local_ssl_strong.yaml \
+  --features runs/b5_frozen_probe/gold_features.npz \
+  --out-root runs/b5_frozen_probe \
+  --n-bootstrap 5000
+```
+
+Do not change the B4 probe for this first B5 comparison.
+
+## 19. B4 versus B5
+
+```bash
+python -m rsna_knee.cli evaluate \
+  --train-csv "$DATA_ROOT/train.csv" \
+  --oof runs/b4_frozen_ssl/oof.csv \
+  --compare-oof runs/b5_frozen_probe/oof.csv \
+  --n-bootstrap 5000 \
+  --out runs/b4_vs_b5.json
+```
+
+This is the primary B5 representation test.
+
+## 20. Reporting discipline
+
+Keep these terms distinct:
+
+- preflight/audit;
+- smoke;
+- individual OOF result;
+- paired comparison;
+- model-selection CV;
+- leaderboard score.
+
+Because many method decisions have now been informed by the same 58 gold studies, the campaign-level OOF table is model-selection CV. Do not claim it as a pristine independent hidden-test estimate.
+
+Do not enter a B5 score until its training, frozen feature extraction, unchanged B4 probe and paired B4-vs-B5 evaluation have completed.
