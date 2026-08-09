@@ -9,6 +9,7 @@ The B6 parser is deliberately conservative:
 * multilingual, accent-insensitive concept matching;
 * target-local negation, normality and uncertainty handling;
 * non-diagnostic history/indication suppression;
+* component-aware structural conflict resolution;
 * explicit conflict detection for genuinely opposing definite evidence;
 * four states: positive / negated / uncertain / unmentioned;
 * fixed probabilities and confidence weights, not gold-fitted calibration;
@@ -43,7 +44,7 @@ from .report_labels import (
     predict_target as legacy_predict_target,
 )
 
-B6_VERSION = "1.2"
+B6_VERSION = "1.2.1"
 
 EXTRA_LEXICON: dict[str, tuple[str, ...]] = {
     "ACL": (
@@ -225,6 +226,23 @@ LOSS_OF_NORMAL_RE = re.compile(
     re.I,
 )
 
+# A structural abnormality may be focal while another component of the same
+# target is explicitly normal. Those statements are not contradictory. Examples
+# include superficial-MCL tear with intact deep MCL, a posterior-horn meniscal
+# tear with the remainder intact, and a proximal ACL tear with intact tibial
+# insertion. These markers are used only during report-level aggregation; an
+# isolated component-normal statement remains valid negative evidence.
+COMPONENT_LIMITED_NORMAL_RE = re.compile(
+    r"\b(?:"
+    r"superficial|deep|proximal|distal|femoral|tibial|"
+    r"anteromedial|posterolateral|bundle|bundles|"
+    r"anterior horn|posterior horn|body|root|posterior root|anterior root|"
+    r"insertion|attachment|foot ?plate|"
+    r"remainder|remaining|some fibers?|residual fibers?"
+    r")\b",
+    re.I,
+)
+
 
 @dataclass(frozen=True)
 class B6Prediction:
@@ -288,9 +306,6 @@ def _classify_mention(target: str, clause: str, phrase: str) -> tuple[str, str]:
     focus = _target_focus(clause, phrase)
     left = _left_context(focus, phrase)
 
-    # A mention inside indication/history is not diagnostic evidence. If the
-    # report later contains a real finding for the same target, that definite
-    # finding will win over this uncertain observation.
     if NON_DIAGNOSTIC_RE.search(left):
         return STATE_UNCERTAIN, "non_diagnostic_context"
 
@@ -299,9 +314,6 @@ def _classify_mention(target: str, clause: str, phrase: str) -> tuple[str, str]:
 
     if target in STRUCTURAL_TARGETS:
         negated_finding = bool(NEGATED_STRUCTURAL_FINDING_RE.search(focus))
-        # Remove directly negated tear/injury phrases before searching for other
-        # abnormalities. This lets "mucoid degeneration without tear" remain a
-        # positive abnormality while "no ACL tear" remains negative.
         residual = NEGATED_STRUCTURAL_FINDING_RE.sub(" ", focus)
         pathology = bool(
             STRUCTURAL_PATHOLOGY_RE.search(residual)
@@ -312,9 +324,6 @@ def _classify_mention(target: str, clause: str, phrase: str) -> tuple[str, str]:
 
         if pathology and uncertain:
             return STATE_UNCERTAIN, "uncertainty_scope"
-        # Explicit structural abnormality outranks generic words such as intact,
-        # preserved or normal when both occur in the same local statement, e.g.
-        # "sprain with intact fibers" or "tear; tibial insertion intact".
         if pathology:
             return STATE_POSITIVE, "explicit_structural_abnormality"
         if negated_finding:
@@ -330,6 +339,20 @@ def _classify_mention(target: str, clause: str, phrase: str) -> tuple[str, str]:
     if negated_target:
         return STATE_NEGATED, "explicit_negation"
     return STATE_POSITIVE, "explicit_pathology_mention"
+
+
+def _component_limited_negative(target: str, observation: tuple[str, str, str]) -> bool:
+    """Whether a negative structural observation is explicitly component-local.
+
+    This does not reclassify the observation itself. It is used only when the
+    same report also has definite positive evidence for the same target.
+    """
+    state, clause, reason = observation
+    if target not in STRUCTURAL_TARGETS or state != STATE_NEGATED:
+        return False
+    if reason != "explicit_normal_or_negated":
+        return False
+    return bool(COMPONENT_LIMITED_NORMAL_RE.search(clause))
 
 
 def _state_to_values(state: str, *, conflict: bool = False) -> tuple[float, float]:
@@ -378,9 +401,27 @@ def predict_target_b6(text: str, target: str) -> B6Prediction:
     if not observations:
         return B6Prediction(0.50, 0.0, False, STATE_UNMENTIONED, "", "no_target_evidence")
 
-    definite = {state for state, _, _ in observations if state in {STATE_POSITIVE, STATE_NEGATED}}
+    positive = [item for item in observations if item[0] == STATE_POSITIVE]
+    negative = [item for item in observations if item[0] == STATE_NEGATED]
 
-    if len(definite) > 1:
+    if positive and negative:
+        # A focal abnormality makes the target abnormal even if another named
+        # component is intact. Preserve conflict status only when at least one
+        # negative statement applies to the target globally rather than to an
+        # explicitly limited component.
+        global_negative = [item for item in negative if not _component_limited_negative(target, item)]
+        if not global_negative:
+            selected = positive[0]
+            probability, confidence = _state_to_values(STATE_POSITIVE)
+            return B6Prediction(
+                probability,
+                confidence,
+                True,
+                STATE_POSITIVE,
+                selected[1],
+                "positive_with_component_limited_normality",
+            )
+
         probability, confidence = _state_to_values(STATE_UNCERTAIN, conflict=True)
         evidence = " || ".join(item[1] for item in observations[:3])
         return B6Prediction(
@@ -392,11 +433,15 @@ def predict_target_b6(text: str, target: str) -> B6Prediction:
             "conflicting_definite_evidence",
         )
 
-    if definite:
-        state = next(iter(definite))
-        selected = next(item for item in observations if item[0] == state)
-        probability, confidence = _state_to_values(state)
-        return B6Prediction(probability, confidence, True, state, selected[1], selected[2])
+    if positive:
+        selected = positive[0]
+        probability, confidence = _state_to_values(STATE_POSITIVE)
+        return B6Prediction(probability, confidence, True, STATE_POSITIVE, selected[1], selected[2])
+
+    if negative:
+        selected = negative[0]
+        probability, confidence = _state_to_values(STATE_NEGATED)
+        return B6Prediction(probability, confidence, True, STATE_NEGATED, selected[1], selected[2])
 
     probability, confidence = _state_to_values(STATE_UNCERTAIN)
     return B6Prediction(
