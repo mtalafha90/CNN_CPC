@@ -1,6 +1,61 @@
 # B7 — B5-initialized MRI model trained on frozen B6 weak labels
 
-> **Status — 2026-08-10:** **IMPLEMENTED / REAL TRAINING PENDING.** B7-v1 is frozen before its first gold evaluation.
+> **Status — 2026-08-10:** **COMPLETED / GOLD DEVELOPMENT EVALUATED.** B7-v1 completed the frozen four-epoch training recipe and reached macro ROC AUC `0.5397724412` on the 58-study gold development set, 95% bootstrap CI `[0.4733481702, 0.6035621405]`. This is the highest standalone point estimate so far. The gold set remains a development set because the B6 gold audit informed the fixed global B7-v1 supervision policy.
+
+## Measured B7-v1 result
+
+Training completed all four predefined epochs with 500 batches per epoch and was not runtime-budget limited:
+
+```text
+epoch 1 loss = 0.8393994069
+epoch 2 loss = 0.7084098365
+epoch 3 loss = 0.6809013321
+epoch 4 loss = 0.6433874173
+```
+
+The run made 4,000 study draws total. With 3,120 active weakly labelled studies and batch size 2, this corresponds to about `1.28` nominal corpus passes. This coverage limitation was identified before the gold evaluation and can motivate a separately named coverage experiment, but B7-v1 itself is frozen.
+
+Supervision scope:
+
+```text
+report-only studies             4,349
+active weakly labelled studies  3,120
+inactive zero-usable studies    1,229
+usable target cells            14,123
+positive cells                  6,871
+negative cells                  7,252
+MRI-filter losses                   0
+```
+
+The fixed target-balancing policy produced approximately equal total balanced supervision mass (`890.625`) for each of the 12 targets.
+
+Gold development evaluation with TTA `[-1, 0, 1]`:
+
+```text
+macro AUC = 0.5397724411790162
+95% CI    = [0.47334817023085735, 0.6035621405473302]
+bootstrap = 5000/5000 valid
+n          = 58 studies
+```
+
+Per-target AUC:
+
+| Target | B7-v1 AUC |
+|---|---:|
+| ACL | `0.4828431373` |
+| MCL | `0.3945578231` |
+| Medial Meniscus | `0.5576923077` |
+| Lateral Meniscus | `0.5341614907` |
+| Medial OA | `0.4480620155` |
+| Lateral OA | `0.5899419729` |
+| PF OA | `0.6396396396` |
+| Effusion | `0.6211180124` |
+| Synovitis | `0.6535244922` |
+| Baker's | `0.5181159420` |
+| Contusion | `0.4723346829` |
+| Fracture | `0.5652777778` |
+
+Relative to B5 (`0.5243650851`), B7-v1 increases the macro point estimate by approximately `+0.01541`. This difference must be evaluated with a paired study-level bootstrap before claiming an improvement because both methods were evaluated on the same 58 studies.
 
 ## Goal
 
@@ -108,7 +163,7 @@ B7 training enforces all of the following:
 - gold labels never enter the B7 gradient;
 - no gold-based early stopping is used.
 
-The B6 gold audit did inform the global B7-v1 positive/negative reliability policy. Therefore later B7 performance on the same 58 gold studies is explicitly a **development estimate**, not untouched independent validation.
+The B6 gold audit did inform the global B7-v1 positive/negative reliability policy. Therefore B7 performance on the same 58 gold studies is explicitly a **development estimate**, not untouched independent validation.
 
 ## Install and test
 
@@ -144,18 +199,9 @@ runs/b7_weak_supervision/
 └── supervision_plan.json
 ```
 
-`b7_model.pt` is refreshed after every completed epoch so a budget-limited run still preserves its latest completed state.
-
-Before evaluating, inspect:
-
-```bash
-cat runs/b7_weak_supervision/supervision_plan.json
-cat runs/b7_weak_supervision/history.json
-```
+`b7_model.pt` is refreshed after every completed epoch.
 
 ## Gold development evaluation
-
-Only after the fixed B7 training run is complete:
 
 ```bash
 rsna-knee-b7-eval \
@@ -173,8 +219,6 @@ runs/b7_weak_supervision/gold_eval/
 └── eval.json
 ```
 
-`eval.json` reports the exact pooled 12-target macro ROC AUC, per-target AUCs, and a 5,000-replicate study-level bootstrap confidence interval.
-
 ## Decision rule
 
-Do not alter B7-v1 supervision weights, target soft labels, epochs, or architecture after seeing the first B7 gold score and still call it B7-v1. If a materially different policy is justified, it must be recorded as a new experiment (for example B7.1) and interpreted as additional development on the same 58-study set.
+B7-v1 is now frozen. Do not alter its supervision weights, soft labels, training duration, or architecture and still call the result B7-v1. Any coverage extension or materially different policy must be recorded as a new experiment (for example B7.1) and interpreted as additional development on the same 58-study set.
