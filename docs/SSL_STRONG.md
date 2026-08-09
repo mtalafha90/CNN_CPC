@@ -1,71 +1,85 @@
-# Strong competition-data MRI SSL candidate
+# Strong competition-data MRI SSL
 
-The frozen random-initialization Stage-1 baseline achieved:
+> Current campaign status is summarized in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
+
+Strong SSL was introduced after the random baseline and fold-safe supervised report teacher showed that the representation itself needed improvement.
+
+## Motivation
+
+Reference results before strong SSL:
 
 ```text
-58-study macro OOF AUC = 0.4762536431847217
-95% CI                 = [0.42321067215526303, 0.5301667206369031]
+B0 random-init macro AUC    = 0.4762536432
+report-teacher macro AUC    = 0.49245  (rejected as general teacher)
 ```
 
-The fold-safe report-teacher ensemble achieved only `0.49245` macro OOF and was rejected as a general replacement teacher. The next candidate therefore strengthens the MRI representation itself before pathology supervision.
+The original short SSL schedule covered only about one corpus pass and used one central triplet per stream. The strong schedule increased non-gold coverage while preserving the rule that no gold study participates in SSL pretraining.
 
-## Why the original SSL schedule was too weak
-
-The original defaults used:
+## Strong schedule
 
 ```yaml
-ssl_epochs: 4
-ssl_max_batches_per_epoch: 300
-ssl_batch_size: 4
-ssl_n_slices: 5
+ssl_output_dir: runs/ssl_strong
+ssl_epochs: 8
+ssl_max_batches_per_epoch: 1000
+ssl_batch_size: 3
+ssl_n_slices: 9
+ssl_positions_per_stream: 2
+ssl_projection_dim: 256
+ssl_temperature: 0.15
+ssl_metadata_weight: 0.25
+ssl_lr: 0.0002
+ssl_min_lr: 0.000001
+ssl_weight_decay: 0.0001
+ssl_noise_std: 0.01
+pretrained: false
+allow_external_pretrained: false
 ```
 
-That is only about 4,800 study draws in total for 4,349 non-gold studies, or roughly one corpus pass. In addition, the original SSL objective used only the middle sampled 2.5D triplet from each available sequence.
+## Data/leakage contract
 
-Version 0.6.0 keeps the leakage-safe non-gold-only data scope but adds multi-position sequence sampling and explicit coverage diagnostics.
+- only the 4,349 non-gold competition MRI studies are used;
+- all 58 gold studies are excluded;
+- no ImageNet/external checkpoint is used;
+- same-study multi-view examples provide representation positives;
+- plane and fluid/structural sequence metadata are auxiliary objectives.
 
-## Strong local schedule
+Checkpoint source metadata is `competition_training_data`.
 
-Create the strong SSL config from the already verified machine-local config:
+## Completed pretraining run
+
+```text
+completed epochs           8
+max batches/epoch          1000
+completed batches          8000
+study draws                24000
+approx corpus passes       5.52
+active 2.5D examples       238274
+loss                       ~3.434 -> ~2.862
+```
+
+The loss decreased monotonically across the completed schedule.
+
+Checkpoint:
+
+```text
+runs/ssl_strong/ssl_encoder.pt
+```
+
+Coverage/history:
+
+```text
+runs/ssl_strong/coverage.json
+runs/ssl_strong/history.json
+```
+
+## Reproduction
 
 ```bash
-cd /media/talafha/Disk_1/CNN_CPC
-conda activate rsna-knee
-cp configs/train_local.yaml configs/train_local_ssl_pretrain.yaml
-
-python - <<'PY'
-from pathlib import Path
-import yaml
-
-p = Path('configs/train_local_ssl_pretrain.yaml')
-c = yaml.safe_load(p.read_text())
-
-c['ssl_output_dir'] = 'runs/ssl_strong'
-c['ssl_epochs'] = 8
-c['ssl_max_batches_per_epoch'] = 1000
-c['ssl_batch_size'] = 3
-c['ssl_n_slices'] = 9
-c['ssl_positions_per_stream'] = 2
-c['ssl_projection_dim'] = 256
-c['ssl_temperature'] = 0.15
-c['ssl_metadata_weight'] = 0.25
-c['ssl_lr'] = 2e-4
-c['ssl_min_lr'] = 1e-6
-c['ssl_weight_decay'] = 1e-4
-c['ssl_noise_std'] = 0.01
-
-# This candidate remains competition-data only.
-c['pretrained'] = False
-c['allow_external_pretrained'] = False
-c['ssl_encoder_checkpoint'] = None
-c['ssl_checkpoint_source'] = None
-
-p.write_text(yaml.safe_dump(c, sort_keys=False))
-print(p)
-PY
+python -m rsna_knee.cli pretrain \
+  --config configs/train_local_ssl_pretrain.yaml
 ```
 
-## Regression tests
+Focused tests:
 
 ```bash
 pytest -q \
@@ -74,58 +88,9 @@ pytest -q \
   tests/test_sampling_pairing.py
 ```
 
-## Pretrain
+## B1 supervised probe
 
-```bash
-python -m rsna_knee.cli pretrain \
-  --config configs/train_local_ssl_pretrain.yaml
-```
-
-Expected files:
-
-```text
-runs/ssl_strong/ssl_encoder.pt
-runs/ssl_strong/history.json
-runs/ssl_strong/coverage.json
-```
-
-The runtime guard remains active. If the 8.5-hour work budget cannot safely start another epoch, SSL stops cleanly and preserves the completed encoder.
-
-Inspect coverage:
-
-```bash
-cat runs/ssl_strong/coverage.json
-cat runs/ssl_strong/history.json
-```
-
-A useful strong run should show several effective corpus passes rather than approximately one.
-
-## Build the Stage-1 SSL fine-tuning config
-
-Only after `ssl_encoder.pt` exists:
-
-```bash
-cp configs/train_local.yaml configs/train_local_ssl_strong.yaml
-
-python - <<'PY'
-from pathlib import Path
-import yaml
-
-p = Path('configs/train_local_ssl_strong.yaml')
-c = yaml.safe_load(p.read_text())
-c['output_dir'] = 'runs/stage1_ssl_strong'
-c['ssl_encoder_checkpoint'] = str(Path('runs/ssl_strong/ssl_encoder.pt').resolve())
-c['ssl_checkpoint_source'] = 'competition_training_data'
-c['pretrained'] = False
-c['allow_external_pretrained'] = False
-c['cotrain_stage1_root'] = None
-c['cotrain_stage1_candidates'] = None
-p.write_text(yaml.safe_dump(c, sort_keys=False))
-print(p)
-PY
-```
-
-Then train the same three nested folds without changing any pathology-training hyperparameters:
+The strong checkpoint was then used to initialize the same Stage-1 architecture/hyperparameters as B0.
 
 ```bash
 python -m rsna_knee.cli train --config configs/train_local_ssl_strong.yaml --fold 0
@@ -133,21 +98,38 @@ python -m rsna_knee.cli train --config configs/train_local_ssl_strong.yaml --fol
 python -m rsna_knee.cli train --config configs/train_local_ssl_strong.yaml --fold 2
 ```
 
-Evaluate:
+Final B1 result:
 
-```bash
-python -m rsna_knee.cli evaluate \
-  --train-csv "$DATA_ROOT/train.csv" \
-  --oof \
-    runs/stage1_ssl_strong/fold0/oof.csv \
-    runs/stage1_ssl_strong/fold1/oof.csv \
-    runs/stage1_ssl_strong/fold2/oof.csv \
-  --n-bootstrap 2000 \
-  --out runs/stage1_ssl_strong/evaluation.json
+```text
+macro AUC = 0.5030284974
+95% CI    = [0.4474281231, 0.5566718294]
 ```
 
-## Decision rule
+Compared with B0:
 
-Compare against the frozen random baseline `0.4762536432`. Do not select the strong-SSL candidate from outer OOF for downstream fold-specific Stage 2. If it is retained as a Stage-1 candidate, candidate choice for each outer fold still uses that fold's `inner_macro_auc` only through `select-stage1`.
+```text
+raw point gain          ~ +0.02677
+paired median gain        +0.02646
+paired 95% CI            [-0.04464, +0.09870]
+P(B1 > B0)                0.771
+```
 
-The strong SSL experiment is intended to answer one question cleanly: **does substantially better in-domain knee-MRI representation learning move the image student away from chance before any more aggressive supervision or architecture changes are introduced?**
+## Interpretation
+
+The point estimate supports useful in-domain MRI representation learning, but the 58-study gold set is too small to establish a precise effect.
+
+Subsequent experiments showed:
+
+- B2 lower encoder LR did not improve B1 (`0.4993`);
+- B3 pathology-aware MIL did not improve pooled B1 (`0.4945`);
+- B4 frozen strong-SSL features produced the best standalone point estimate (`0.5138`).
+
+Thus the strong SSL encoder remains the key representation baseline.
+
+## Relationship to B5
+
+B5 starts from this completed strong SSL checkpoint and adds report-semantic alignment using only the 4,349 report-only competition studies.
+
+The initial B5 comparison deliberately keeps the B4 downstream probe fixed. This asks whether report alignment improves the representation rather than whether another classifier happens to fit the 58 gold cases better.
+
+**B5 is currently running; no B5 performance result is available yet.**
