@@ -1,29 +1,31 @@
 # Competition execution policy
 
-`docs/competition.md` is the preserved competition-description document. This file describes the **conservative execution policy enforced by the current code**.
+`docs/competition.md` is the preserved competition-description document. This file describes the **conservative execution policy enforced by the current code and experiment workflow**.
 
-## Authority and conservative defaults
+> **Snapshot: 2026-08-09.** B0-B4.3 and fixed B1/B4 ensembles have completed; B5 representation training is running. Current scores are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
 
-The active Kaggle competition rules are the authority. The repository deliberately defaults to a stricter configuration whenever an allowance has not been independently verified.
+## Conservative defaults
 
-Current production defaults:
+The active competition rules remain the authority. The repository defaults to the stricter option whenever a permission has not been independently verified.
 
-- one GPU only;
-- no DDP and no `torchrun`;
+```yaml
+requested_gpus: 1
+runtime_budget_hours: 8.5
+runtime_reserve_minutes: 10
+pretrained: false
+allow_external_pretrained: false
+```
+
+Additional defaults:
+
+- no DDP / no `torchrun` in the production competition path;
 - CPU multiprocessing only for DICOM/data work;
-- `runtime_budget_hours: 8.5`;
-- `runtime_reserve_minutes: 10`;
-- Internet-independent training/inference where required by the execution environment;
-- final output exactly `submission.csv`;
-- external pretrained weights disabled by default;
-- optional SSL checkpoints must have permitted provenance;
-- validation TTA must match requested submission TTA.
+- Internet-independent final inference;
+- output exactly `submission.csv`;
+- competition-data SSL checkpoint provenance checked;
+- final inference MRI-only.
 
-These are checked by `rsna_knee.policy`, `rsna_knee.budget`, training-time checkpoint contracts, and inference validation.
-
-## Verified local execution environment
-
-The paired-sampler smoke run on 2026-08-08 resolved to:
+## Verified local environment
 
 ```text
 device    NVIDIA RTX A4500 Laptop GPU
@@ -31,196 +33,106 @@ precision bf16
 GPU count 1
 ```
 
-The smoke completed the full Stage-1 path: preflight, nested selection, fresh retraining, outer OOF, weak OOF, bootstrap, serialization and checkpoint writing.
+The real-data pipeline has completed DICOM preflight/audit and multiple non-smoke OOF experiments.
 
-This is an engineering verification only. Production runtime and AUC are reported from non-smoke folds after they finish.
+## Runtime protection
 
-## Runtime decomposition
+Long jobs are independent bounded stages. Runtime estimation reserves time not only for the next training step but also for required finishing work such as prediction, bootstrap and serialization.
 
-Do not run the entire research workflow as one long notebook/job. Treat major stages as independent bounded runs:
+Prediction checks the deadline batch by batch. A run that cannot safely complete the next unit of work stops cleanly rather than intentionally exceeding the configured budget.
 
-1. full data audit;
-2. optional competition-data SSL;
-3. Stage-1 fold 0;
-4. Stage-1 fold 1;
-5. Stage-1 fold 2;
-6. Stage-2 fold 0;
-7. Stage-2 fold 1;
-8. Stage-2 fold 2;
-9. final inference.
+## External-pretraining policy
 
-Each GPU training/inference run is independently protected by the configured sub-nine-hour software budget.
+Do not enable a public image checkpoint or external language model merely because it is available. Verify the exact competition allowance first and record provenance.
 
-## Finish-time protection
+Current strong SSL and B5 use only competition training data:
 
-Training does not reserve only enough time for the next epoch. It estimates the remaining complete workflow, including:
-
-```text
-remaining Phase-B retraining
-+ outer OOF inference
-+ Stage-1 weak OOF inference
-+ bootstrap
-+ DataLoader startup
-+ checkpoint/JSON/CSV serialization
-```
-
-The estimator is updated from measured prediction speed. Prediction itself checks the runtime guard before each batch.
-
-The point of this policy is to prevent a model from finishing training but exceeding the competition time ceiling while generating OOF or submission predictions.
-
-## One-GPU rule
-
-In competition mode:
-
-```yaml
-requested_gpus: 1
-```
-
-The code rejects incompatible multi-GPU assumptions. CPU workers may still decode and preprocess DICOM data in parallel.
-
-## External pretrained weights
-
-Conservative defaults:
-
-```yaml
-pretrained: false
-allow_external_pretrained: false
-```
-
-Do not enable a public external checkpoint merely because it is technically downloadable. First verify that the exact current competition rules permit that source and use, then document the source and provenance.
-
-Competition-data self-supervision is handled separately through the repository's SSL path.
+- strong SSL: competition MRI only;
+- B5 MRI branch: competition MRI only;
+- B5 text branch: competition reports only, TF-IDF -> TruncatedSVD;
+- no ImageNet weights;
+- no external clinical language model.
 
 ## Report supervision policy
 
-Reports are training-only supervision. They are not required for final inference.
+Reports are training-only information.
 
-Important safeguards:
+Safeguards:
 
-- report silence receives zero direct weight by default;
-- official finite target cells override weak labels;
-- report-state calibration is fold-safe;
+- report silence is not a negative;
+- finite official labels override weak labels;
+- calibration is fold-safe where gold labels are used;
 - OA parsing is compartment-aware;
-- ordinary weak labels do not become trusted merely to increase batch counts;
-- `trusted_pseudo_threshold` and ranking confidence gates remain explicit configuration values.
+- ordinary weak labels are not promoted to trusted merely to increase counts;
+- B5 excludes all gold studies from report/MRI representation training.
 
-## Trusted-pair sampling policy
+## Gold-validation policy
 
-The production batch size is currently 2. To allow the confidence-gated ranking auxiliary to operate, the sampler groups trusted rows in pairs for even batch sizes while preserving the requested trusted-row fraction.
+The 58 official gold studies are the scientific validation resource. For individual candidates, outer folds are protected according to the experiment's predefined protocol.
 
-This changes minibatch composition, not the trust definition. It does **not** lower:
+However, many sequential method decisions have now been made from the same 58-study OOF set. Therefore the campaign-level result must be described as **model-selection cross-validation**, not a pristine independent hidden-test estimate.
 
-```yaml
-trusted_pseudo_threshold: 0.60
-rank_min_confidence: 0.35
-```
+Do not:
 
-The corrected fold-0 smoke produced nonzero ranking pairs for all 12 targets.
+- tune ensemble weights on the 58 gold labels;
+- select target-specific post-hoc model winners;
+- create more B4 selector variants from observed outer performance;
+- tune B5 after reading its OOF without declaring a new experiment;
+- call an OOF result a leaderboard result.
 
-## Stage-1 leakage rule
+## B4/B5 controlled-comparison policy
 
-For outer fold `k`:
+B4 is currently the best clean standalone point estimate at `0.5137567459` macro AUC.
 
-- outer gold fold `k` is never used for epoch selection;
-- inner gold selects the training duration;
-- Stage-1 non-gold `crossfit_fold=k` rows are excluded and later predicted as weak OOF;
-- Phase B starts from a fresh model.
+B5 changes the representation only. Its first evaluation must reuse the original B4 frozen-feature/classifier probe unchanged. This avoids confounding representation improvement with another downstream hyperparameter search.
 
-## Random-versus-SSL candidate rule
+B5 currently has **no performance result** because training/probing has not completed.
 
-If both Stage-1 random and Stage-1 SSL candidates exist, the candidate for outer fold `k` must be chosen from **fold-`k` inner AUC only**.
+## TTA policy
 
-Outer AUC is not an allowed candidate-selection signal for that fold.
+For neural checkpoint inference, validation and submission TTA contracts are stored/checked explicitly. Diagnostic center-only OOF is not permission to retune TTA after reading outer labels.
 
-## Stage-2 leakage rule
-
-For Stage-2 outer fold `k`, the only permitted image teacher is a safe Stage-1 fold-`k` weak OOF file:
-
-```text
-<stage1_root>/fold{k}/weak_oof.csv
-```
-
-The loader rejects:
-
-- wrong-fold predictions;
-- missing expected weak rows;
-- extra unsafe rows;
-- non-Stage-1 sources;
-- incompatible validation-TTA contracts.
-
-Stage-2 Phase A remains report-only. The image teacher is enabled only in the fresh Phase-B co-training model.
-
-Stage 2 does not export another `weak_oof.csv` because those teacher rows have become in-sample training rows.
-
-## Validation/submission TTA contract
-
-Default:
-
-```yaml
-tta_center_offsets: [-1, 0, 1]
-validation_tta_offsets: [-1, 0, 1]
-```
-
-A checkpoint stores its validation offsets. Final inference rejects checkpoints whose validation TTA differs from the requested submission policy unless an explicitly supported runtime fallback is invoked.
-
-`oof_center.csv` is a diagnostic file and is not an authorization to retune TTA from outer labels.
-
-## Checkpoint identity
-
-Production checkpoints include enough metadata to reconstruct and validate the ensemble contract:
-
-- model state;
-- model specification;
-- stream order;
-- training config;
-- outer fold;
-- inner fold;
-- stage;
-- selected epoch;
-- validation TTA offsets;
-- Stage-1 teacher source metadata when relevant.
-
-Final inference requires the expected fold set and one checkpoint stage.
+Frozen B4/B5 representation probes use their own deterministic extraction contract and must be compared like-for-like.
 
 ## DICOM quality policy
 
-Real-data audit results have verified that the current data are well within configured decode limits:
+Verified audit:
 
 ```text
 21,886 / 21,886 selected series decoded
-2 failed files out of 732,556 candidate files
+732,554 / 732,556 candidate files decoded
+2 partial one-file failures
 0 selected series lost
 ```
 
-Small partial corruption is permitted only below the configured per-series and global gates. A fully undecodable selected series remains a hard failure.
+Partial corruption is permitted only below configured per-series/global thresholds. A fully undecodable required selected series remains a hard failure.
 
-## Submission path
+## Submission schema
 
-The final Kaggle template writes:
-
-```text
-/kaggle/working/submission.csv
-```
-
-The file must contain exactly:
+The final competition file must contain exactly:
 
 ```text
 StudyInstanceUID + 12 target columns
 ```
 
-with finite probabilities in `[0,1]` and the expected test study set/order.
+with the expected study set/order and finite probabilities in `[0,1]`.
 
-## Reporting policy
+Default output:
 
-Do not convert engineering smoke results into scientific or leaderboard claims.
+```text
+/kaggle/working/submission.csv
+```
 
-Use the following labels accurately:
+## Reporting vocabulary
 
-- **preflight result** — DICOM/data-path gate;
-- **audit result** — full data-quality/supervision inventory;
-- **smoke result** — short end-to-end software/GPU test;
-- **OOF result** — completed validation prediction;
-- **model-selection CV** — OOF after it has been used to choose the final method;
-- **leaderboard result** — actual Kaggle submission score.
+Use these labels accurately:
 
-Production results remain pending until the corresponding non-smoke runs complete.
+- **preflight** — data-path/DICOM technical gate;
+- **audit** — full data-quality inventory;
+- **smoke** — short engineering test;
+- **OOF result** — completed cross-validation predictions;
+- **model-selection CV** — OOF after it has informed method choice;
+- **leaderboard result** — actual Kaggle submission score;
+- **running/pending** — implemented experiment without completed evaluation, currently B5.
+
+See [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md) for the current measured table.
