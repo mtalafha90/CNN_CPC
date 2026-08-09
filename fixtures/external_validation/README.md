@@ -1,8 +1,10 @@
 # External four-study knee MRI technical fixture
 
+> **Current campaign note — 2026-08-09:** this fixture remains a technical-only resource. It is not used in B0-B5 scientific OOF evaluation. Current experiment results are in [`../../docs/EXPERIMENT_STATUS.md`](../../docs/EXPERIMENT_STATUS.md); B5 is running and does not use this fixture for representation training.
+
 This directory contains **four openly licensed online knee MRI examples for technical pipeline testing**. It is not the competition validation set and must never be used as a leaderboard/scientific macro-AUC benchmark.
 
-The materializer keeps the source JPEGs under `source_jpgs/` and wraps each published image into a seven-frame synthetic DICOM so that the production code can exercise DICOM discovery, decoding, routing, resizing, 2.5D construction and inference plumbing.
+The materializer keeps source JPEGs under `source_jpgs/` and wraps each published image into a seven-frame synthetic DICOM so production code can exercise discovery, decoding, routing, resizing, 2.5D construction and inference plumbing.
 
 ## Layout
 
@@ -26,48 +28,46 @@ fixtures/external_validation/
   materialization.json
 ```
 
-Use `test.csv`, `test_series.csv`, and `test_images/` when testing the production image-only test path.
+Use `test.csv`, `test_series.csv`, and `test_images/` for the production image-only test path.
 
-`validation.csv` is a sparse sanity-label copy. It includes only pathology cells directly supported by the source material; all unspecified targets remain `NaN`. Caption/report silence is not treated as a negative.
+`validation.csv` is a sparse sanity-label copy. It includes only pathology cells directly supported by the source material; unspecified targets remain `NaN`. Caption/report silence is not a negative.
 
 ## Important limitation
 
-The seven repeated frames are **not an original MRI volume**. These synthetic DICOMs are unsuitable for scientific performance evaluation.
+The seven repeated frames are **not an original MRI volume** and are unsuitable for scientific performance evaluation.
 
-They are valid for testing:
+Valid uses:
 
 - file/path discovery;
 - DICOM pixel decoding;
-- basic metadata handling;
+- metadata handling;
 - series routing;
-- tensor shape construction;
+- tensor construction;
 - missing-stream masking;
-- 2.5D sampling code;
+- 2.5D sampling;
 - model forward/inference contracts;
 - strict preflight behavior.
 
 ## Four source cases
 
-1. `EXTVAL_ACL_001` — anterior cruciate ligament rupture, sagittal PD-weighted MRI; Hellerhoff, CC BY-SA 3.0.
+1. `EXTVAL_ACL_001` — ACL rupture, sagittal PD-weighted MRI; Hellerhoff, CC BY-SA 3.0.
 2. `EXTVAL_MEDMEN_001` — grade 2 medial meniscal tear, coronal proton-density MRI; Nicolas Lefevre et al., CC BY 4.0.
 3. `EXTVAL_BAKER_001` — Baker cyst in a patient with ACL rupture; Hellerhoff, CC BY-SA 3.0.
 4. `EXTVAL_REFERENCE_001` — sagittal PD TSE FS knee MRI with no pathology claim used by this fixture; Ptrump16, CC BY-SA 4.0.
 
 Full source URLs, attribution, licenses, source findings and downloaded SHA-256 hashes are recorded in `sources.csv`.
 
-## Expected DICOM contract
+## Expected synthetic contract
 
-Each fixture study contains one selected synthetic series. The materializer creates seven frames from one source image.
-
-Expected technical shape per synthetic series:
+Each fixture study contains one selected synthetic series with seven frames generated from one source image.
 
 ```text
-(7, 384, 384)
+expected series shape: (7, 384, 384)
 ```
 
 The high missing-stream rate is intentional because each study has one series rather than six semantic streams.
 
-## Run the strict test preflight
+## Strict test preflight
 
 ```bash
 python -m rsna_knee.cli preflight \
@@ -82,22 +82,22 @@ python -m rsna_knee.cli preflight \
 Expected committed-fixture result:
 
 ```text
-studies_sampled          4
-streams_possible        24
-streams_selected         4
+studies_sampled           4
+streams_possible         24
+streams_selected          4
 streams_missing          20
-directories_found        4
-streams_decoded          4
-candidate_files          4
-file_decode_failures     0
-decoded_frames          28
-decode_failure_rate    0.0
+directories_found         4
+streams_decoded           4
+candidate_files           4
+file_decode_failures      0
+decoded_frames           28
+decode_failure_rate     0.0
 file_decode_failure_rate 0.0
 ```
 
-The `missing_stream_rate` is approximately `0.8333` by construction and is not a failure.
+The missing-stream rate is approximately `0.8333` by construction and is not a failure.
 
-## Run the sparse labeled copy
+## Sparse labelled copy
 
 ```bash
 python -m rsna_knee.cli preflight \
@@ -109,18 +109,9 @@ python -m rsna_knee.cli preflight \
   --out runs/external_validation_preflight.json
 ```
 
-Sparse source-supported labels currently include:
+Source-supported sparse positives include ACL for the ACL case, Medial Meniscus for the meniscus case, and ACL plus Baker's for the Baker-cyst case. Unspecified cells remain `NaN`.
 
-- ACL positive for the ACL case;
-- Medial Meniscus positive for the medial meniscus case;
-- ACL and Baker's positive for the Baker-cyst case;
-- no asserted pathology for the reference case.
-
-Unspecified cells remain `NaN`.
-
-## Re-materialize manually
-
-The committed fixture should normally be used directly. To rebuild it from sources:
+## Re-materialize
 
 ```bash
 conda activate rsna-knee
@@ -130,15 +121,16 @@ PYTHONPATH=src python scripts/materialize_external_validation.py \
   --overwrite
 ```
 
-Re-materialization requires source network access and may be affected if a remote source changes. The committed files and their hashes provide the reproducible technical fixture.
+Re-materialization requires source network access. The committed files/hashes are the reproducible technical fixture.
 
-## Separation from real competition validation
+## Separation from competition validation
 
 Never:
 
 - append these four studies to competition training;
 - include them in the 58-study gold folds;
-- use their predictions to tune TTA, thresholds, architecture or Stage-1/Stage-2 selection;
-- report their sparse labels as a macro-AUC benchmark.
+- use them in strong SSL or B5 representation training;
+- use their predictions to tune TTA, thresholds, architecture or classifier selection;
+- report sparse fixture labels as macro-AUC.
 
-Real model validation is documented in `../../docs/VALIDATION.md` and uses only the official competition gold labels.
+Real validation is documented in [`../../docs/VALIDATION.md`](../../docs/VALIDATION.md) and uses only official competition gold labels.
