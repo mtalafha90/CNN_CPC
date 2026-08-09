@@ -12,7 +12,7 @@ This file is the canonical repository summary for measured experiment status. `d
 - **Best clean standalone point estimate:** B4 frozen strong-SSL features + target-wise PCA/logistic regression, macro AUC `0.5137567459`, 95% bootstrap CI `[0.4619827141, 0.5642366629]`.
 - **Best fixed ensemble point estimate:** equal-weight B1+B4 rank average, macro AUC `0.5167`, 95% bootstrap CI `[0.4629, 0.5723]`.
 - The fixed ensemble is statistically tied with B4: paired median difference `+0.00276`, 95% CI `[-0.03513, +0.04174]`, `P(ensemble > B4)=0.5544`.
-- **B5 status:** representation training is running; no B5 OOF macro AUC is available yet. Do not report a B5 performance result until the frozen B5 probe is completed.
+- **B5 representation training is complete.** The frozen B5 gold probe is now pending; no B5 macro AUC is available yet.
 
 ## Completed experiments
 
@@ -30,15 +30,13 @@ This file is the canonical repository summary for measured experiment status. `d
 | B4.3 | target-wise two-way-CV policy selector | `0.4966083942` | rejected |
 | B1+B4 raw | fixed 50:50 probability average | `0.5050` | rejected |
 | B1+B4 rank | fixed 50:50 rank average | `0.5167` | highest numerical score; tied with B4 |
-| B5 | image-report representation learning | pending | running / not yet evaluated |
+| B5 | image-report representation learning | pending | representation training complete; frozen probe pending |
 
 ## Key paired comparisons
 
 ### B1 versus B0
 
 B1 improved the point estimate by about `+0.0268`. Paired bootstrap median difference was `+0.02646`, 95% CI `[-0.04464, +0.09870]`, with `P(B1 > B0)=0.771`.
-
-Interpretation: strong in-domain SSL is promising, but the 58-study gold set is too small for a confident superiority claim.
 
 ### B4 versus B1
 
@@ -48,7 +46,7 @@ Using A=B1 and B=B4:
 - 95% CI: `[-0.0514266147, +0.0709432872]`
 - `P(B4 > B1)=0.6378`
 
-Interpretation: B4 has the best clean standalone point estimate, but the evidence is not statistically decisive.
+B4 has the best clean standalone point estimate, but the evidence is not statistically decisive.
 
 ### B4.1, B4.2 and B4.3 versus B4
 
@@ -58,7 +56,7 @@ All attempts to reduce B4 policy-selection variance lowered pooled OOF performan
 - B4.2: `P(B4.2 > B4)=0.0724`
 - B4.3: `P(B4.3 > B4)=0.2182`
 
-Decision: stop redesigning B4 policy selection on the same 58 gold studies. Additional selector variants would increasingly meta-fit this validation set.
+Decision: stop redesigning B4 policy selection on the same 58 gold studies.
 
 ### Fixed B1+B4 rank ensemble versus B4
 
@@ -92,11 +90,9 @@ pooling = mean + standard deviation + maximum
 encoder = frozen competition-only strong SSL ConvNeXt
 ```
 
-All cached values were finite. Explicit stream-presence indicators are appended to each target design matrix.
+The target-wise B4 selector is visibly unstable because the inner folds contain only 18-20 studies. B4.1-B4.3 showed that forcing more shared or cross-validated policies did not improve outer OOF.
 
-The target-wise B4 selector is visibly unstable because the inner folds contain only 18-20 studies. Across 36 target/fold selections, `prior` versus `all`, PCA dimension and logistic `C` were all split across alternatives. The follow-up B4.1-B4.3 experiments showed that forcing more shared or cross-validated policies did not improve outer OOF.
-
-## B5 — current running experiment
+## B5 — image-report representation learning
 
 B5 changes the representation rather than the downstream gold-label classifier.
 
@@ -109,24 +105,42 @@ Training scope:
 - text representation fitted only on competition reports using TF-IDF -> TruncatedSVD;
 - MRI encoder initialized from the completed strong SSL checkpoint;
 - joint image-image, acquisition-metadata and image-report objectives;
-- report embedding queue for additional semantic negatives;
-- exact duplicate normalized report hashes masked as false negatives;
+- report embedding queue of 256 semantic negatives with duplicate-report masking;
 - saved downstream artifact is an MRI encoder; final inference remains MRI-only.
 
-Run:
+### B5 training result
 
-```bash
-rsna-knee-b5 \
-  --config configs/train_local_ssl_strong.yaml \
-  --checkpoint runs/ssl_strong/ssl_encoder.pt \
-  --out-root runs/b5_report_ssl
+Checkpoint:
+
+```text
+runs/b5_report_ssl/b5_encoder.pt
 ```
 
-**Current status:** running. No B5 macro AUC should be entered in tables or manuscript text yet.
+All four predefined epochs completed without runtime-budget limiting:
 
-## B5 evaluation plan
+| Epoch | Loss | Image contrast | Metadata | Report NCE | Report cosine | Seconds |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | `5.520392` | `3.006825` | `0.447246` | `4.603128` | `0.801537` | `1403.84` |
+| 2 | `5.100010` | `2.961406` | `0.399780` | `3.906748` | `0.682283` | `1441.52` |
+| 3 | `4.893490` | `2.936515` | `0.380151` | `3.566160` | `0.630856` | `1539.21` |
+| 4 | `4.704915` | `2.893706` | `0.368420` | `3.290113` | `0.592378` | `1434.28` |
 
-After B5 finishes, inspect:
+Totals:
+
+- completed epochs: 4
+- batches: 4,000
+- study draws: 16,000
+- active 2.5D examples: 158,886
+- queue size: 256 throughout
+- final encoder LR: `1e-6`
+- final head LR: `1e-6`
+- budget limited: false for every epoch
+
+Every logged objective improved monotonically. This demonstrates stable optimization and successful image-report alignment training, but it is **not** yet evidence that B5 improves gold-label AUC.
+
+## B5 evaluation plan — current next step
+
+Inspect the training artifacts:
 
 ```bash
 cat runs/b5_report_ssl/policy.json
@@ -138,6 +152,8 @@ cat runs/b5_report_ssl/history.json
 Then extract frozen B5 features with the existing B4 extractor:
 
 ```bash
+mkdir -p runs/b5_frozen_probe
+
 rsna-knee-b4 extract \
   --config configs/train_local_ssl_strong.yaml \
   --checkpoint runs/b5_report_ssl/b5_encoder.pt \
@@ -146,7 +162,7 @@ rsna-knee-b4 extract \
   --out runs/b5_frozen_probe/gold_features.npz
 ```
 
-Run the **unchanged original B4 target-wise nested probe**:
+Run the unchanged original B4 target-wise nested probe:
 
 ```bash
 rsna-knee-b4 nested \
@@ -167,7 +183,7 @@ python -m rsna_knee.cli evaluate \
   --out runs/b4_vs_b5.json
 ```
 
-This comparison is intentionally controlled: the representation changes, while the downstream B4 probe remains fixed.
+This comparison is intentionally controlled: the representation changes while the downstream B4 probe remains fixed.
 
 ## Validation caveat
 
