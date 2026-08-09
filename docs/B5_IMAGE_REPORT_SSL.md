@@ -1,6 +1,6 @@
 # B5 — competition-only image-report representation learning
 
-> **Status — 2026-08-09:** **RUNNING / NOT YET EVALUATED.** No B5 macro AUC is available yet. Do not enter a B5 score in README tables, manuscript text, or model comparisons until the frozen B5 probe has completed.
+> **Status — 2026-08-09:** **REPRESENTATION TRAINING COMPLETE / FROZEN GOLD PROBE PENDING.** The B5 encoder completed all four predefined epochs cleanly. No B5 macro AUC is available yet; do not enter a B5 score in README tables, manuscript text, or model comparisons until the frozen B5 probe has completed.
 
 Current campaign status is summarized in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
 
@@ -87,7 +87,9 @@ B5 representation training:
 
 The saved `b5_encoder.pt` follows the competition-only checkpoint source contract so the B4 frozen-feature extractor can consume it directly. Extra metadata records `variant=b5_image_report_tfidf_svd` and the report-supervision policy.
 
-## Current run
+## Completed training run
+
+Command:
 
 ```bash
 rsna-knee-b5 \
@@ -96,7 +98,13 @@ rsna-knee-b5 \
   --out-root runs/b5_report_ssl
 ```
 
-Expected outputs:
+Checkpoint:
+
+```text
+runs/b5_report_ssl/b5_encoder.pt
+```
+
+Outputs:
 
 ```text
 runs/b5_report_ssl/b5_encoder.pt
@@ -108,9 +116,32 @@ runs/b5_report_ssl/report_semantics.npz
 runs/b5_report_ssl/report_text_space.joblib
 ```
 
+### Training history
+
+| Epoch | Total loss | Image contrast | Metadata | Report NCE | Report cosine | Encoder LR | Head LR | Seconds |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 5.520392 | 3.006825 | 0.447246 | 4.603128 | 0.801537 | 4.2824e-5 | 1.7086e-4 | 1403.84 |
+| 2 | 5.100010 | 2.961406 | 0.399780 | 3.906748 | 0.682283 | 2.5500e-5 | 1.0050e-4 | 1441.52 |
+| 3 | 4.893490 | 2.936515 | 0.380151 | 3.566160 | 0.630856 | 8.1759e-6 | 3.0143e-5 | 1539.21 |
+| 4 | 4.704915 | 2.893706 | 0.368420 | 3.290113 | 0.592378 | 1.0000e-6 | 1.0000e-6 | 1434.28 |
+
+All four epochs completed 1,000 batches each with `budget_limited=false`.
+
+Totals:
+
+```text
+completed epochs       4
+batches              4000
+study draws         16000
+active 2.5D examples 158886
+queue size            256
+```
+
+The optimization trend is healthy: total loss, image contrast, metadata loss, report NCE, and report cosine loss all decreased monotonically. This establishes stable B5 pretraining, but it does **not** establish improved gold-label generalization.
+
 ## Completion checks
 
-When training finishes, inspect before probing:
+Inspect the saved artifacts before probing:
 
 ```bash
 cat runs/b5_report_ssl/policy.json
@@ -119,9 +150,9 @@ cat runs/b5_report_ssl/coverage.json
 cat runs/b5_report_ssl/history.json
 ```
 
-Confirm the checkpoint is competition-only, contains no gold representation-training rows, and completed enough batches/epochs to make the comparison meaningful.
+Confirm the checkpoint is competition-only, contains no gold representation-training rows, and records the expected four completed epochs.
 
-## Controlled B5 probe
+## Controlled B5 probe — next step
 
 Do **not** change the B4 classifier protocol for the first B5 test.
 
@@ -175,4 +206,4 @@ Positive `median_difference` and `probability_b_better > 0.5` favor B5.
 
 The first B5 result answers only one question: **does report-aligned competition-only pretraining improve the MRI representation under the same downstream probe?**
 
-Do not tune B5 using target-specific outer-fold winners, new B4 selector variants, or post-hoc ensemble weights. If B5 fails, diagnose the representation objective using non-gold training diagnostics before reopening downstream gold-label tuning.
+Do not tune B5 using target-specific outer-fold winners, new B4 selector variants, extra pretraining epochs chosen after seeing gold OOF, or post-hoc ensemble weights. If B5 fails, diagnose the representation objective using non-gold training diagnostics before reopening downstream gold-label tuning.
