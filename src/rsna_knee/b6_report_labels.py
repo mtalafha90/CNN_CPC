@@ -1,15 +1,15 @@
 """B6: competition-only structured weak labels from radiology reports.
 
-B6 is intentionally independent of B0-B5 scoring code.  It converts each
+B6 is intentionally independent of B0-B5 scoring code. It converts each
 training report into target-wise states and fixed soft labels without fitting on
-the 58 gold labels.  Gold studies are retained only in the audit output and are
+the 58 gold labels. Gold studies are retained only in the audit output and are
 excluded from the B6 training-target export.
 
-The first B6 stage is deliberately conservative:
+The B6 parser is deliberately conservative:
 
 * multilingual, accent-insensitive concept matching;
-* clause-local negation, normality and uncertainty handling;
-* explicit conflict detection;
+* target-local negation, normality and uncertainty handling;
+* explicit conflict detection for genuinely opposing definite evidence;
 * four states: positive / negated / uncertain / unmentioned;
 * fixed probabilities and confidence weights, not gold-fitted calibration;
 * review queue for mentioned-but-uncertain/conflicting cells;
@@ -43,10 +43,10 @@ from .report_labels import (
     predict_target as legacy_predict_target,
 )
 
-B6_VERSION = "1.0"
+B6_VERSION = "1.1"
 
 # Additional explicit aliases extend the pre-B6 rule vocabulary while staying
-# competition-data-only.  normalize_report removes accents before matching.
+# competition-data-only. normalize_report removes accents before matching.
 EXTRA_LEXICON: dict[str, tuple[str, ...]] = {
     "ACL": (
         "ligament croise anterieur",
@@ -163,27 +163,28 @@ EXTRA_LEXICON: dict[str, tuple[str, ...]] = {
 
 STRUCTURAL_TARGETS = {"ACL", "MCL", "Medial Meniscus", "Lateral Meniscus"}
 
-# Uncertainty phrases are intentionally broad across languages.  They only act
-# inside the same punctuation-bounded clause as a target mention.
+# Uncertainty phrases act only in the target-local focus window. History/query
+# phrases are included so an indication such as "assess for ACL tear" does not
+# become a high-confidence positive when the diagnostic findings are elsewhere.
 UNCERTAIN_RE = re.compile(
     r"\b(?:"
     r"possible|possibly|probable|probably|questionable|equivocal|suspect(?:ed)?|"
     r"suspicious for|cannot exclude|can not exclude|cannot rule out|can not rule out|"
     r"may represent|may be|might represent|might be|"
+    r"assess for|evaluate for|evaluation for|concern for|query|history of|"
     r"posible|probable|sospech(?:a|oso|osa)|sugestiv[oa]|no se puede excluir|no puede descartarse|"
     r"possible|probable|suspect|evocateur|ne peut exclure|a exclure|"
     r"moglich|wahrscheinlich|verdacht|nicht auszuschliessen|"
     r"mogelijk|waarschijnlijk|verdacht|niet uit te sluiten|"
-    r"olasi|supheli|dusundurur|dislanamaz|"
+    r"olasi|supheli|dusundurur|dislanamaz|r/o|rule out|"
     r"possibile|probabile|sospett[oa]|non si puo escludere|"
     r"possivel|provavel|suspeit[oa]|nao se pode excluir|"
-    r"moguc|moguce|vjerojat|sumnj|ne moze se iskljuciti"
+    r"moguc|moguce|vjerojat|sumnj|ne moze se iskljuciti|quid"
     r")\b",
     re.I,
 )
 
-# Normality expressions are especially important for ligaments and menisci:
-# "ACL intact" is useful negative evidence even without a literal "no".
+# Normality expressions are especially important for ligaments and menisci.
 NORMAL_RE = re.compile(
     r"\b(?:"
     r"intact|normal|unremarkable|preserved|continuous|continuity preserved|without tear|"
@@ -198,15 +199,20 @@ NORMAL_RE = re.compile(
     re.I,
 )
 
-# Broader pathology language for structural targets.  The legacy matcher is
-# deliberately reused as part of this expression so historical vocabulary is
-# preserved.
 STRUCTURAL_PATHOLOGY_RE = re.compile(
     r"tear|ruptur|lesion|injur|sprain|degener|damage|defect|fissur|rotur|desgar|"
     r"riss|yirt|lezion|lacer|avuls|discontinu|distors|"
     r"fissur|rottur|lesao|lesion|ruptura|entorse|"
-    r"yirtil|kopma|hasar|"
-    r"puknu|ruptur|ostecen",
+    r"yirtil|kopma|hasar|puknu|ruptur|ostecen|deficien",
+    re.I,
+)
+
+# A direct negation of a pathology term must be recognized even when the target
+# name precedes it, for example "ACL: no tear".
+NEGATED_STRUCTURAL_FINDING_RE = re.compile(
+    r"\b(?:no|without|absent|negative for|sin|sans|kein|keine|ohne|geen|zonder|yok|degil|bez)"
+    r"\b[^.;:>]{0,45}\b(?:tear|ruptur|lesion|injur|sprain|damage|defect|fissur|rotur|desgar|"
+    r"riss|yirt|lezion|lacer|avuls|discontinu|rottur|lesao|ruptura|entorse|yirtil|kopma|hasar)\w*",
     re.I,
 )
 
@@ -228,47 +234,76 @@ def _aliases(target: str) -> tuple[str, ...]:
 
 
 def _clause(text: str, start: int, stop: int, radius: int = 180) -> str:
+    """Return a punctuation/arrow-bounded clause around one target mention."""
     left = max(0, start - radius)
     right = min(len(text), stop + radius)
     snippet = text[left:right]
     local_start = start - left
     local_stop = stop - left
 
-    before = max(snippet.rfind(".", 0, local_start), snippet.rfind(";", 0, local_start))
+    before = max(
+        snippet.rfind(".", 0, local_start),
+        snippet.rfind(";", 0, local_start),
+        snippet.rfind(">", 0, local_start),
+    )
     after_candidates = [
-        pos for pos in (snippet.find(".", local_stop), snippet.find(";", local_stop)) if pos >= 0
+        pos
+        for pos in (
+            snippet.find(".", local_stop),
+            snippet.find(";", local_stop),
+            snippet.find(">", local_stop),
+        )
+        if pos >= 0
     ]
     clause_start = before + 1 if before >= 0 else 0
     clause_stop = min(after_candidates) if after_candidates else len(snippet)
     return snippet[clause_start:clause_stop].strip()
 
 
-def _left_context(clause: str, phrase: str) -> str:
+def _target_focus(clause: str, phrase: str, *, before: int = 75, after: int = 110) -> str:
+    """Tight target-centered context to prevent neighboring anatomy bleed."""
     index = clause.find(phrase)
     if index < 0:
-        return clause[:100]
-    return clause[max(0, index - 100):index]
+        return clause[: before + after + len(phrase)]
+    return clause[max(0, index - before) : min(len(clause), index + len(phrase) + after)]
+
+
+def _left_context(focus: str, phrase: str, width: int = 55) -> str:
+    index = focus.find(phrase)
+    if index < 0:
+        return focus[:width]
+    return focus[max(0, index - width) : index]
 
 
 def _classify_mention(target: str, clause: str, phrase: str) -> tuple[str, str]:
-    left = _left_context(clause, phrase)
-    uncertain = bool(UNCERTAIN_RE.search(clause))
-    negated = bool(NEG_RE.search(left))
+    focus = _target_focus(clause, phrase)
+    left = _left_context(focus, phrase)
+    uncertain = bool(UNCERTAIN_RE.search(focus))
+    negated_target = bool(NEG_RE.search(left))
 
     if target in STRUCTURAL_TARGETS:
-        normal = bool(NORMAL_RE.search(clause))
-        pathology = bool(STRUCTURAL_PATHOLOGY_RE.search(clause) or POSITIVE_MODIFIERS.search(clause))
-        if uncertain and (pathology or normal or negated):
+        pathology = bool(STRUCTURAL_PATHOLOGY_RE.search(focus) or POSITIVE_MODIFIERS.search(focus))
+        negated_finding = bool(NEGATED_STRUCTURAL_FINDING_RE.search(focus))
+        normal = bool(NORMAL_RE.search(focus))
+
+        # Explicit pathology is allowed to coexist with words such as "intact"
+        # in clinically meaningful phrases like "grade 1 sprain with intact
+        # fibers". A direct negation or uncertainty still suppresses it.
+        if pathology and (uncertain or negated_finding or negated_target):
+            if negated_finding or negated_target:
+                return STATE_NEGATED, "explicit_negated_structural_finding"
             return STATE_UNCERTAIN, "uncertainty_scope"
-        if negated or normal:
-            return STATE_NEGATED, "explicit_normal_or_negated"
         if pathology:
             return STATE_POSITIVE, "explicit_structural_abnormality"
+        if negated_target or normal:
+            return STATE_NEGATED, "explicit_normal_or_negated"
+        if uncertain:
+            return STATE_UNCERTAIN, "uncertainty_scope"
         return STATE_UNCERTAIN, "anatomy_mentioned_without_finding"
 
     if uncertain:
         return STATE_UNCERTAIN, "uncertainty_scope"
-    if negated:
+    if negated_target:
         return STATE_NEGATED, "explicit_negation"
     return STATE_POSITIVE, "explicit_pathology_mention"
 
@@ -292,15 +327,19 @@ def predict_target_b6(text: str, target: str) -> B6Prediction:
         return B6Prediction(0.50, 0.0, False, STATE_UNMENTIONED, "", "empty_report")
 
     observations: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
     for phrase in _aliases(target):
         for match in re.finditer(re.escape(phrase), norm, re.I):
             clause = _clause(norm, match.start(), match.end())
             state, reason = _classify_mention(target, clause, phrase)
-            observations.append((state, clause[:360], reason))
+            item = (state, clause[:360], reason)
+            if item not in seen:
+                observations.append(item)
+                seen.add(item)
 
     # The established compartment-aware OA parser catches contextual cartilage
     # findings that are not literal aliases (e.g. compartment headings followed
-    # by chondral loss).  It is used only when no B6 explicit alias fired.
+    # by chondral loss). It is used only when no B6 explicit alias fired.
     if not observations and target in OA_TARGETS:
         legacy = legacy_predict_target(norm, target)
         if legacy.state != STATE_UNMENTIONED:
@@ -319,9 +358,12 @@ def predict_target_b6(text: str, target: str) -> B6Prediction:
         return B6Prediction(0.50, 0.0, False, STATE_UNMENTIONED, "", "no_target_evidence")
 
     definite = {state for state, _, _ in observations if state in {STATE_POSITIVE, STATE_NEGATED}}
-    has_uncertain = any(state == STATE_UNCERTAIN for state, _, _ in observations)
 
-    if len(definite) > 1 or (definite and has_uncertain):
+    # v1.1 change: uncertain duplicates do not cancel definite evidence. Only
+    # genuinely opposing definite states are a conflict. This fixes the common
+    # corpus pattern "definite tear" + "possible/suspected tear" and repeated
+    # findings/impression text.
+    if len(definite) > 1:
         probability, confidence = _state_to_values(STATE_UNCERTAIN, conflict=True)
         evidence = " || ".join(item[1] for item in observations[:3])
         return B6Prediction(
@@ -330,17 +372,24 @@ def predict_target_b6(text: str, target: str) -> B6Prediction:
             True,
             STATE_UNCERTAIN,
             evidence,
-            "conflicting_or_mixed_evidence",
+            "conflicting_definite_evidence",
         )
 
     if definite:
         state = next(iter(definite))
-    else:
-        state = STATE_UNCERTAIN
-    probability, confidence = _state_to_values(state)
-    evidence = observations[0][1]
-    reason = observations[0][2]
-    return B6Prediction(probability, confidence, True, state, evidence, reason)
+        selected = next(item for item in observations if item[0] == state)
+        probability, confidence = _state_to_values(state)
+        return B6Prediction(probability, confidence, True, state, selected[1], selected[2])
+
+    probability, confidence = _state_to_values(STATE_UNCERTAIN)
+    return B6Prediction(
+        probability,
+        confidence,
+        True,
+        STATE_UNCERTAIN,
+        observations[0][1],
+        observations[0][2],
+    )
 
 
 def build_b6_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -365,6 +414,7 @@ def build_b6_frame(df: pd.DataFrame) -> pd.DataFrame:
 def _target_audit(frame: pd.DataFrame, target: str, *, min_confidence: float) -> dict:
     state_col = f"{target}__state"
     conf_col = f"{target}__confidence"
+    reason_col = f"{target}__reason"
     report_only = ~frame["is_gold"].astype(bool)
     subset = frame.loc[report_only]
     states = subset[state_col].value_counts().reindex(
@@ -374,17 +424,18 @@ def _target_audit(frame: pd.DataFrame, target: str, *, min_confidence: float) ->
     positive = subset[state_col].eq(STATE_POSITIVE) & subset[conf_col].ge(min_confidence)
     negative = subset[state_col].eq(STATE_NEGATED) & subset[conf_col].ge(min_confidence)
     n = max(1, len(subset))
+    mentioned = subset[f"{target}__mentioned"].astype(bool)
+    reasons = subset.loc[mentioned, reason_col].value_counts()
     return {
         "states": {str(key): int(value) for key, value in states.items()},
         "high_confidence_positive": int(positive.sum()),
         "high_confidence_negative": int(negative.sum()),
         "usable_cells": int(usable.sum()),
         "usable_fraction_report_only": float(usable.sum() / n),
-        "mean_confidence_when_mentioned": float(
-            subset.loc[subset[f"{target}__mentioned"], conf_col].mean()
-        )
-        if subset[f"{target}__mentioned"].any()
+        "mean_confidence_when_mentioned": float(subset.loc[mentioned, conf_col].mean())
+        if mentioned.any()
         else 0.0,
+        "reason_counts_when_mentioned": {str(key): int(value) for key, value in reasons.items()},
     }
 
 
@@ -412,7 +463,7 @@ def _review_queue(frame: pd.DataFrame, raw: pd.DataFrame, *, max_rows: int) -> p
         return pd.DataFrame(
             columns=["StudyInstanceUID", "is_gold", "target", "state", "confidence", "reason", "evidence", "report"]
         )
-    priority = review["reason"].eq("conflicting_or_mixed_evidence").astype(int)
+    priority = review["reason"].eq("conflicting_definite_evidence").astype(int)
     review = review.assign(_priority=priority).sort_values(
         ["_priority", "confidence"], ascending=[False, True]
     )
@@ -438,7 +489,7 @@ def run_b6_export(
     structured = build_b6_frame(df)
     structured.to_csv(out / "structured_labels.csv", index=False)
 
-    # This is the only B6 file intended as direct weak supervision.  Gold rows
+    # This is the only B6 file intended as direct weak supervision. Gold rows
     # are excluded by construction; unmentioned/uncertain cells retain zero or
     # low confidence and can therefore be ignored by the B7 loss.
     report_only = structured.loc[~structured["is_gold"].astype(bool)].copy()
@@ -471,6 +522,7 @@ def run_b6_export(
 
     policy = {
         "experiment": "B6",
+        "version": B6_VERSION,
         "purpose": "structured multilingual report weak labels for later MRI training",
         "states": [STATE_POSITIVE, STATE_NEGATED, STATE_UNCERTAIN, STATE_UNMENTIONED],
         "fixed_soft_labels": {
