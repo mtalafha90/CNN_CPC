@@ -1,14 +1,33 @@
 # Modeling strategy
 
+> **Snapshot: 2026-08-09.** Canonical measured results are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). B5 image-report representation learning is currently running; it has no OOF score yet.
+
 ## Core principle
 
-`CNN_CPC` treats the challenge as a **weakly supervised multi-sequence MRI problem with a very small trusted gold set**. The production strategy therefore prioritizes supervision quality, leakage control, metric alignment and runtime discipline before increasing model scale.
+`CNN_CPC` treats the challenge as a **weakly supervised multi-sequence MRI problem with a tiny trusted gold set**. The strategy prioritizes supervision quality, leakage control, metric alignment, representation quality and runtime discipline before increasing model scale.
 
-The current baseline has now passed real-data inspection, real DICOM preflight, a complete selected-series audit, OA weak-label verification and an end-to-end GPU smoke run.
+The verified release contains 4,407 training studies, of which only 58 are fully gold-labelled and 4,349 are report-only.
 
-## 1. Report supervision is a teacher, not an inference input
+## What the completed experiments now show
 
-Radiology reports are available during training and are converted into per-target states:
+| Candidate | Macro AUC | Interpretation |
+|---|---:|---|
+| B0 random | `0.4763` | weak baseline |
+| B1 strong MRI SSL | `0.5030` | useful in-domain representation signal |
+| B2 lower encoder LR | `0.4993` | catastrophic forgetting not the main bottleneck |
+| B3 pathology MIL | `0.4945` | architecture simplification not sufficient |
+| B4 frozen SSL + classical | `0.5138` | best clean standalone point estimate |
+| B4.1 shared policy | `0.4848` | too rigid |
+| B4.2 grouped policies | `0.4901` | still too rigid/noisy |
+| B4.3 two-way CV selector | `0.4966` | selector stabilization did not help |
+| B1+B4 rank 50:50 | `0.5167` | highest numerical score, statistically tied with B4 |
+| B5 image-report SSL | pending | running |
+
+The main strategic conclusion is that the next useful lever is **representation learning from the report-only corpus**, not more downstream policy search on the same 58 gold labels.
+
+## 1. Reports are training supervision, not inference inputs
+
+Reports are converted to per-target states:
 
 ```text
 positive
@@ -17,43 +36,21 @@ uncertain
 unmentioned
 ```
 
-The report teacher is deterministic and multilingual. Report silence is not treated as a negative. By default:
+Report silence is not a negative. `unmentioned` receives zero direct report weight by default. Finite official labels override report-derived targets cell-by-cell.
 
-```text
-unmentioned -> zero direct weight
-```
-
-Finite official labels override the report teacher cell-by-cell.
-
-Final inference is MRI-only.
+Final inference remains MRI-only.
 
 ## 2. Fold-safe calibration
 
-For each training phase, calibration uses only gold studies allowed in that phase. For target `c` and report state `s`, a smoothed state probability is estimated from the permitted gold subset. Confidence combines:
+Report-state calibration uses only gold studies allowed in the current phase/fold. Confidence reflects both evidence and informativeness beyond target prevalence.
 
-- evidence: how much gold support the state has;
-- informativeness: how far the state-conditioned probability moves beyond target prevalence.
+The trusted/pairwise-ranking thresholds are not lowered just to increase pseudo-label counts.
 
-A common or noisy state can therefore remain low-weight even when it is frequently observed.
+## 3. Compartment-aware OA parsing
 
-The calibration path is intentionally conservative. The production trusted threshold is not lowered merely to increase pseudo-label count.
+The first real audit showed the original lexicon produced no useful OA supervision. The parser was expanded to recognize compartment-specific OA/arthrosis, cartilage loss, chondrosis/chondromalacia, osteophytes and related degenerative cartilage language while avoiding generic meniscal degeneration.
 
-## 3. Compartment-aware OA supervision
-
-The first real-data audit exposed a concrete problem: all three OA targets had zero report-teacher weight because the original lexicon recognized only narrow explicit OA phrases.
-
-The parser was expanded in a controlled, compartment-aware way. It now recognizes evidence such as:
-
-- explicit osteoarthritis / arthrosis / gonarthrosis;
-- cartilage loss;
-- chondrosis / chondromalacia;
-- osteophytes;
-- compartment-specific degenerative cartilage wording;
-- patellar/trochlear cartilage disease for PF OA.
-
-The parser does **not** turn a generic meniscal degeneration statement or a bare compartment mention into OA.
-
-Verified state counts on the 4,407 real reports are:
+Verified report states:
 
 | Target | Positive | Negated | Unmentioned |
 |---|---:|---:|---:|
@@ -61,21 +58,11 @@ Verified state counts on the 4,407 real reports are:
 | Lateral OA | 409 | 387 | 3,611 |
 | PF OA | 695 | 379 | 3,333 |
 
-The resulting OA cells contribute weak weighted BCE supervision but remain below the trusted/gold confidence regime.
+These cells remain weak supervision rather than gold-equivalent trusted examples.
 
-## 4. Nested outer/inner validation
+## 4. Gold validation contract
 
-The 58 official gold studies are deterministically balanced across three folds.
-
-For outer fold `k`:
-
-```text
-outer gold fold       -> final OOF evaluation only
-inner gold fold       -> Phase-A epoch-count selection
-remaining gold fold   -> Phase-A trusted training
-```
-
-Observed role sizes:
+The 58 official gold studies are deterministically balanced across three folds:
 
 | Outer fold | Gold train | Inner selection | Outer validation |
 |---|---:|---:|---:|
@@ -83,234 +70,171 @@ Observed role sizes:
 | 1 | 18 | 20 | 20 |
 | 2 | 20 | 18 | 20 |
 
-Every target has at least one positive and one negative in every outer fold, so per-target AUC is defined in all three folds.
+Every target has positives and negatives in each outer fold.
 
-Phase A is discarded. Phase B starts from a **freshly initialized model** and trains for exactly the selected epoch count using all non-outer gold studies.
-
-## 5. Macro-metric-aligned BCE
-
-The competition metric is macro ROC AUC across 12 targets. Weak-label coverage differs strongly by pathology, so ordinary cell averaging would allow heavily mentioned targets to dominate optimization.
-
-For each planned epoch, the deterministic sampler is expanded first and the total target-specific supervision mass is computed. Batch BCE contributions are divided by that target's planned epoch denominator before the 12 target objectives are macro-averaged.
-
-This keeps optimizer influence aligned with the macro target structure rather than raw mention frequency.
-
-## 6. Confidence-gated ranking objective
-
-A pairwise ranking auxiliary is added to weighted BCE. A cell must satisfy the configured confidence gate and positive/negative target threshold before it may participate.
-
-Defaults:
-
-```yaml
-rank_loss_weight: 0.10
-rank_pairs_per_target: 32
-rank_min_confidence: 0.35
-rank_positive_threshold: 0.75
-rank_negative_threshold: 0.25
-```
-
-The first smoke run revealed zero ranking pairs for every target. This was not a ranking-loss bug; it was a minibatch composition problem.
-
-## 7. Pair-friendly trusted sampling
-
-With `batch_size: 2` and `trusted_fraction: 0.30`, the original sampler spread trusted rows so evenly that batches usually contained one trusted study and one general study. Most weak cells are below the ranking confidence gate, so a trusted positive and trusted negative rarely coexisted in a minibatch.
-
-The current sampler preserves the requested trusted-row fraction but, for even batch sizes, emits trusted rows in pairs. For production batch size 2, batches are therefore typically either:
+For the original neural Stage-1 protocol:
 
 ```text
-[trusted, trusted]
+outer gold -> final OOF only
+inner gold -> epoch selection
+remaining gold -> selection training
+Phase A discarded
+fresh Phase B -> all non-outer gold
 ```
 
-or
+## 5. Macro-aligned loss and trusted pairing
 
-```text
-[general, general]
-```
+The supervised neural objective uses planned-epoch target normalization so weak-label coverage differences do not let frequently mentioned targets dominate the macro metric.
 
-according to the deterministic cumulative quota.
+The pairwise ranking auxiliary is confidence-gated. The trusted/general sampler was changed to emit trusted rows in pairs for even batch sizes, activating ranking without weakening trust thresholds.
 
-This does **not** lower `trusted_pseudo_threshold` or `rank_min_confidence`.
-
-Verified paired-sampler fold-0 smoke diagnostics:
+Verified smoke diagnostics:
 
 ```text
 selection ranking pairs = 63
 retrain ranking pairs   = 61
+all 12 targets          = active
 ```
 
-All 12 targets contributed at least one ranking pair.
-
-## 8. Trusted/general pools
-
-A study belongs to the trusted pool when it is:
-
-- an official gold study; or
-- a study with at least one pseudo-label weight above the configured trusted threshold.
-
-Current default:
-
-```yaml
-trusted_fraction: 0.30
-trusted_pseudo_threshold: 0.60
-```
-
-The real report audit showed that ordinary report pseudo-labels remain below 0.60, so the trusted pool is currently anchored primarily by official gold examples. This is intentional rather than a reason to weaken the threshold.
-
-## 9. Six-stream MRI representation
-
-The model consumes up to six semantic streams:
-
-- sagittal fluid-sensitive;
-- sagittal structural;
-- coronal fluid-sensitive;
-- coronal structural;
-- axial fluid-sensitive;
-- axial structural.
-
-Missing streams are masked. Real-data coverage confirms this is essential because `axial_structural` is present in only about one quarter of training studies.
-
-Each active series contributes distributed 2.5D triplets. The production tensor contract is conceptually:
+## 6. Six-stream MRI contract
 
 ```text
-[B, K, S, 3, H, W]
+sagittal_fluid       sagittal_structural
+coronal_fluid        coronal_structural
+axial_fluid          axial_structural
 ```
 
-with `K=6` semantic streams and `S=16` positions per stream by default.
+Missing streams are explicit and masked. `axial_structural` is present in only about one quarter of training studies, so missing-stream handling is essential.
 
-## 10. ConvNeXt + cross-sequence Transformer + pathology queries
+Each active series is represented with distributed 2.5D triplets and encoded with ConvNeXt-Tiny.
 
-Active 2.5D triplets are encoded by ConvNeXt-Tiny. Learned position and stream embeddings are added before a cross-sequence Transformer.
+## 7. Strong competition-only MRI SSL
 
-Twelve learnable pathology tokens then:
+The strong SSL run uses only the 4,349 non-gold competition MRI studies. Same-study views/sequences provide representation positives; plane and sequence-type prediction are auxiliary objectives.
 
-1. interact with one another through a pathology-context Transformer;
-2. cross-attend to MRI memory;
-3. produce one target-specific logit each.
-
-This allows ACL, menisci, OA, effusion and other targets to attend to different sequence/slice evidence while still sharing the study representation.
-
-## 11. MRI augmentation and reproducibility
-
-Training uses mild acquisition-compatible perturbations:
-
-- center jitter;
-- triplet gap 1 or 2;
-- small affine changes;
-- gamma variation;
-- low-frequency bias field;
-- Gaussian noise;
-- slice dropout.
-
-Worker randomness is seeded from PyTorch worker seeds. The pipeline aims for reproducible sampling for a fixed environment/settings but does not claim bitwise-deterministic GPU kernels.
-
-## 12. DICOM quality gate
-
-Long GPU training is blocked until preflight and audit succeed.
-
-The verified real-data audit found:
+Completed run:
 
 ```text
-21,886 / 21,886 selected series decoded
-732,554 / 732,556 DICOM files decoded
-2 selected series with one failed file each
-0 selected series failed
+epochs                 8
+batches                 8,000
+study draws             24,000
+approx corpus passes    5.52
+active 2.5D examples    238,274
+loss                    ~3.434 -> ~2.862
 ```
 
-The global failure rate is far below the configured threshold. Both partially affected series remain usable.
-
-## 13. Optional competition-data SSL
-
-An optional self-supervised Stage-1 candidate uses only non-gold competition MRI by default. Same-study sequences provide anatomy-related positive pairs, with auxiliary plane and sequence-type heads.
-
-External pretrained weights remain off in the conservative production config unless the exact current competition rules are explicitly verified to permit them.
-
-## 14. Leakage-safe Stage-1 candidate selection
-
-Random initialization and competition-data SSL are candidate Stage-1 methods.
-
-For outer fold `k`, downstream candidate selection uses only that candidate's `inner_macro_auc` for fold `k`. `outer_macro_auc` is deliberately ignored.
-
-This prevents the outer fold from choosing which teacher is subsequently used in its own Stage-2 experiment.
-
-## 15. Leakage-safe Stage 2
-
-Each non-gold report group receives a deterministic cross-fit fold.
-
-Stage-1 fold `k` excludes:
-
-- outer-gold fold `k`;
-- non-gold `crossfit_fold=k` rows.
-
-After Phase B, it predicts the excluded weak subset to `fold{k}/weak_oof.csv`.
-
-Stage-2 fold `k` may use only that safe fold-local image teacher. Wrong-fold, incomplete, wrong-stage or validation-contract-incompatible teachers are rejected.
-
-Stage-2 Phase A remains report-only. Phase B starts fresh and combines report and fold-local image evidence. Strong agreement is emphasized; conflict is downweighted; very confident image predictions can modestly supervise report-silent cells.
-
-Stage 2 intentionally does not write another `weak_oof.csv`.
-
-## 16. TTA policy
-
-Primary validation and final submission use the same predeclared center offsets:
-
-```yaml
-validation_tta_offsets: [-1, 0, 1]
-tta_center_offsets: [-1, 0, 1]
-```
-
-The paired-sampler smoke run happened to show center-only outer AUC slightly above TTA outer AUC. This **does not justify changing TTA**, because the result came from a tiny smoke fold. `oof_center.csv` remains diagnostic only.
-
-## 17. Runtime policy
-
-Every long GPU run uses:
-
-```yaml
-runtime_budget_hours: 8.5
-runtime_reserve_minutes: 10
-```
-
-The finish estimator reserves time for:
+Checkpoint:
 
 ```text
-remaining retraining
-+ outer OOF TTA inference
-+ Stage-1 weak OOF inference
-+ bootstrap
-+ loader startup
-+ serialization
+runs/ssl_strong/ssl_encoder.pt
 ```
 
-Prediction also checks the deadline batch-by-batch.
+No external pretrained weights are used.
 
-The verified smoke runtime resolved to an NVIDIA RTX A4500 Laptop GPU using BF16, with modest peak allocated GPU memory. Production runtime results are reported only from non-smoke runs.
+## 8. End-to-end neural findings: B1-B3
 
-## 18. Statistical reporting
+B1 moved the point estimate above B0, but paired uncertainty remained wide. B2's 0.1x encoder LR did not improve B1, and B3's pathology-aware low-capacity MIL also did not improve pooled OOF.
 
-Final OOF evaluation reports:
+This argues against spending the next experiments on small optimizer/head variations.
 
-- per-target AUC;
-- macro AUC;
-- study bootstrap confidence intervals;
-- paired bootstrap differences for controlled comparisons.
+## 9. Frozen representation probe: B4
 
-Once outer OOF is used to choose a final method, it must be described as **model-selection cross-validation**, not an untouched independent estimate.
-
-## Recommended execution order
+B4 freezes the strong SSL encoder and extracts deterministic per-stream mean/std/max features. The verified cache has shape:
 
 ```text
-real-data inspect
--> validation manifests
--> train/test preflight
--> full selected-series audit
--> fold-0 Stage-1 random smoke
--> Stage-1 random production folds 0/1/2
--> optional competition-data SSL
--> Stage-1 SSL folds 0/1/2
--> per-fold Stage-1 candidate selection using inner AUC only
--> Stage-2 folds 0/1/2
--> controlled OOF comparisons
--> freeze final stage
--> stage/fold/TTA-validated inference
+[58, 6, 2304]
 ```
 
-Do not add model scale or weaken supervision thresholds before the controlled baseline experiments establish what is actually limiting performance.
+Each target selects between fixed `all`/`prior` feature modes plus PCA and balanced logistic regression.
+
+B4 reached:
+
+```text
+macro AUC = 0.5137567459
+95% CI   = [0.4619827141, 0.5642366629]
+P(B4 > B1) = 0.6378
+```
+
+This is the best clean standalone point estimate, but not a statistically proven improvement.
+
+## 10. Why the B4 selector branch is closed
+
+B4 target-wise policies were visibly unstable across folds. Three controlled attempts to reduce that variance all lowered pooled OOF:
+
+- B4.1 one shared policy: `0.4848`;
+- B4.2 four predefined group policies: `0.4901`;
+- B4.3 target-wise two-way-CV selector: `0.4966`.
+
+Further B4 policy/grid redesign driven by the same outer OOF would risk meta-overfitting. The B4 probe is therefore frozen for the first B5 comparison.
+
+## 11. Fixed ensemble finding
+
+A fixed B1+B4 raw-probability 50:50 average scored `0.5050`. A fixed 50:50 **rank** average scored `0.5167`.
+
+Against B4:
+
+```text
+median ensemble-B4 difference = +0.00276
+95% CI                        = [-0.03513, +0.04174]
+P(ensemble > B4)              = 0.5544
+```
+
+Therefore the rank ensemble is kept as a fixed candidate but is not claimed to improve B4. No weight search is permitted on these 58 labels.
+
+## 12. B5 strategy: learn report semantics without hard pseudo-labels
+
+B5 changes the representation rather than the downstream classifier.
+
+Only the 4,349 report-only studies are used for B5 pretraining; all 58 gold studies are excluded.
+
+Text representation:
+
+```text
+normalized competition report
+-> word TF-IDF (1-2 grams)
+-> TruncatedSVD (<=256 dimensions)
+-> normalized semantic target
+```
+
+MRI objective:
+
+```text
+strong SSL image-image objective
++ plane/sequence metadata objective
++ image-report contrastive alignment
++ cosine report alignment
+```
+
+A report embedding queue supplies additional semantic negatives for small MRI batches. Exact duplicate normalized report hashes are masked as false negatives.
+
+No external language model and no external image weights are used. The report branch is discarded after training; the saved artifact is an MRI encoder.
+
+## 13. Fixed B5 evaluation rule
+
+B5 must first be tested with the **original B4 probe unchanged**:
+
+```text
+B4 encoder -> B4 frozen probe
+versus
+B5 encoder -> same B4 frozen probe
+```
+
+This isolates representation quality. Do not modify B4 feature modes, PCA grid, logistic grid, target groupings or ensemble weights for the first B5 comparison.
+
+## 14. Validation campaign caveat
+
+Although each experiment has an internally leakage-aware protocol, the same 58 gold studies have supported many method decisions. The campaign-level estimate is therefore increasingly **model-selection cross-validation**.
+
+Do not:
+
+- select per-target winners after viewing outer OOF;
+- create more B4 selector variants;
+- optimize ensemble weights;
+- tune B5 on gold outer results without a new predeclared experiment;
+- describe the best OOF point estimate as an independent hidden-test guarantee.
+
+## 15. Runtime and competition policy
+
+Long GPU runs use one GPU, CPU multiprocessing for data work, an 8.5-hour software budget and a ten-minute reserve. External pretrained weights remain disabled in the conservative configuration.
+
+See [`competition_policy.md`](competition_policy.md) and [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
