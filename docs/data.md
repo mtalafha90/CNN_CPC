@@ -1,18 +1,12 @@
 # Dataset and DICOM handling
 
-This document describes the data contract implemented by `CNN_CPC` and records the verified real-data audit performed on 2026-08-08.
+> **Snapshot: 2026-08-09.** Data/audit facts below are verified on the downloaded competition release. Experiment scores live in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). B5 is currently running and uses only the 4,349 report-only training studies for representation learning.
 
-## Official CSV contract
+## CSV contract
 
-`train.csv` contains:
+`train.csv` contains `StudyInstanceUID`, `Report`, and the 12 targets. `test.csv` contains study UIDs and does not provide the report supervision used during training.
 
-- `StudyInstanceUID`;
-- `Report`;
-- the 12 target columns.
-
-`test.csv` requires `StudyInstanceUID`; report text is not required at inference.
-
-The series CSVs contain:
+Series metadata contain:
 
 - `StudyInstanceUID`;
 - `SeriesInstanceUID`;
@@ -22,25 +16,21 @@ The series CSVs contain:
 
 Duplicate study/series rows and missing UIDs are rejected.
 
-## Verified real-data snapshot
-
-The downloaded training metadata resolves to:
+## Verified release snapshot
 
 ```text
 training studies       4,407
-fully gold-labeled        58
+fully gold-labelled       58
 report-only studies    4,349
 reports present        4,407
 training series rows  24,371
 ```
 
-All 58 gold studies have all 12 official target cells populated. There are no partially labeled rows in the current download.
+All 58 gold studies have all 12 official target cells populated. There are no partially gold-labelled rows in the current download.
 
-The local test metadata supplied with this download contains 3 studies and 15 series rows; `sample_submission.csv` has the exact required study order and 12-target output schema.
+The local test metadata currently contains 3 studies and 15 series rows.
 
-## Gold target positives
-
-Among the 58 official gold studies:
+## Gold class counts
 
 | Target | Positive | Negative |
 |---|---:|---:|
@@ -57,23 +47,7 @@ Among the 58 official gold studies:
 | Contusion | 19 | 39 |
 | Fracture | 18 | 40 |
 
-The imbalance across targets is why the production loss is macro-balanced rather than dominated by the most frequently supervised pathology.
-
-## Nullable sequence metadata and repair
-
-Missing `Fluid_Sensitive`, `Fat_Suppression`, or plane metadata can be backfilled from DICOM headers. The repair path independently uses:
-
-- image orientation for anatomical plane;
-- timing/weighting cues for fluid sensitivity;
-- acquisition metadata for fat suppression.
-
-A populated CSV field remains authoritative. If a field is still unknown after repair, the final series-routing score uses a conservative fallback.
-
-The full real-data audit reported zero required metadata fields missing or repaired for the selected series surface used in the verification run.
-
 ## Six-stream routing
-
-The model routes each study into up to six semantic slots:
 
 ```text
 sagittal_fluid       sagittal_structural
@@ -81,7 +55,7 @@ coronal_fluid        coronal_structural
 axial_fluid          axial_structural
 ```
 
-Observed training coverage:
+Observed coverage:
 
 | Stream | Selected | Missing | Coverage |
 |---|---:|---:|---:|
@@ -92,115 +66,84 @@ Observed training coverage:
 | axial_fluid | 4,407 | 0 | 100.00% |
 | axial_structural | 1,094 | 3,313 | 24.82% |
 
-Missing semantic streams are therefore normal, especially `axial_structural`. The model uses an explicit presence mask; it does not invent missing image content.
+Missing streams are normal and represented by explicit presence masks. They are never synthesized.
 
-A notable property of the current metadata release is that `Fluid_Sensitive` and `Fat_Suppression` are perfectly coupled in the series table: the observed combinations are `(0,0)` and `(1,1)`. They therefore do not contribute independent routing information in this release, although the code keeps them as separate fields for robustness to other data.
+In this release `Fluid_Sensitive` and `Fat_Suppression` are perfectly coupled in the metadata table, although the implementation keeps them separate for robustness.
+
+## Metadata repair
+
+Missing plane/sequence metadata can be backfilled from DICOM headers using orientation, timing/weighting and acquisition cues. Populated CSV fields remain authoritative.
+
+The verified selected-series audit required no metadata repair for the production-selected surface.
 
 ## DICOM decoding
 
-The reader supports common DICOM filename conventions and enhanced/multi-frame arrays. It applies:
+The reader supports common DICOM naming and enhanced/multi-frame arrays. Processing includes:
 
-1. physical slice ordering from orientation and position when available;
+1. physical slice ordering from orientation/position;
 2. `InstanceNumber` fallback;
 3. deterministic filename fallback;
-4. `RescaleSlope` / `RescaleIntercept`;
+4. rescale slope/intercept;
 5. `MONOCHROME1` inversion;
 6. mixed-size center crop/pad;
-7. finite 1st/99th percentile clipping and normalization.
+7. finite percentile clipping/normalization.
 
-Physical slice ordering uses the image-plane normal
+Physical ordering uses the image-plane normal:
 
 ```text
-n = row_direction × column_direction
-z_i = ImagePositionPatient_i · n
+n = row_direction x column_direction
+z_i = ImagePositionPatient_i . n
 ```
-
-before sorting.
 
 ## Verified train preflight
 
-The strict 24-study train preflight produced:
-
 ```text
-studies_sampled               24
-streams_possible             144
-streams_selected             121
-streams_missing               23
-directories_found            121
-streams_decoded              121
-candidate_files            4,045
-file_decode_failures           0
-decoded_frames             4,045
-metadata_fields_missing        0
-metadata_fields_repaired       0
-decode_failure_rate          0.0
-file_decode_failure_rate     0.0
-missing_stream_rate       0.1597
+studies sampled               24
+streams possible             144
+streams selected             121
+streams decoded              121
+candidate files            4,045
+file failures                  0
+missing stream rate       0.1597
 ```
 
-The 15.97% missing-stream rate reflects genuinely absent semantic slots, not decode errors.
-
-## Verified complete local test preflight
-
-All three locally supplied test studies were checked:
+## Verified complete local-test preflight
 
 ```text
-studies_sampled                3
-streams_possible              18
-streams_selected              14
-streams_missing                4
-directories_found             14
-streams_decoded               14
-candidate_files              533
-file_decode_failures           0
-decoded_frames               533
-decode_failure_rate          0.0
-file_decode_failure_rate     0.0
-missing_stream_rate       0.2222
+studies sampled                3
+streams possible              18
+streams selected              14
+streams decoded               14
+candidate files              533
+file failures                  0
+missing stream rate       0.2222
 ```
-
-Because the local test metadata has only three studies, this preflight covers the entire local test set.
 
 ## Verified full selected-series audit
-
-The full CPU audit checked every selected training series:
 
 ```text
 selected series checked             21,886
 selected series decoded             21,886
 selected series failed                   0
 series with partial file failures        2
-series above per-series failure gate     0
 candidate DICOM files              732,556
 failed DICOM files                       2
 global file failure rate       2.7302e-06
-configured global limit               0.02
-configured per-series limit            0.20
+per-series failure limit               0.20
+global failure limit                   0.02
 ```
 
-The two partial cases were:
-
-```text
-Study 1.2.826.0.1.3680043.8.498.34685905030370793639196564723935583035
-Series 1.2.826.0.1.3680043.8.498.39396636671446532796538574315802928348
-35 / 36 frames decoded; 1 file failed
-
-Study 1.2.826.0.1.3680043.8.498.37833587429731221455928642963031995680
-Series 1.2.826.0.1.3680043.8.498.31160785238781353848727311763596115703
-37 / 38 frames decoded; 1 file failed
-```
-
-Both series remain valid and are retained. Removing an entire study because one slice failed would discard substantially more valid information than the configured corruption policy requires.
+Two selected series each contain one unreadable file (35/36 and 37/38 frames decoded). Both remain valid and are retained.
 
 ## 2.5D representation
 
-Each active series is normalized and sampled at distributed centers. A three-channel input is formed as:
+Each active series is normalized and sampled into triplets:
 
 ```text
 [I_(c-gap), I_c, I_(c+gap)]
 ```
 
-Production defaults:
+Typical production settings:
 
 ```yaml
 n_slices: 16
@@ -210,100 +153,64 @@ train_gap_choices: [1, 2]
 center_jitter: 2
 ```
 
-Training also uses mild MRI-compatible perturbations:
+Training may add mild affine, gamma, bias-field, Gaussian-noise and slice-dropout perturbations. Validation/inference are deterministic apart from predeclared TTA.
 
-- rotation;
-- translation;
-- scale jitter;
-- gamma variation;
-- low-frequency multiplicative bias field;
-- Gaussian noise;
-- slice dropout.
+## Strong SSL data scope
 
-Validation and inference disable stochastic augmentation.
+The completed strong MRI SSL checkpoint uses only the 4,349 non-gold competition studies. The 58 gold studies are excluded from representation pretraining.
 
-## Worker-side decoded-volume cache
-
-Persistent workers own a bounded LRU cache of raw decoded series:
-
-```yaml
-series_cache_mb_per_worker: 256
-```
-
-The cache changes only I/O cost, not preprocessing semantics.
-
-## Validation/submission TTA parity
-
-The production policy is:
-
-```yaml
-tta_center_offsets: [-1, 0, 1]
-validation_tta_offsets: [-1, 0, 1]
-weak_oof_tta_offsets: [0]
-```
-
-All requested TTA views are built after one DICOM decode. TTA therefore multiplies model forward passes, not DICOM reads.
-
-`oof.csv` uses the submission-policy TTA. `oof_center.csv` is diagnostic only. Stage-1 weak OOF generation uses one center view to protect runtime.
-
-## Report states and OA-specific parsing
-
-Each report/target cell is assigned one of:
+Checkpoint:
 
 ```text
-positive
-negated
-uncertain
-unmentioned
+runs/ssl_strong/ssl_encoder.pt
 ```
 
-`unmentioned` receives zero direct report weight by default.
+## B4 frozen-feature data contract
 
-The OA parser is compartment-aware. The initial narrow lexicon produced no useful OA weak supervision, so the current implementation recognizes compartment-specific OA/arthrosis, cartilage loss, chondrosis/chondromalacia, osteophytes and related degenerative terminology while avoiding generic meniscal degeneration.
-
-Verified post-fix state counts:
-
-| Target | Positive | Negated | Uncertain | Unmentioned |
-|---|---:|---:|---:|---:|
-| Medial OA | 492 | 339 | 0 | 3,576 |
-| Lateral OA | 409 | 387 | 0 | 3,611 |
-| PF OA | 695 | 379 | 0 | 3,333 |
-
-These pseudo-labels remain deliberately lower-confidence than official gold labels.
-
-## Gold, inner, outer and weak cross-fit roles
-
-For Stage-1 outer fold `k`:
-
-- `outer_oof`: official gold held out for final fold evaluation;
-- `inner_selection`: official gold used to select epoch count;
-- `gold_train_selection`: trusted gold available in Phase A;
-- `weak_oof`: non-gold `crossfit_fold=k`, excluded so the Stage-1 model can later predict it independently;
-- `weak_train`: remaining report-supervised studies.
-
-Phase B starts from a fresh model. It uses all non-outer gold while continuing to exclude the Stage-1 weak-OOF subset.
-
-For Stage 2, only the corresponding safe fold-local Stage-1 `weak_oof.csv` may become an image teacher.
-
-## Effective-supervision diagnostics
-
-Every training fold writes:
+B4 extracts deterministic features only after representation pretraining. The verified gold cache is:
 
 ```text
-supervision_plan.json
-training_diagnostics.json
+study_uids = (58,)
+features   = (58, 6, 2304)
+present    = (58, 6)
+finite     = true
 ```
 
-They record per target:
+Mean, standard deviation and maximum are pooled per stream. Presence flags are explicitly available to the classical classifier.
 
-- planned weight mass;
-- actual weight mass;
-- nonzero supervised cells;
-- participating batches;
-- ranking-pair counts.
+## Report data and OA parsing
 
-These diagnostics are important because weak supervision is sparse and target-dependent.
+Each report/target cell is represented as `positive`, `negated`, `uncertain`, or `unmentioned`. Report silence receives zero direct report weight by default.
 
-## Training versus inference
+The compartment-aware OA parser produces:
 
-Reports, report calibration and Stage-2 consensus are training-only. Final inference is MRI-only and reconstructs its model contract from self-describing checkpoints.
+| Target | Positive | Negated | Unmentioned |
+|---|---:|---:|---:|
+| Medial OA | 492 | 339 | 3,576 |
+| Lateral OA | 409 | 387 | 3,611 |
+| PF OA | 695 | 379 | 3,333 |
+
+These remain weak labels rather than gold-equivalent labels.
+
+## B5 report-only representation scope
+
+B5 uses the 4,349 report-only studies for both MRI and report representation learning and excludes all 58 gold studies.
+
+The report semantic space is fitted only on competition reports:
+
+```text
+normalized report
+-> word TF-IDF (1-2 grams)
+-> TruncatedSVD (<=256 dimensions)
+-> L2-normalized semantic embedding
+```
+
+No external corpus or language model is used. Exact duplicate normalized report hashes are tracked and masked as false negatives in the report contrastive queue.
+
+The B5 text branch is training-only; the downstream artifact is an MRI encoder and final inference remains MRI-only.
+
+## Validation data roles
+
+Gold outer folds are evaluation rows, not representation-training rows. The original neural Stage-1 path also separates inner selection, gold training and weak cross-fit roles. B4/B5 representation pretraining excludes all gold rows entirely.
+
+Because the same 58 gold studies have now been used across multiple controlled model decisions, current experiment tables should be interpreted as model-selection cross-validation rather than an untouched independent test set.
