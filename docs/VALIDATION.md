@@ -1,6 +1,6 @@
 # Test and validation workflow
 
-> **Snapshot: 2026-08-09.** The experiment campaign has completed B0-B4.3 plus fixed ensembles; B5 is running. Canonical scores are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
+> **Snapshot: 2026-08-09.** The experiment campaign has completed B0-B4.3 plus fixed ensembles; B5 representation training is complete and its frozen gold probe is pending. Canonical scores are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
 
 `CNN_CPC` uses three distinct validation resources. They answer different questions and must not be mixed.
 
@@ -117,19 +117,32 @@ The ensemble is therefore treated as statistically tied with B4. No weight searc
 
 ## 8. B5 validation contract
 
-B5 representation training excludes all 58 gold studies and uses only the 4,349 report-only competition studies.
+B5 representation training excluded all 58 gold studies and used only the 4,349 report-only competition studies.
 
-The first B5 evaluation is fixed in advance:
+The completed pretraining produced:
 
-1. train B5 representation without gold labels;
-2. freeze B5 encoder;
-3. extract the same deterministic six-stream mean/std/max features used by B4;
-4. run the **original B4 target-wise nested classifier protocol unchanged**;
-5. compare `runs/b5_frozen_probe/oof.csv` with `runs/b4_frozen_ssl/oof.csv` by paired bootstrap.
+```text
+checkpoint              runs/b5_report_ssl/b5_encoder.pt
+epochs                  4
+batches               4000
+study draws          16000
+active 2.5D examples 158886
+loss          5.5204 -> 4.7049
+report NCE    4.6031 -> 3.2901
+report cosine 0.8015 -> 0.5924
+budget limited          false
+```
+
+The first B5 evaluation remains fixed exactly as planned:
+
+1. freeze the completed B5 encoder;
+2. extract the same deterministic six-stream mean/std/max features used by B4;
+3. run the **original B4 target-wise nested classifier protocol unchanged**;
+4. compare `runs/b5_frozen_probe/oof.csv` with `runs/b4_frozen_ssl/oof.csv` by paired bootstrap.
 
 This makes B5 primarily a representation test rather than another downstream hyperparameter experiment.
 
-**Current B5 status:** running / score pending.
+**Current B5 status:** representation training complete; frozen probe / macro-AUC pending.
 
 ## 9. Bootstrap comparisons
 
@@ -162,7 +175,7 @@ A point-estimate win is not sufficient when the interval is wide.
 | B1+B3 rank | `0.5048` |
 | B4 | `0.5138` |
 | B1+B4 rank | `0.5167` |
-| B5 | pending |
+| B5 | pending frozen probe |
 
 ## 11. Campaign-level interpretation
 
@@ -179,6 +192,7 @@ Do not:
 - optimize ensemble weights;
 - invent more B4 selector/grouping variants from observed results;
 - tune B5 representation hyperparameters after reading B5 outer OOF without declaring a new experiment;
+- choose extra B5 epochs from the same outer OOF and call the re-evaluation independent;
 - treat the local test surface or external fixture as scientific validation.
 
 Actual Kaggle leaderboard results, when available, are a separate evidence source and must be labelled as such.
