@@ -1,12 +1,8 @@
-# Strong fold-safe report teacher
+# Fold-safe report teacher benchmark
 
 The competition test CSV contains only `StudyInstanceUID`, so report text is a **training teacher only**. Final submission inference remains MRI-only.
 
-Version 0.5.0 adds a competition-data-only teacher ensemble that is deliberately evaluated before it is allowed to replace the conservative rule teacher used by Stage 1.
-
-## Components
-
-For each of the 12 targets the teacher combines:
+Version 0.5.0 introduced a competition-data-only teacher ensemble combining:
 
 1. the deterministic multilingual clinical-rule state parser with fold-safe empirical calibration;
 2. word TF-IDF (1-2 grams) with target-specific balanced logistic regression;
@@ -26,82 +22,64 @@ For outer gold fold `k`:
 - ensemble probability calibration and confidence are fitted only from the inner cross-fit predictions;
 - only then is the final fold-`k` teacher fitted on all non-outer gold and used to predict the outer gold and report-only studies.
 
-Thus `fold{k}/pseudo_labels.csv` is safe for a future image-model outer fold `k`.
+Thus the benchmark is a valid test of whether this text approach deserves promotion into MRI training.
 
-## Run
+## Observed real-data result
 
-After pulling `main`:
+The complete 58-gold-study OOF benchmark produced:
+
+```text
+macro AUC = 0.4924496599988921
+95% CI    = [0.4396044171132367, 0.5460505496859447]
+```
+
+Per-target AUC:
+
+```text
+ACL                 0.5723
+MCL                 0.3991
+Medial Meniscus     0.5108
+Lateral Meniscus    0.3764
+Medial OA           0.5209
+Lateral OA          0.4449
+PF OA               0.4607
+Effusion            0.4584
+Synovitis           0.4851
+Baker's             0.5453
+Contusion           0.4022
+Fracture            0.7333
+```
+
+## Decision
+
+**Rejected as a general Stage-1 teacher.**
+
+The ensemble is statistically near chance and does not provide the large supervision-quality improvement required to rescue the MRI student. In particular, a text classifier trained from only roughly 38-40 non-outer gold reports per fold is too data-starved for a twelve-target, multilingual report problem.
+
+The exported `runs/report_teacher/fold*/pseudo_labels.csv` files are retained as research artifacts, but they must **not** replace the production rule teacher globally. Fracture is the only clearly strong target in this benchmark; target-specific use can be reconsidered later inside a controlled ensemble.
+
+The engineering priority after this result moves to a much stronger image representation learned from the 4,349 non-gold MRI studies using competition-data-only self-supervised learning. See `docs/SSL_STRONG.md`.
+
+## Reproduce the benchmark
 
 ```bash
-cd /media/talafha/Disk_1/CNN_CPC
-conda activate rsna-knee
-python -m pip install -e .
-
-pytest -q tests/test_report_teacher.py
-
 python -m rsna_knee.report_teacher_cli \
   --train-csv "$DATA_ROOT/train.csv" \
   --out-dir runs/report_teacher \
   --n-bootstrap 2000
 ```
 
-The console prints the ensemble OOF result and writes the complete benchmark to `runs/report_teacher/metrics.json`.
-
-## Outputs
+Outputs remain:
 
 ```text
 runs/report_teacher/
   metrics.json
   oof.csv
   fold_assignments.csv
-  fold0/
-    teacher.json
-    pseudo_labels.csv
-  fold1/
-    teacher.json
-    pseudo_labels.csv
-  fold2/
-    teacher.json
-    pseudo_labels.csv
+  fold0/teacher.json
+  fold0/pseudo_labels.csv
+  fold1/teacher.json
+  fold1/pseudo_labels.csv
+  fold2/teacher.json
+  fold2/pseudo_labels.csv
 ```
-
-`oof.csv` contains one strictly out-of-fold prediction for each gold study, plus the three component scores and the final teacher confidence. Each fold-specific pseudo-label file contains all studies with:
-
-- the 12 teacher probabilities;
-- `<target>__confidence` for every target;
-- `is_gold`;
-- `is_outer_gold`;
-- `teacher_fold`.
-
-Official gold labels are **not overwritten** in these exports; image training will continue to override pseudo supervision with official finite gold cells.
-
-## Confidence
-
-Confidence is target-specific, not a universal report-state weight. It combines:
-
-- the target ensemble's inner cross-fit AUC above chance; and
-- how far the calibrated prediction lies from `0.5`.
-
-An inner AUC of `0.5` yields zero pseudo-label confidence. A high-AUC target can produce high-confidence pseudo-labels only for decisive predictions. This is intended to unlock strong report-derived supervision without blindly lowering the global trusted threshold.
-
-## Decision gate
-
-Do **not** route these pseudo-labels into MRI training merely because they exist. First inspect:
-
-```bash
-python - <<'PY'
-import json
-from pathlib import Path
-p = json.loads(Path('runs/report_teacher/metrics.json').read_text())
-print('macro OOF:', p['oof']['macro_auc'])
-print('95% CI   :', p['oof']['ci_lower'], p['oof']['ci_upper'])
-print('\nPer-target ensemble OOF:')
-for target, auc in p['oof']['per_target_auc'].items():
-    print(f'{target:20s} {auc}')
-print('\nComponent macro OOF:')
-for name, result in p['component_oof'].items():
-    print(f"{name:10s} {result['macro_auc']}")
-PY
-```
-
-The next engineering step is to integrate the fold-specific teacher into Stage 1 only after its OOF performance and confidence distribution have been reviewed. The old rule-teacher path remains the production default until that gate is passed.
