@@ -1,6 +1,6 @@
 # B5 — competition-only image-report representation learning
 
-> **Status — 2026-08-09:** **REPRESENTATION TRAINING COMPLETE / FROZEN GOLD PROBE PENDING.** The B5 encoder completed all four predefined epochs cleanly. No B5 macro AUC is available yet; do not enter a B5 score in README tables, manuscript text, or model comparisons until the frozen B5 probe has completed.
+> **Status — 2026-08-10:** **COMPLETE / MAIN STANDALONE BASELINE.** The B5 encoder completed all four predefined representation-training epochs and the frozen gold probe has now completed. Using the unchanged B4 downstream probe, B5 achieved macro AUC `0.5243650851` with 95% bootstrap CI `[0.4728108406, 0.5761619105]`. This is the highest standalone point estimate in the current campaign. The paired B4-vs-B5 bootstrap favors B5 but is statistically inconclusive: median difference `+0.0105821232`, 95% CI `[-0.0408197338, +0.0622131599]`, `P(B5 > B4)=0.656`.
 
 Current campaign status is summarized in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
 
@@ -12,7 +12,7 @@ B1 strong SSL uses only MRI structure: multiple views from the same study are po
 
 The 58 explicitly gold-labelled studies are excluded completely from B5 representation training. The text space and MRI training both use only the 4,349 report-only competition studies.
 
-The controlled reference before B5 is:
+The controlled reference is:
 
 ```text
 B4 image-only frozen representation + original B4 probe
@@ -20,7 +20,7 @@ macro AUC = 0.5137567459
 95% CI   = [0.4619827141, 0.5642366629]
 ```
 
-B5 must be compared with that representation under the **same downstream B4 probe**.
+B5 is compared with that representation under the **same downstream B4 probe**.
 
 ## Text representation
 
@@ -137,47 +137,36 @@ active 2.5D examples 158886
 queue size            256
 ```
 
-The optimization trend is healthy: total loss, image contrast, metadata loss, report NCE, and report cosine loss all decreased monotonically. This establishes stable B5 pretraining, but it does **not** establish improved gold-label generalization.
+The optimization trend was healthy: total loss, image contrast, metadata loss, report NCE, and report cosine loss all decreased monotonically.
 
-## Completion checks
+## Frozen feature audit
 
-Inspect the saved artifacts before probing:
-
-```bash
-cat runs/b5_report_ssl/policy.json
-cat runs/b5_report_ssl/report_semantics.json
-cat runs/b5_report_ssl/coverage.json
-cat runs/b5_report_ssl/history.json
-```
-
-Confirm the checkpoint is competition-only, contains no gold representation-training rows, and records the expected four completed epochs.
-
-## Controlled B5 probe — next step
-
-Do **not** change the B4 classifier protocol for the first B5 test.
-
-Extract deterministic gold features:
-
-```bash
-mkdir -p runs/b5_frozen_probe
-
-rsna-knee-b4 extract \
-  --config configs/train_local_ssl_strong.yaml \
-  --checkpoint runs/b5_report_ssl/b5_encoder.pt \
-  --split train \
-  --scope gold \
-  --out runs/b5_frozen_probe/gold_features.npz
-```
-
-Expected contract:
+The deterministic gold feature cache confirms that the completed B5 checkpoint was used:
 
 ```text
-study_uids = 58
-features   = [58, 6, 2304]
-finite     = true
+candidate                 B4_frozen_ssl_classical
+split                     train
+scope                     gold
+studies                   58
+feature shape             [58, 6, 2304]
+pooling                   mean + std + max
+encoder frozen            true
+encoder trainable params  0
+checkpoint                runs/b5_report_ssl/b5_encoder.pt
+checkpoint source         competition_training_data
+completed epochs          4
+external pretrained       false
+n_slices                  16
+image_size                224
+triplet_gap               1
+metadata repairs needed   0
 ```
 
-Run the **original B4 target-wise nested PCA/logistic probe unchanged**:
+The `candidate=B4_frozen_ssl_classical` label names the fixed downstream frozen-feature/classical-probe machinery; the recorded checkpoint path is the B5 encoder.
+
+## Controlled B5 probe — completed
+
+The original B4 target-wise nested PCA/logistic-regression probe was reused unchanged:
 
 ```bash
 rsna-knee-b4 nested \
@@ -187,23 +176,76 @@ rsna-knee-b4 nested \
   --n-bootstrap 5000
 ```
 
-Then compare B4 image-only representation (A) with B5 image-report representation (B):
+The pooled OOF evaluation is:
 
-```bash
-python -m rsna_knee.cli evaluate \
-  --train-csv "$DATA_ROOT/train.csv" \
-  --oof runs/b4_frozen_ssl/oof.csv \
-  --compare-oof runs/b5_frozen_probe/oof.csv \
-  --n-bootstrap 5000 \
-  --out runs/b4_vs_b5.json
-
-cat runs/b4_vs_b5.json
+```text
+macro AUC = 0.5243650851
+95% CI   = [0.4728108406, 0.5761619105]
+n         = 58
+bootstrap = 5000/5000 usable
 ```
 
-Positive `median_difference` and `probability_b_better > 0.5` favor B5.
+Per-target AUC:
 
-## Decision gate
+| Target | B5 AUC |
+|---|---:|
+| ACL | `0.6678921569` |
+| MCL | `0.4058956916` |
+| Medial Meniscus | `0.6658653846` |
+| Lateral Meniscus | `0.6173913043` |
+| Medial OA | `0.6589147287` |
+| Lateral OA | `0.4042553191` |
+| PF OA | `0.6061776062` |
+| Effusion | `0.5167701863` |
+| Synovitis | `0.5555555556` |
+| Baker's | `0.3858695652` |
+| Contusion | `0.3994601889` |
+| Fracture | `0.4083333333` |
 
-The first B5 result answers only one question: **does report-aligned competition-only pretraining improve the MRI representation under the same downstream probe?**
+## Controlled comparison with B4
 
-Do not tune B5 using target-specific outer-fold winners, new B4 selector variants, extra pretraining epochs chosen after seeing gold OOF, or post-hoc ensemble weights. If B5 fails, diagnose the representation objective using non-gold training diagnostics before reopening downstream gold-label tuning.
+Using B4 image-only representation as A and B5 image-report representation as B:
+
+```text
+B4 macro AUC              0.5137567459
+B5 macro AUC              0.5243650851
+paired median difference +0.0105821232
+paired 95% CI            [-0.0408197338, +0.0622131599]
+P(B5 > B4)                0.656
+valid replicates          5000
+```
+
+B5 improves the observed point estimate, but the paired confidence interval crosses zero. The correct interpretation is therefore **positive but statistically inconclusive evidence that report-aligned representation learning improves the MRI representation** on this 58-study gold set.
+
+Target-level descriptive changes versus B4:
+
+| Target | B4 AUC | B5 AUC | B5 - B4 |
+|---|---:|---:|---:|
+| ACL | 0.585784 | 0.667892 | +0.082108 |
+| MCL | 0.480726 | 0.405896 | -0.074830 |
+| Medial Meniscus | 0.542067 | 0.665865 | +0.123798 |
+| Lateral Meniscus | 0.604969 | 0.617391 | +0.012422 |
+| Medial OA | 0.550388 | 0.658915 | +0.108527 |
+| Lateral OA | 0.398453 | 0.404255 | +0.005803 |
+| PF OA | 0.638353 | 0.606178 | -0.032175 |
+| Effusion | 0.444720 | 0.516770 | +0.072050 |
+| Synovitis | 0.445639 | 0.555556 | +0.109916 |
+| Baker's | 0.375000 | 0.385870 | +0.010870 |
+| Contusion | 0.558704 | 0.399460 | -0.159244 |
+| Fracture | 0.540278 | 0.408333 | -0.131944 |
+
+B5 is higher on 8 of the 12 target point estimates. These differences are descriptive and are **not** a license to create target-specific post-hoc B4/B5 winners from the same outer OOF labels.
+
+## Decision
+
+B5 is now the **main standalone representation baseline** because it has the highest controlled standalone point estimate in the campaign. B4 remains the critical image-only ablation.
+
+Do not use the completed B5 outer OOF result to tune:
+
+- target-specific B4/B5 model selection;
+- report-loss weights or temperatures;
+- extra representation-training epochs;
+- new downstream B4 selector variants;
+- post-hoc ensemble weights.
+
+Any future representation-fusion experiment should be predefined independently of these outer target-level differences and evaluated as a new controlled experiment.
