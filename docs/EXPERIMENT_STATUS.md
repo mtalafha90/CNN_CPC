@@ -1,23 +1,24 @@
 # Experiment status
 
-**Snapshot:** 2026-08-10  
-**Package:** `0.18.0`  
+**Snapshot:** 2026-08-11  
+**Package:** `0.19.0`  
 **Gold development set:** 58 fully labelled studies  
 **Primary metric:** macro ROC AUC across 12 targets
 
-The 58-study set has supported repeated sequential development decisions. It is therefore a development/model-selection set rather than pristine independent validation.
+The 58-study surface has supported repeated sequential development decisions and is therefore a development/model-selection set rather than pristine independent validation.
 
 ## Current headline
 
 - **Retained standalone champion:** **B7.1 full-corpus weak supervision**, macro AUC `0.5644802945`.
-- B7.1 latest 5,000-replicate CI: `[0.5052996126, 0.6214295635]`.
+- B7.1 5,000-replicate CI: `[0.5052996126, 0.6214295635]`.
 - **B8 rejected:** macro AUC `0.5300962807`; paired `P(B8>B7.1)=0.1156`.
 - **B9 rejected:** macro AUC `0.5334962669`; paired `P(B9>B7.1)=0.0562`.
 - **B10 rejected globally:** macro AUC `0.5523982721`; paired median `(B10-B7.1)=-0.0121030792`, 95% CI `[-0.0507382525,+0.0250750953]`, `P(B10>B7.1)=0.2706`.
-- **B11-v1 stopped before training:** pseudo viability failed because the global absolute teacher threshold produced 4,794 pseudo-cells but only 23 positives and zero coverage for two targets.
-- **B11.1 pseudo audit passed:** 3,656 calibration-aware quantile-tail pseudo-cells, 3,454 active studies, all 12 targets with both tails represented. **B11.1 student training is now the active experiment.**
+- **B11-v1 stopped before training:** absolute teacher threshold failed the label-free pseudo viability gate.
+- **B11.1 rejected globally:** macro AUC `0.5506902702`; paired median `(B11.1-B7.1)=-0.0126224565`, 95% CI `[-0.0487500119,+0.0195120537]`, `P(B11.1>B7.1)=0.2184`.
+- **B12 variable-number-of-series modeling is implemented and predeclared.** Its label-free series audit is now the active next step.
 
-## Completed measured experiments
+## Experiment ladder
 
 | ID | Method | Macro AUC | Status |
 |---|---|---:|---|
@@ -36,7 +37,8 @@ The 58-study set has supported repeated sequential development decisions. It is 
 | B9 | strict exact-contrast routing | `0.5334962669` | rejected |
 | B10 | plane-specific in-plane physical-scale normalization | `0.5523982721` | rejected globally |
 | B11-v1 | absolute-threshold B7.1 teacher completion | n/a | stopped at viability gate |
-| B11.1 | calibration-aware target-wise teacher tails | pending | pseudo audit passed; training active |
+| B11.1 | calibration-aware target-wise teacher tails | `0.5506902702` | rejected globally |
+| **B12** | **variable number of real MRI series** | pending | **implemented / series audit pending** |
 
 ## Frozen B6 supervision surface
 
@@ -66,9 +68,7 @@ epoch losses  0.752419 -> 0.665171 -> 0.639117 -> 0.612758
 macro AUC     0.5644802945
 ```
 
-B7.1 remains the reference architecture, routing, preprocessing and initialization contract for B11.1.
-
-## B8 / B9 / B10 decisions
+## Closed branches
 
 ### B8 spatial tokens
 
@@ -89,7 +89,7 @@ median(B9-B7.1)   -0.0302397961
 P(B9>B7.1)         0.0562
 ```
 
-Decision: retain historical B7.1 dual routing.
+Decision: retain historical B7.1 dual routing when using the six-slot model.
 
 ### B10 physical scale
 
@@ -101,90 +101,80 @@ median(B10-B7.1)  -0.0121030792
 P(B10>B7.1)        0.2706
 ```
 
-Decision: reject B10-v1 as global replacement. Do not select B7.1/B10 winners target by target from the reused 58 gold cases.
+Decision: reject B10-v1 globally.
 
-## B11-v1 pseudo audit — failed
+### B11 teacher pseudo-label branch
 
-Frozen absolute policy:
+B11-v1 failed its label-free viability gate because the absolute `0.10/0.90` rule yielded 4,794 pseudo-cells but only 23 positives, with zero accepted cells for Medial Meniscus and Synovitis.
 
-```text
-teacher mean >= 0.90 OR <= 0.10
-TTA range <= 0.05
-pseudo base weight 0.20
-pseudo mass cap 25% of B6 mass per target
-```
-
-Audit:
+B11.1 replaced absolute thresholds by stable target-wise 5/95% tails. Its pseudo audit passed with 3,656 pseudo-cells and 334 newly activated studies, and four full training epochs completed. The frozen gold result was:
 
 ```text
-pseudo cells              4794
-combined active studies   4000
-newly activated studies    880
-pseudo positive cells       23
-pseudo negative cells     4771
-Medial Meniscus cells        0
-Synovitis cells               0
-Lateral OA cells             21
-viability_passed           false
+B11.1 macro AUC       0.5506902702
+95% CI               [0.4917424630,0.6086153876]
+B7.1 macro AUC        0.5644802945
+median(B11.1-B7.1)   -0.0126224565
+95% paired CI        [-0.0487500119,+0.0195120537]
+P(B11.1>B7.1)         0.2184
 ```
 
-Decision: do not train B11-v1.
+Decision: reject B11.1 globally and close teacher-derived pseudo-label completion for now. Do not build target-wise B7.1/B11.1 winners on the reused 58-study set.
 
-## B11.1 pseudo audit — passed
+## Active experiment: B12 variable-number-of-series model
 
-B11.1 was defined after a label-free calibration diagnostic showed that teacher probabilities are target-dependent while TTA predictions are generally stable.
+### Hypothesis
 
-Frozen per-target rule:
+The six-slot B7.1 representation can discard repeated/additional acquisitions. B12 tests whether retaining every usable real series improves study-level pathology discrimination.
+
+### Frozen controls
+
+B12 returns to the exact original B7.1 supervision surface. It does **not** use B11/B11.1 pseudo-labels.
+
+Unchanged:
 
 ```text
-bottom 5% teacher tail + TTA range <= 0.05 -> target 0.10
-top    5% teacher tail + TTA range <= 0.05 -> target 0.90
-pseudo base weight -> 0.10
-pseudo mass cap    -> 15% of B6 mass per target
+B5 encoder initialization
+B6 v1.2.1 supervision only
+3120 active training studies
+14123 supervised cells
+6871 positive / 7252 negative cells
+B6-derived target balancing
+legacy 224x224 resize
+16 2.5D positions per series
+B7.1 optimizer / LR / augmentation
+batch size 2
+4 full epochs
+TTA [-1,0,1]
+5000 bootstrap replicates
+zero gold gradients / zero gold early stopping
 ```
 
-Audit result:
+Single scientific change:
 
 ```text
-B6 cells                  14123
-pseudo cells                3656
-combined cells              17779
-B6 active studies            3120
-combined active studies      3454
-newly activated studies       334
-pseudo low cells             1864
-pseudo high cells            1792
-viability_passed             true
+six selected semantic slots
+    -> every repaired Sagittal/Coronal/Axial series
+    -> separate real series retained even when metadata are duplicated
+    -> plane/fluid/fat categorical embeddings
+    -> no series-rank embedding
+    -> dynamic padding to batch maximum series count
 ```
 
-Every target exceeds 100 pseudo-cells and has at least 50 cells in both tails. Synovitis alone is mass-capped, with scale `0.8242385787`; all other targets use pseudo cell weight `0.10`.
+There is no architecture-level maximum series count.
 
-Frozen pseudo SHA-256:
+### Pre-training label-free audit
+
+The audit is frozen on the 3,120 B6-active non-gold studies. Viability requires:
 
 ```text
-94f914f3548fab17f67ae0bf1906424bac850268c09ce5febede72b2ed7246b6
+zero studies without eligible series
+zero historical selected series missing from B12
+extra series >= 5% of historical unique selected-series count
+>=10% of studies have at least one extra retained series
 ```
 
-## Active experiment: B11.1 student
+The exact variable-series mapping is SHA-256 signed. Training re-audits and refuses mapping drift.
 
-Single scientific change versus B7.1: added frozen B11.1 pseudo supervision on B6-unsupervised cells.
-
-The student starts from the same B5 encoder initialization as B7.1, not from the B7.1 teacher. Historical routing, legacy resize, architecture, optimizer, B6 policy, B6-derived target balancing, augmentation and four-epoch schedule remain fixed.
-
-Expected per full epoch:
-
-```text
-studies                    3454
-batches                    1727
-B6 cells                  14123
-pseudo cells               3656
-combined cells            17779
-pseudo low cells           1864
-pseudo high cells          1792
-full_coverage              true
-budget_limited             false
-```
-
-Gold evaluation is allowed only after all four epochs meet the full-coverage contract. Primary benchmark remains B7.1 `0.5644802945`, followed by the aligned 5,000-replicate paired bootstrap.
+See [`B12_VARIABLE_SERIES.md`](B12_VARIABLE_SERIES.md) for commands and integrity checks.
 
 Actual hidden-test / leaderboard performance remains unknown until a real competition submission is evaluated.
