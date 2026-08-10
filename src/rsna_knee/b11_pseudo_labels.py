@@ -14,7 +14,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-import yaml
 from torch.utils.data import DataLoader
 
 from .b7_weak_supervision import (
@@ -134,6 +133,11 @@ def combine_b6_and_teacher(
     b6_active_study = w.sum(axis=1) > 0
     combined_active_study = combined_weight.sum(axis=1) > 0
     total_pseudo = int(accepted.sum())
+    per_target_viable = all(
+        int(per_target[target]["pseudo_cells"]) >= B11_MIN_PSEUDO_CELLS_PER_TARGET
+        for target in TARGETS
+    )
+    viability = bool(total_pseudo >= B11_MIN_TOTAL_PSEUDO_CELLS and per_target_viable)
     summary = {
         "policy": B11_PSEUDO_POLICY,
         "positive_threshold": B11_POSITIVE_THRESHOLD,
@@ -141,12 +145,15 @@ def combine_b6_and_teacher(
         "max_tta_range": B11_MAX_TTA_RANGE,
         "pseudo_base_weight": B11_PSEUDO_BASE_WEIGHT,
         "pseudo_mass_cap_fraction": B11_PSEUDO_MASS_CAP_FRACTION,
+        "minimum_total_pseudo_cells": B11_MIN_TOTAL_PSEUDO_CELLS,
+        "minimum_pseudo_cells_per_target": B11_MIN_PSEUDO_CELLS_PER_TARGET,
         "b6_cells": int((w > 0).sum()),
         "pseudo_cells": total_pseudo,
         "combined_cells": int((combined_weight > 0).sum()),
         "b6_active_studies": int(b6_active_study.sum()),
         "combined_active_studies": int(combined_active_study.sum()),
         "newly_activated_studies": int((combined_active_study & ~b6_active_study).sum()),
+        "viability_passed": viability,
         "per_target": per_target,
     }
     return y, combined_weight, pseudo_weight, summary
@@ -241,18 +248,6 @@ def generate_b11_pseudo_labels(
         b6_y, b6_w, teacher_mean, teacher_range
     )
 
-    if int(summary["pseudo_cells"]) < B11_MIN_TOTAL_PSEUDO_CELLS:
-        raise ValueError(
-            f"B11-v1 pseudo viability failed: {summary['pseudo_cells']} < {B11_MIN_TOTAL_PSEUDO_CELLS} total cells"
-        )
-    too_small = {
-        target: int(summary["per_target"][target]["pseudo_cells"])
-        for target in TARGETS
-        if int(summary["per_target"][target]["pseudo_cells"]) < B11_MIN_PSEUDO_CELLS_PER_TARGET
-    }
-    if too_small:
-        raise ValueError(f"B11-v1 pseudo viability failed per target: {too_small}")
-
     out = Path(out_root)
     out.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame({"StudyInstanceUID": uids})
@@ -273,6 +268,7 @@ def generate_b11_pseudo_labels(
         "experiment": "B11_teacher_pseudo_label_generation",
         "status": "B11-v1 pseudo policy frozen before student training/gold evaluation",
         "policy": B11_PSEUDO_POLICY,
+        "viability_passed": bool(summary["viability_passed"]),
         "uses_gold_labels_to_choose_pseudo_cells": False,
         "teacher_checkpoint": str(teacher_path.resolve()),
         "teacher_checkpoint_sha256": teacher_sha,
@@ -303,6 +299,10 @@ def generate_b11_pseudo_labels(
     (out / "pseudo_policy.json").write_text(json.dumps(policy, indent=2), encoding="utf-8")
     (out / "pseudo_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
+    if not bool(summary["viability_passed"]):
+        print("[B11] pseudo viability gate FAILED; artifacts were written for inspection. Do not train B11-v1.")
+    else:
+        print("[B11] pseudo viability gate PASSED; inspect artifacts before student training.")
     print(pseudo_csv)
     print(out / "pseudo_policy.json")
     print(out / "pseudo_summary.json")
