@@ -1,6 +1,6 @@
 %% CNN_CPC manuscript draft for Computer Physics Communications.
-%% Updated 2026-08-10 to match repository package 0.14.0 and measured B0--B8 results.
-%% B9 strict-routing gold evaluation is intentionally left pending.
+%% Updated 2026-08-10 to match repository package 0.14.0 and measured B0--B9 results.
+%% B7.1 remains the retained development model after negative B8 and B9 ablations.
 \documentclass[preprint,12pt]{elsarticle}
 
 \usepackage{amsmath,amssymb}
@@ -22,7 +22,6 @@
 \journal{Computer Physics Communications}
 
 \begin{document}
-
 \begin{frontmatter}
 
 \title{CNN\_CPC: Leakage-aware weak supervision and semantic sequence routing for multi-sequence knee MRI classification}
@@ -33,9 +32,9 @@
 % TODO before submission: add the corresponding author's e-mail address.
 
 \begin{abstract}
-Knee magnetic-resonance imaging (MRI) classification is challenging when trusted structured labels are scarce, radiology reports are abundant but incomplete, and each examination contains a heterogeneous set of pulse sequences. We present \code{CNN\_CPC}, a PyTorch framework for leakage-aware weakly supervised, multi-sequence, study-level knee MRI classification. The released development surface contains 4,407 studies and 24,371 MRI series; only 58 studies carry complete labels for the twelve target abnormalities, while 4,349 studies are available primarily through their reports. The pipeline uses competition-only MRI representation learning, multilingual structured report states, six semantic MRI streams, distributed 2.5D ConvNeXt-Tiny features, a cross-sequence Transformer, and twelve interacting pathology queries. A frozen report parser converts each report/target cell to positive, negated, uncertain, or unmentioned; unmentioned findings are never treated as negative. The direct weak-supervision stage uses 3,120 report-only studies containing 14,123 usable target cells and excludes all 58 gold studies from the training gradient and early stopping. Increasing weak-training coverage from approximately 1.28 nominal corpus passes to four complete passes improved the macro ROC AUC from 0.5398 to 0.5645 on the repeatedly used 58-study development set. A subsequent 2x2 spatial-token model decreased macro AUC to 0.5301 and was rejected. A label-free metadata audit then revealed that the historical dual-stream selector placed 552 of 21,886 selected training streams (2.52\%) into a semantic slot inconsistent with the supplied \code{Fluid\_Sensitive} flag. This motivated a predeclared strict-routing experiment in which unavailable contrasts remain masked rather than being replaced by an opposite-contrast sequence. Its predictive evaluation is intentionally not reported until the frozen run is complete. The software includes DICOM metadata repair, geometry-aware slice ordering, robust intensity normalization, full decoding audits, checkpoint provenance, test-time augmentation, bootstrap uncertainty, paired model comparison, and single-GPU runtime protection. The current results are development/model-selection estimates rather than independent hidden-test performance.
-\vspace{1em}
+Knee magnetic-resonance imaging (MRI) classification is difficult when trusted structured labels are scarce, radiology reports are abundant but incomplete, and each examination contains a heterogeneous set of pulse sequences. We present \code{CNN\_CPC}, a PyTorch framework for leakage-aware weakly supervised, multi-sequence, study-level knee MRI classification. The released development surface contains 4,407 studies and 24,371 MRI series; 58 studies carry complete labels for twelve target abnormalities, while the remaining 4,349 studies are primarily supervised through their reports. The pipeline combines competition-only MRI representation learning, multilingual structured report states, six semantic MRI streams, distributed 2.5D ConvNeXt-Tiny features, a cross-sequence Transformer, and twelve interacting pathology queries. A frozen report parser converts every report/target cell to positive, negated, uncertain, or unmentioned; report silence is never treated as a negative label. Direct weak supervision uses 3,120 report-only studies containing 14,123 usable target cells and excludes all 58 gold studies from the training gradient and early stopping. Increasing weak-training coverage from approximately 1.28 nominal corpus passes to four complete passes improved macro ROC AUC from 0.5398 to 0.5645 on the repeatedly used 58-study development set. Two subsequent controlled ablations were negative. A 2$\times$2 spatial-token model reached 0.5301. A label-free metadata audit then identified 552 historical cross-contrast stream substitutions among 21,886 selected training streams; strict semantic routing eliminated these inconsistencies but reached only 0.5335. The paired B9--B7.1 bootstrap difference was $-0.03024$ with 95\% interval $[-0.06794,0.00703]$, and only 5.62\% of valid replicates favored strict routing. These results retain the simpler full-coverage B7.1 model and show that semantic purity alone does not guarantee improved predictive ranking when it removes potentially informative acquisitions. The software also provides geometry-aware DICOM ordering, metadata repair, robust intensity normalization, decoding audits, checkpoint provenance, test-time augmentation, bootstrap uncertainty, paired model comparison, and single-GPU runtime protection. Because the same 58 studies have informed repeated development choices, all reported scores are model-selection/development estimates rather than independent hidden-test performance.
 
+\vspace{1em}
 \noindent\textbf{PROGRAM SUMMARY}
 
 \begin{small}
@@ -45,16 +44,16 @@ Knee magnetic-resonance imaging (MRI) classification is challenging when trusted
 {\em Programming language:} Python $\geq 3.10$ with PyTorch. \\
 {\em Current package snapshot:} 0.14.0. \\
 
-{\em Nature of problem:} The task is study-level multi-label classification of twelve knee MRI abnormalities from heterogeneous DICOM examinations. Only a small gold subset provides complete structured labels, whereas most studies provide radiology reports that may omit normal or clinically secondary findings. Treating report silence as a negative label produces systematic label noise. On the imaging side, examinations contain variable sagittal, coronal, and axial acquisitions with different contrast sensitivity, spatial resolution, scanner vendors, and missing sequence types. A useful method must therefore combine weak supervision with explicit sequence semantics, missing-stream handling, leakage control, and practical runtime constraints. \\
+{\em Nature of problem:} Study-level multi-label classification of twelve knee MRI abnormalities from heterogeneous DICOM examinations when only a very small subset has trusted structured labels and the much larger remainder is accompanied by free-text radiology reports. The reports are incomplete and cannot safely be interpreted as exhaustive negative annotation. MRI studies also contain variable sagittal, coronal, and axial acquisitions, multiple sequence contrasts, missing sequence types, scanner heterogeneity, and occasional partial DICOM corruption. \\
 
-{\em Solution method:} CNN\_CPC validates the competition tables, repairs missing MRI-series metadata from DICOM headers when necessary, and represents each study with up to six semantic streams: fluid-sensitive and structural acquisitions for the sagittal, coronal, and axial planes. DICOM slices are physically ordered from orientation/position information, rescaled, MONOCHROME1-corrected, percentile normalized, and sampled as distributed 2.5D triplets. A ConvNeXt-Tiny encoder produces slice features; learned slice and stream embeddings are fused by a Transformer; twelve pathology tokens interact and cross-attend to the MRI memory before target-specific classification. Competition reports are converted into conservative pathology-specific weak labels, with uncertain and unmentioned cells ignored. The main retained model is initialized from a competition-only image--report representation checkpoint and trained for four full passes over all 3,120 active weakly labelled studies using target-balanced weighted binary cross-entropy. \\
+{\em Solution method:} CNN\_CPC validates competition metadata, repairs missing MRI-series metadata from DICOM headers when necessary, represents each knee with up to six semantic streams, decodes and spatially orders the selected DICOM series, constructs distributed 2.5D triplets, and encodes them with ConvNeXt-Tiny. Learned slice and stream embeddings are fused by a Transformer, and twelve pathology queries cross-attend to the MRI memory before target-specific classification. Competition reports are converted into conservative pathology-specific weak labels. The retained model is initialized from competition-only image--report representation learning and trained for four complete passes over all 3,120 active weakly labelled studies using target-balanced weighted binary cross-entropy. \\
 
-{\em Restrictions and unusual features:} Reports are used for training supervision only; final inference is MRI-only. External pretrained image weights are disabled in the conservative competition path. The current 58-study gold set has informed repeated development decisions, so reported scores are explicitly treated as development/model-selection estimates. The final competition leaderboard performance remains unknown until a real submission is evaluated. CNN\_CPC is research software and is not a clinical diagnostic device.
+{\em Restrictions and unusual features:} Reports are training-only supervision; final inference is MRI-only. External pretrained image weights are disabled in the conservative path. Missing MRI streams are explicitly masked. The current gold set has been reused for multiple development decisions, therefore reported scores are not treated as independent clinical or leaderboard estimates. CNN\_CPC is research software and is not a clinical diagnostic device.
 \end{small}
 \end{abstract}
 
 \begin{keyword}
-knee MRI \sep weak supervision \sep DICOM \sep ConvNeXt \sep Transformer \sep multi-sequence MRI \sep self-supervised learning \sep semantic routing \sep multi-label classification
+knee MRI \sep weak supervision \sep DICOM \sep ConvNeXt \sep Transformer \sep multi-sequence MRI \sep semantic routing \sep self-supervised learning \sep multi-label classification
 \end{keyword}
 
 \end{frontmatter}
@@ -64,132 +63,58 @@ knee MRI \sep weak supervision \sep DICOM \sep ConvNeXt \sep Transformer \sep mu
 
 Magnetic-resonance imaging provides complementary information about knee ligaments, menisci, cartilage, bone, synovium, and joint fluid through multiple anatomical planes and pulse sequences. Deep learning has demonstrated the feasibility of examination-level knee MRI classification, with MRNet providing an influential multi-series baseline \cite{bien2018mrnet}. Modern convolutional encoders such as ConvNeXt \cite{liu2022convnext} and attention-based sequence models \cite{vaswani2017attention} make it possible to integrate evidence from many slices and acquisitions. In the present setting, however, network capacity is not the only limiting factor. The central methodological problem is how to learn twelve target classifiers when structured labels are scarce, free-text reports are incomplete, MRI acquisition protocols vary substantially, and the same small gold set must be protected from direct training leakage.
 
-CNN\_CPC was developed around five principles. First, reports are training supervision rather than inference inputs. Second, report silence is not a negative label. Third, all MRI sequence roles and missing acquisitions are represented explicitly. Fourth, the gold studies do not enter the weak-training gradient or early stopping. Fifth, every new development experiment is named and evaluated under a predeclared rule so that post-hoc tuning on the 58 gold studies is visible rather than hidden.
+CNN\_CPC was developed around five principles. First, reports are training supervision rather than inference inputs. Second, report silence is not a negative label. Third, MRI sequence roles and missing acquisitions are represented explicitly. Fourth, gold studies do not enter weak-training gradients or early stopping. Fifth, each development change is named, frozen before evaluation, and compared with aligned study-level bootstrap resampling so that post-hoc tuning on the 58-study development set remains visible.
 
-The current repository evolved through a controlled sequence of experiments. Competition-only MRI self-supervision improved the neural baseline; image--report representation alignment produced a stronger frozen representation; structured report states enabled direct pathology-specific weak supervision; complete corpus coverage further improved the retained model; a spatial-token architecture was tested and rejected; and a subsequent label-free metadata audit identified a semantic routing inconsistency that motivated the current strict-routing experiment. This manuscript documents the software and reports the measured development evidence available as of the package-0.14.0 snapshot.
+The current repository evolved through a controlled ladder. Competition-only MRI self-supervision improved the random neural baseline. Image--report representation alignment produced a stronger frozen representation. Structured report states then enabled direct pathology-specific weak supervision. Complete weak-corpus coverage produced the strongest standalone development model, B7.1. Two later hypotheses were tested and rejected: retaining coarse within-slice spatial tokens with fixed anatomy priors (B8), and enforcing exact fluid/structural sequence semantics (B9). The negative B9 result is especially informative because it demonstrates that a metadata inconsistency can be real while the corresponding correction still reduces predictive performance. This manuscript documents both the software and the complete measured B0--B9 development evidence available in package 0.14.0.
 
 \section{Problem definition and data contract}
 \label{sec:problem}
 
 \subsection{Targets}
-
-For each study $i$, the model predicts
-\begin{equation}
-\hat{\mathbf y}_i\in[0,1]^{12},
-\end{equation}
-for the following twelve abnormalities:
-\begin{enumerate}[label=(\arabic*)]
-\item ACL,
-\item MCL,
-\item medial meniscus,
-\item lateral meniscus,
-\item medial osteoarthritis,
-\item lateral osteoarthritis,
-\item patellofemoral osteoarthritis,
-\item effusion,
-\item synovitis,
-\item Baker's cyst,
-\item contusion, and
-\item fracture.
-\end{enumerate}
-
-The primary development metric is the macro average of the twelve target-wise ROC AUC values.
+For each study $i$, the model predicts $\hat{\mathbf y}_i\in[0,1]^{12}$ for ACL, MCL, medial meniscus, lateral meniscus, medial osteoarthritis, lateral osteoarthritis, patellofemoral osteoarthritis, effusion, synovitis, Baker's cyst, contusion, and fracture. The primary metric is the macro average of target-wise ROC AUC values.
 
 \subsection{Released data surface}
-
-The verified release used in the current experiments contains:
-\begin{center}
-\begin{tabular}{lr}
-\toprule
-Quantity & Count \\
-\midrule
-Training studies & 4,407 \\
-Fully gold-labelled studies & 58 \\
-Report-only studies & 4,349 \\
-Training series rows & 24,371 \\
-Targets & 12 \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-All 58 gold studies have all twelve target cells populated. The report-only pool is used for representation learning and weak supervision. The small gold set has supported repeated method choices and is therefore treated as a development/model-selection set rather than a pristine independent validation set.
+The verified release used here contains 4,407 training studies, 58 fully labelled gold studies, 4,349 report-only studies, and 24,371 series rows. All 58 gold studies contain all twelve official target values. The report-only pool is used for competition-only representation learning and weak image supervision. The gold set has supported repeated method choices and is therefore a development/model-selection set rather than a pristine independent test set.
 
 \subsection{Series metadata}
+Each MRI-series row contains \code{StudyInstanceUID}, \code{SeriesInstanceUID}, \code{Fluid\_Sensitive}, \code{Fat\_Suppression}, and \code{Anatomical\_Plane}. Populated CSV metadata are treated as authoritative. Missing plane or contrast metadata can be recovered from DICOM geometry and timing information, but DICOM inference is used only as fallback rather than silently replacing supplied competition metadata.
 
-Each series row contains at least
-\code{StudyInstanceUID}, \code{SeriesInstanceUID}, \code{Fluid\_Sensitive},
-\code{Fat\_Suppression}, and \code{Anatomical\_Plane}. The plane is normalized to sagittal, coronal, or axial. Boolean fields are parsed conservatively and may remain unknown until DICOM-based repair is attempted. Populated competition CSV metadata are treated as authoritative; DICOM-derived sequence characterization is a fallback for missing fields rather than a replacement for supplied labels.
-
-\section{DICOM ingestion}
+\section{DICOM ingestion and preprocessing}
 \label{sec:dicom}
 
-\subsection{Series discovery and spatial ordering}
-
-Selected series are discovered under the configured training/test directory hierarchy. Each readable DICOM object is decoded using pydicom. When \code{ImageOrientationPatient} and \code{ImagePositionPatient} are available, the slice normal is
+Selected DICOM objects are decoded with pydicom. When \code{ImageOrientationPatient} and \code{ImagePositionPatient} are available, slice order is determined by the image-plane normal
 \begin{equation}
 \mathbf n=\mathbf r\times\mathbf c,
 \end{equation}
-where $\mathbf r$ and $\mathbf c$ are the row and column direction cosines, and each slice receives coordinate
+and scalar coordinate $z=\mathbf p\cdot\mathbf n$. \code{InstanceNumber} is used as a fallback. Multi-frame objects are expanded deterministically.
+
+Pixel values are rescaled using $x'=ax+b$, with DICOM rescale slope and intercept. MONOCHROME1 is inverted. The finite 1st and 99th percentiles are used for clipping and normalization,
 \begin{equation}
-z=\mathbf p\cdot\mathbf n.
+\tilde{x}=\frac{\operatorname{clip}(x',q_{0.01},q_{0.99})-q_{0.01}}
+{\max(q_{0.99}-q_{0.01},10^{-6})},
 \end{equation}
-Slices are ordered by $z$. \code{InstanceNumber} is used as a fallback. Multi-frame objects are expanded while preserving deterministic frame order.
+after which frames are resized to $224\times224$ pixels.
 
-\subsection{Intensity handling}
+A full historical selected-series audit decoded all 21,886 selected series. Of 732,556 candidate DICOM files, 732,554 decoded and two failed. The two affected series each lost only one instance and remained below the configured partial-corruption threshold; no selected series was discarded.
 
-Pixel values are converted to floating point and transformed using
-\begin{equation}
-x'=a x+b,
-\end{equation}
-where $a$ and $b$ are the DICOM rescale slope and intercept. MONOCHROME1 images are inverted. The finite 1st and 99th percentiles are computed for each volume; intensities are clipped to this interval and normalized:
-\begin{equation}
-\tilde{x}=
-\frac{\operatorname{clip}(x',q_{0.01},q_{0.99})-q_{0.01}}
-{\max(q_{0.99}-q_{0.01},10^{-6})}.
-\end{equation}
-Frames are resized to $224\times224$ by bilinear interpolation after volume normalization.
-
-\subsection{Verified decoding audit}
-
-The historical production-selected surface was fully audited before long GPU training:
-\begin{center}
-\begin{tabular}{lr}
-\toprule
-Audit quantity & Value \\
-\midrule
-Selected series checked & 21,886 \\
-Selected series decoded & 21,886 \\
-Selected series failed & 0 \\
-Candidate DICOM files & 732,556 \\
-Decoded DICOM files & 732,554 \\
-Failed DICOM files & 2 \\
-Series with partial one-file failures & 2 \\
-\bottomrule
-\end{tabular}
-\end{center}
-Both partially affected series remained usable because only one instance failed in each series and the configured corruption threshold was not exceeded.
-
-\section{Semantic MRI stream routing}
+\section{Semantic MRI streams}
 \label{sec:routing}
 
 \subsection{Six-stream representation}
-
-The neural model accepts up to six streams:
+Each knee is represented by up to six roles:
 \begin{align*}
 &\text{sagittal-fluid},\quad \text{sagittal-structural},\\
 &\text{coronal-fluid},\quad \text{coronal-structural},\\
 &\text{axial-fluid},\quad \text{axial-structural}.
 \end{align*}
-A binary presence mask accompanies every study. Missing streams are represented by zeros and excluded from attention by the mask.
+Missing streams are represented by zero tensors together with an explicit presence mask so they do not participate as real tokens.
 
-\subsection{Historical dual selector}
+\subsection{Historical dual selector and metadata audit}
+The historical B7/B7.1 selector attempted to populate both semantic slots in a plane when several acquisitions were available. If multiple acquisitions belonged to only one contrast class, one acquisition could therefore be assigned to the opposite semantic slot. A label-free audit over the full 4,407-study training metadata found 552 such mismatches among 21,886 selected streams (2.52\%).
 
-The historical B7/B7.1 selector ranked candidate series within each plane using supplied fluid-sensitivity and fat-suppression metadata. When several series were present, it attempted to populate both semantic slots with different acquisitions. This avoided duplicate use of one series but introduced a subtle failure mode: if a plane contained several acquisitions of only one contrast class, the selector could place one of them into the opposite semantic slot.
-
-A label-free audit over all training metadata found 552 semantic mismatches among 21,886 historically selected streams:
 \begin{table}[ht]
 \centering
-\caption{Historical versus strict semantic routing over the full training metadata.}
+\caption{Historical versus strict routing over all training metadata.}
 \label{tab:routing}
 \begin{tabular}{lrrr}
 \toprule
@@ -207,110 +132,48 @@ Total & 21,886 & 21,334 & 552 \\
 \end{tabular}
 \end{table}
 
-Thus, 2.52\% of historically selected streams were assigned a semantic role inconsistent with the supplied \code{Fluid\_Sensitive} flag. The three-study test metadata surface exhibited one such mismatch among 14 historical stream assignments.
+For the 3,120-study B9 weak-training subset, the historical selector produced 15,468 active stream assignments with 442 semantic mismatches. Strict routing reduced this to 15,026 selected streams, removed all 442 cross-contrast substitutions, and yielded zero semantic mismatches. Across the 58-study gold set, six historical mismatches were removed and seven stream assignments changed in total.
 
-\subsection{Strict-routing policy}
-
-The predeclared B9 policy enforces
+\subsection{B9 strict semantic routing}
+B9 requires
 \begin{align}
 \text{fluid slot} &\Rightarrow \code{Fluid\_Sensitive=True},\\
 \text{structural slot} &\Rightarrow \code{Fluid\_Sensitive=False}.
 \end{align}
-If a contrast class is unavailable, the slot remains absent and is masked. Unknown contrast is not silently interpreted as structural. The B7.1 selector remains unchanged in the repository for exact reproducibility; B9 uses a separate strict-routing implementation.
+If the required contrast class is absent, the stream remains missing rather than receiving an opposite-contrast substitute. The historical router is retained unchanged for B7.1 reproducibility; B9 uses a separate implementation and records a label-free routing audit in its checkpoint artifacts.
 
 \section{Distributed 2.5D representation}
 \label{sec:25d}
 
-For a decoded series of $N$ frames, $S=16$ center positions are distributed approximately uniformly over the valid range. For center $c_s$ and triplet gap $g$,
+For a decoded series of $N$ frames, $S=16$ center positions are distributed approximately uniformly through the valid range. With triplet gap $g$, a center $c_s$ produces
 \begin{equation}
 X_s=[I_{c_s-g},I_{c_s},I_{c_s+g}].
 \end{equation}
-Evaluation uses $g=1$. Training samples $g\in\{1,2\}$ and may jitter the center by up to two slices. The nominal study tensor is therefore
-\begin{equation}
-[B,K,S,C,H,W]=[B,6,16,3,224,224].
-\end{equation}
-
-Training augmentation is deliberately mild: rotation up to $5^\circ$, translation up to 3\%, scale jitter of 5\%, gamma perturbation, low-frequency multiplicative bias, Gaussian noise, and slice dropout. Decoded volumes are cached per DataLoader worker to reduce repeated DICOM I/O.
+Evaluation uses $g=1$. Training samples $g\in\{1,2\}$ and allows center jitter of up to two slices. The nominal tensor is $[B,6,16,3,224,224]$. Mild augmentation includes rotation, translation, scale jitter, gamma perturbation, multiplicative bias field, Gaussian noise, and slice dropout. A bounded worker-local cache reduces repeated DICOM decoding.
 
 \section{Competition-only representation learning}
 \label{sec:representation}
 
 \subsection{Strong MRI self-supervision}
+The strong MRI self-supervised checkpoint used only the 4,349 non-gold competition studies and no external image weights. It completed eight epochs, 8,000 batches, and 24,000 study draws, approximately 5.52 nominal corpus passes. Relative to random initialization, the strong SSL initialization improved macro development AUC from 0.4763 to 0.5030.
 
-The strong in-domain MRI self-supervised checkpoint was trained only on the 4,349 non-gold competition studies. It completed eight epochs, 8,000 batches, and 24,000 study draws, corresponding to approximately 5.52 nominal corpus passes. The encoder learned from multiple semantic streams of the same knee and did not use external image weights.
-
-Relative to the random-initialization Stage-1 baseline, the strong SSL initialization improved macro development AUC from 0.4763 to 0.5030.
-
-\subsection{B5 image--report representation alignment}
-
-B5 retained competition-only MRI and aligned image representations with report semantics without using an external language model. Reports were represented using TF--IDF word 1--2 grams followed by truncated SVD and $\ell_2$ normalization. The MRI encoder was initialized from the strong SSL checkpoint and optimized with image--image and image--report alignment objectives.
-
-The completed B5 checkpoint used zero gold studies. A frozen downstream probe yielded
+\subsection{B5 image--report alignment}
+B5 aligned the competition-only MRI encoder with report semantics represented by TF--IDF word 1--2 grams, truncated SVD, and $\ell_2$ normalization. No external language model was used. B5 excluded all 58 gold studies from representation learning. Under the unchanged frozen downstream probe,
 \begin{equation}
 \mathrm{AUC}_{\mathrm{macro}}=0.5243650851,
 \end{equation}
-with 95\% bootstrap interval $[0.4728108406,0.5761619105]$. B5 became the representation initialization used for direct B6-supervised B7/B7.1/B9 training.
+with 95\% bootstrap interval $[0.4728108406,0.5761619105]$. B5 became the encoder initialization for B7/B7.1/B9.
 
 \section{Structured weak supervision from reports}
 \label{sec:reports}
 
-\subsection{Four-state target representation}
-
-B6 v1.2.1 converts each report/target cell to
+For each target, the frozen B6 v1.2.1 parser assigns one of four states:
 \begin{equation}
-r_{ic}\in
-\{\mathrm{positive},\mathrm{negated},\mathrm{uncertain},\mathrm{unmentioned}\}.
+r_{ic}\in\{\mathrm{positive},\mathrm{negated},\mathrm{uncertain},\mathrm{unmentioned}\}.
 \end{equation}
-The parser is deterministic and multilingual. Critically, \emph{unmentioned} is not mapped to a negative class. The parser was frozen after its audit; later image-model results are not used to retune its lexical rules.
+Unmentioned and uncertain cells are ignored for direct B7-family supervision. The frozen report-only export contains 3,120 active studies and 14,123 usable target cells: 6,871 positive and 7,252 negated.
 
-At confidence threshold 0.75, the report-only training export contains:
-\begin{center}
-\begin{tabular}{lr}
-\toprule
-Weak-supervision quantity & Count \\
-\midrule
-Report-only studies & 4,349 \\
-Active weakly labelled studies & 3,120 \\
-Inactive studies with zero usable cells & 1,229 \\
-Usable target cells & 14,123 \\
-Positive cells & 6,871 \\
-Negated cells & 7,252 \\
-Gold rows in weak-training export & 0 \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-The per-target usable counts are given in Table~\ref{tab:b6counts}.
-
-\begin{table}[ht]
-\centering
-\caption{Frozen B6 v1.2.1 weak-supervision counts.}
-\label{tab:b6counts}
-\begin{tabular}{lrrr}
-\toprule
-Target & Positive & Negated & Usable \\
-\midrule
-ACL & 572 & 1,089 & 1,661 \\
-MCL & 271 & 1,089 & 1,360 \\
-Medial Meniscus & 1,126 & 536 & 1,662 \\
-Lateral Meniscus & 448 & 1,182 & 1,630 \\
-Medial OA & 484 & 334 & 818 \\
-Lateral OA & 402 & 382 & 784 \\
-PF OA & 682 & 372 & 1,054 \\
-Effusion & 1,338 & 757 & 2,095 \\
-Synovitis & 399 & 17 & 416 \\
-Baker's & 557 & 476 & 1,033 \\
-Contusion & 389 & 466 & 855 \\
-Fracture & 203 & 552 & 755 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Gold audit and frozen asymmetric policy}
-
-The B6 parser was audited on the 58 gold studies before direct weak MRI training. Across 251 usable audited cells, the pooled confusion counts were TP=116, TN=80, FP=52, and FN=3. This corresponds to sensitivity 0.9748, specificity 0.6061, positive precision 0.6905, and negative predictive value 0.9639.
-
-The audit motivated one global asymmetric policy, subsequently frozen:
+A completed gold audit over 251 usable report/target cells yielded TP=116, TN=80, FP=52, and FN=3, corresponding to positive precision 0.6905, sensitivity 0.9748, specificity 0.6061, NPV 0.9639, and balanced accuracy 0.7904. This motivated one global asymmetric policy rather than target-specific tuning:
 \begin{center}
 \begin{tabular}{lcc}
 \toprule
@@ -323,165 +186,92 @@ unmentioned & ignored & 0.00 \\
 \bottomrule
 \end{tabular}
 \end{center}
-Target-specific multipliers equalize total effective supervision mass across the twelve targets. No target-specific weights are tuned from later gold AUCs.
+Target-wise multipliers equalize total weak-supervision mass across the twelve outputs. B6 parser rules and this global policy are frozen after the audit.
 
 \section{Pathology-query MRI classifier}
 \label{sec:model}
 
-\subsection{ConvNeXt-Tiny slice encoder}
-
-Every active 2.5D triplet is encoded by ConvNeXt-Tiny \cite{liu2022convnext}. External pretrained weights are disabled; B7/B7.1/B9 initialize the encoder from the competition-only B5 checkpoint. The final pooled feature dimension is $d=768$.
-
-For stream $k$ and sampled position $s$,
+Each active 2.5D triplet is encoded by ConvNeXt-Tiny \cite{liu2022convnext}, yielding $d=768$ features. For stream $k$ and position $s$,
 \begin{equation}
-\mathbf h_{ks}
-=M_k(\mathbf f_{ks}+\mathbf p_s+\mathbf e_k),
+\mathbf h_{ks}=M_k(\mathbf f_{ks}+\mathbf p_s+\mathbf e_k),
 \end{equation}
-where $\mathbf f_{ks}$ is the image feature, $\mathbf p_s$ is a learned slice-position embedding, $\mathbf e_k$ is a learned stream embedding, and $M_k$ is the stream presence mask.
+where $M_k$ is the stream-presence mask and $\mathbf p_s$, $\mathbf e_k$ are learned position and stream embeddings. The $6\times16=96$ tokens are passed through a two-layer, eight-head Transformer encoder with feed-forward width $2d$ and dropout 0.25.
 
-\subsection{Cross-sequence Transformer}
-
-The standard B7.1 MRI memory contains
+Twelve learned pathology queries first interact through a one-layer Transformer and then cross-attend to the MRI memory. If $Q$ denotes the pathology queries and $H$ the MRI memory,
 \begin{equation}
-6\times16=96
+A=\operatorname{MHA}(Q,H,H),
 \end{equation}
-tokens. These are processed by a two-layer, eight-head Transformer encoder with pre-normalization, feed-forward width $2d$, and dropout 0.25.
+followed by residual normalization and target-specific linear readout. B7.1 and B9 use this globally pooled architecture.
 
-\subsection{Interacting pathology queries}
+B8 tested an alternative that retained a $2\times2$ final ConvNeXt spatial grid for each slice, increasing MRI memory from 96 to 384 tokens/study, together with fixed gentle pathology-specific stream/slice attention priors.
 
-Twelve learned pathology embeddings
+\section{B7-family optimization}
+\label{sec:optimization}
+
+B7-family weak training uses target-balanced binary cross-entropy with the frozen B6 soft targets and weights. Let $w_{ic}$ be the base weak-label weight and $m_c$ the fixed inverse supervision-mass multiplier. The loss is
 \begin{equation}
-Q^{(0)}\in\R^{12\times d}
+L=\frac{\sum_{i,c}m_cw_{ic}\,\ell_{\mathrm{BCE}}(z_{ic},y_{ic})}
+{\sum_{i,c}m_cw_{ic}}.
 \end{equation}
-first interact through a one-layer Transformer. Multi-head cross-attention then uses the pathology tokens as queries and the MRI memory as keys and values:
+Encoder and head initial learning rates are $10^{-5}$ and $10^{-4}$, respectively, with AdamW, weight decay $10^{-4}$, gradient clipping at 1.0, and cosine annealing to $10^{-6}$. Batch size is two.
+
+B7-v1 was capped at 500 batches/epoch for four epochs, yielding 4,000 study draws in total. B7.1 changed only the cap to 1,560 batches/epoch. Thus every complete epoch draws all 3,120 active studies and exposes all 14,123 usable weak cells once. Four epochs therefore provide four nominal full-corpus passes. B9 keeps this B7.1 optimization contract and changes only routing semantics.
+
+\section{Statistical evaluation and development policy}
+\label{sec:evaluation}
+
+For every target with both classes represented, ROC AUC is computed and macro AUC is
 \begin{equation}
-A=\operatorname{MHA}(Q^{(1)},H,H).
+\mathrm{AUC}_{\mathrm{macro}}=\frac{1}{12}\sum_{c=1}^{12}\mathrm{AUC}_c.
 \end{equation}
-After residual normalization, each pathology token is mapped to one logit,
+All twelve target AUCs are defined on the 58-study development set.
+
+Uncertainty uses study-level bootstrap resampling. B7.1, B8, and B9 use 5,000 replicates. For paired comparison of aligned models $A$ and $B$, the same resampled study indices are used:
 \begin{equation}
-z_c=\mathbf v_c^\top Q^{(2)}_c+b_c,
-\qquad
-\hat y_c=\sigmoid(z_c).
+\Delta_b=\mathrm{AUC}_{B,b}-\mathrm{AUC}_{A,b}.
 \end{equation}
+We report the median $\Delta$, percentile 95\% interval, and the fraction of valid replicates with $\Delta>0$.
 
-\section{Direct B6-supervised training}
-\label{sec:training}
-
-For logits $z_{ic}$, soft weak targets $y_{ic}$, base weights $w_{ic}$, and target-balance multiplier $m_c$, the training loss is
-\begin{equation}
-L=
-\frac{\sum_{i,c}m_c w_{ic}\,
-\ell_{\mathrm{BCE}}(z_{ic},y_{ic})}
-{\sum_{i,c}m_c w_{ic}}.
-\end{equation}
-Only positive and negated B6 cells at confidence at least 0.75 contribute.
-
-The retained full-coverage recipe uses:
-\begin{center}
-\begin{tabular}{lr}
-\toprule
-Parameter & Value \\
-\midrule
-Active weak-training studies & 3,120 \\
-Usable cells & 14,123 \\
-Batch size & 2 \\
-Batches per epoch & 1,560 \\
-Study draws per epoch & 3,120 \\
-Epochs & 4 \\
-Encoder learning rate & $10^{-5}$ \\
-Head learning rate & $10^{-4}$ \\
-Minimum learning rate & $10^{-6}$ \\
-Weight decay & $10^{-4}$ \\
-Gradient clipping & 1.0 \\
-Evaluation TTA offsets & $[-1,0,1]$ \\
-Bootstrap replicates & 5,000 \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-No gold labels enter the B7/B7.1/B8/B9 training gradient or early stopping. Because the B6 gold audit informed the global weak-label policy, subsequent gold scores remain development estimates.
+The 58 studies have supported repeated sequential decisions. Consequently, the experiment ladder is model-selection/development evidence. A point estimate or paired probability is not interpreted as independent hidden-test proof, especially when the paired 95\% interval crosses zero.
 
 \section{Controlled experiment ladder}
 \label{sec:experiments}
 
-Table~\ref{tab:ladder} summarizes the completed development ladder.
-
 \begin{table}[ht]
 \centering
-\caption{Measured macro ROC AUC on the 58-study development set.}
+\caption{Measured development ladder. B7.1 remains the retained standalone model.}
 \label{tab:ladder}
-\begin{tabular}{lll}
+\begin{tabular}{llc}
 \toprule
 ID & Method & Macro AUC \\
 \midrule
 B0 & Random-init Stage-1 & 0.4762536432 \\
-Report teacher & Fold-safe rules + TF--IDF & 0.49245 \\
 B1 & Strong competition-only MRI SSL & 0.5030284974 \\
-B2 & B1 with 0.1$\times$ encoder LR & 0.4993244663 \\
+B2 & B1 with reduced encoder LR & 0.4993244663 \\
 B3 & Pathology-aware low-capacity MIL & 0.4944652486 \\
-B4 & Frozen SSL + target-wise PCA/LR & 0.5137567459 \\
-B4.1 & Shared probe policy & 0.4847792672 \\
-B4.2 & Pathology-group probe policies & 0.4901328905 \\
-B4.3 & Two-way-CV target selector & 0.4966083942 \\
+B4 & Frozen SSL features + PCA/LR & 0.5137567459 \\
 B5 & Image--report SSL + frozen probe & 0.5243650851 \\
-B7-v1 & Direct B6 weak supervision & 0.5397724412 \\
+B7-v1 & Direct frozen-B6 weak supervision & 0.5397724412 \\
 \textbf{B7.1} & \textbf{B7 with complete epoch coverage} & \textbf{0.5644802945} \\
 B5+B7.1 & Fixed 50:50 rank ensemble & 0.5540141184 \\
-B8 & 2x2 spatial anatomy tokens & 0.5300962807 \\
-B9 & Strict semantic routing & pending \\
+B8 & 2$\times$2 spatial anatomy tokens & 0.5300962807 \\
+B9 & Strict semantic routing & 0.5334962669 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The same 58 studies have supported sequential method development, so Table~\ref{tab:ladder} is not interpreted as a sequence of independent hypothesis tests. Its purpose is to document controlled development choices and their uncertainty.
-
-\section{Measured development results}
-\label{sec:results}
-
-\subsection{B5 representation improvement}
-
-B5 increased the frozen-probe macro AUC from the B4 value of 0.5137567459 to 0.5243650851. The paired B5--B4 bootstrap median difference was $+0.0105821232$ with 95\% interval $[-0.0408197338,+0.0622131599]$ and $P(\mathrm{B5}>\mathrm{B4})=0.656$. The interval crosses zero; the result was retained as a useful representation signal rather than claimed as conclusive superiority.
-
-\subsection{B7-v1 and full-corpus B7.1}
-
-B7-v1 used 500 batches per epoch at batch size 2. Over four epochs it therefore drew 4,000 studies, only approximately 1.28 nominal passes over the 3,120 active weak-training studies. Its macro AUC was
-\begin{equation}
-0.5397724412,
-\end{equation}
-with 95\% bootstrap interval $[0.4733481702,0.6035621405]$.
-
-B7.1 changed only the per-epoch coverage:
-\begin{equation}
-500\ \mathrm{batches/epoch}\rightarrow1560\ \mathrm{batches/epoch}.
-\end{equation}
-With batch size 2, each epoch covers all 3,120 active studies and all 14,123 usable weak cells. The four training losses were
-\begin{equation}
+\subsection{B7.1 full weak-corpus coverage}
+B7.1 changed only the B7-v1 batch cap from 500 to 1,560 batches/epoch. Training loss was
+\begin{equation*}
 0.752419\rightarrow0.665171\rightarrow0.639117\rightarrow0.612758.
-\end{equation}
-The B7.1 gold-development result was
-\begin{equation}
-\boxed{\mathrm{AUC}_{\mathrm{macro}}=0.5644802945},
-\end{equation}
-with 95\% bootstrap interval
-\begin{equation}
-[0.5052432984,0.6229422178].
-\end{equation}
-
-The paired B7-v1$\rightarrow$B7.1 bootstrap gave median
-\begin{equation}
-\Delta=+0.0241102714,
-\end{equation}
-95\% interval $[-0.0140197876,+0.0660558004]$, and
-$P(\mathrm{B7.1}>\mathrm{B7-v1})=0.8694$.
-The interval still crosses zero.
-
-\subsection{B7.1 target-wise performance}
+\end{equation*}
+Its macro AUC was 0.5644802945 with 95\% bootstrap interval $[0.5052432984,0.6229422178]$. Relative to B7-v1, the paired median difference was $+0.0241102714$, 95\% interval $[-0.0140197876,0.0660558004]$, with $P(\mathrm{B7.1}>\mathrm{B7})=0.8694$.
 
 \begin{table}[ht]
 \centering
-\caption{B7.1 target-wise ROC AUC.}
-\label{tab:b71}
-\begin{tabular}{lr}
+\caption{B7.1 target-wise development AUC.}
+\label{tab:b71target}
+\begin{tabular}{lc}
 \toprule
 Target & AUC \\
 \midrule
@@ -503,165 +293,113 @@ Macro & 0.5644802945 \\
 \end{tabular}
 \end{table}
 
-Target-wise values are descriptive and are not used to select target-specific model winners.
-
 \subsection{Fixed B5+B7.1 rank ensemble}
+One predeclared global 50:50 percentile-rank ensemble was tested. It scored 0.5540141184, below B7.1. The paired median ensemble--B7.1 difference was $-0.0105429030$, 95\% interval $[-0.0523218181,0.0333886570]$, with only 30.54\% of valid bootstrap replicates favoring the ensemble. No blend-weight or target-specific ensemble search followed.
 
-A single predeclared global 50:50 percentile-rank ensemble was tested. It scored 0.5540141184, below B7.1. The paired median difference (ensemble minus B7.1) was $-0.0105429030$ with 95\% interval $[-0.0523218181,+0.0333886570]$ and $P(\mathrm{ensemble}>\mathrm{B7.1})=0.3054$. The ensemble was rejected and no weight search was performed.
-
-\subsection{B8 spatial-anatomy experiment}
-
-B8 initialized from B7.1 and retained a 2x2 ConvNeXt feature grid from each sampled slice, increasing MRI memory from
-\begin{equation}
-6\times16\times1=96
-\end{equation}
-tokens to
-\begin{equation}
-6\times16\times4=384
-\end{equation}
-tokens per study. It added learned region embeddings and fixed gentle pathology-specific stream/slice attention priors. All four full training passes completed, with weak-training loss
-\begin{equation}
+\subsection{B8 spatial-token ablation}
+B8 initialized from B7.1 and retained a $2\times2$ ConvNeXt spatial grid per sampled slice. Training completed four full weak-corpus passes with losses
+\begin{equation*}
 0.670755\rightarrow0.644540\rightarrow0.618696\rightarrow0.599729.
-\end{equation}
+\end{equation*}
+Despite stable optimization, B8 scored only 0.5300962807, with 95\% interval $[0.4723014866,0.5867732651]$. Relative to B7.1, the paired median difference was $-0.0335501423$, 95\% interval $[-0.0900453633,0.0223997827]$, and $P(\mathrm{B8}>\mathrm{B7.1})=0.1156$. The spatial-prior branch was therefore rejected without post-hoc grid or prior tuning.
 
-Despite stable optimization, B8 scored
+\subsection{B9 strict semantic routing}
+B9 returned to the B7.1 architecture and B5 initialization. Its sole scientific change was exact \code{Fluid\_Sensitive} routing with no cross-contrast substitution. The actual 3,120-study training audit showed 442 legacy semantic mismatches among 15,468 selected streams; B9 removed all 442 and reduced the strict selected count to 15,026. No weak-training study lost all MRI input.
+
+Training completed four exact full passes with the same 14,123 weak cells per epoch. Loss decreased monotonically:
+\begin{equation*}
+0.741013\rightarrow0.661024\rightarrow0.620775\rightarrow0.598611.
+\end{equation*}
+The total measured training duration was 9,799.91 s (approximately 2.72 h), and no epoch was budget-limited.
+
+The frozen one-shot gold evaluation scored
 \begin{equation}
-\mathrm{AUC}_{\mathrm{macro}}=0.5300962807,
+\mathrm{AUC}_{\mathrm{B9}}=0.5334962669,
 \end{equation}
-with 95\% bootstrap interval $[0.4723014866,0.5867732651]$. Relative to B7.1, the paired bootstrap median was
-\begin{equation}
-\Delta_{\mathrm{B8-B7.1}}=-0.0335501423,
-\end{equation}
-95\% interval $[-0.0900453633,+0.0223997827]$, and
-$P(\mathrm{B8}>\mathrm{B7.1})=0.1156$.
-B8 was therefore rejected as a replacement for B7.1, and the spatial-prior branch was closed to post-hoc tuning on the same gold set.
+with 95\% bootstrap interval $[0.4787138255,0.5891763236]$. All 5,000 bootstrap replicates were usable. Across the 58 gold studies, strict routing removed six legacy semantic mismatches; the historical and strict selectors differed in only seven stream assignments at evaluation time.
 
 \begin{table}[ht]
 \centering
-\caption{B8 target-wise ROC AUC.}
-\label{tab:b8}
-\begin{tabular}{lr}
+\caption{B9 target-wise development AUC.}
+\label{tab:b9target}
+\begin{tabular}{lc}
 \toprule
 Target & AUC \\
 \midrule
-ACL & 0.4767156863 \\
-MCL & 0.4739229025 \\
-Medial Meniscus & 0.6045673077 \\
-Lateral Meniscus & 0.5801242236 \\
-Medial OA & 0.5317829457 \\
-Lateral OA & 0.4100580271 \\
-PF OA & 0.5135135135 \\
-Effusion & 0.5788819876 \\
-Synovitis & 0.5818399044 \\
-Baker's & 0.5181159420 \\
-Contusion & 0.5249662618 \\
-Fracture & 0.5666666667 \\
+ACL & 0.4215686275 \\
+MCL & 0.4467120181 \\
+Medial Meniscus & 0.5552884615 \\
+Lateral Meniscus & 0.5304347826 \\
+Medial OA & 0.4775193798 \\
+Lateral OA & 0.5396518375 \\
+PF OA & 0.6357786358 \\
+Effusion & 0.6024844720 \\
+Synovitis & 0.6152927121 \\
+Baker's & 0.5163043478 \\
+Contusion & 0.5303643725 \\
+Fracture & 0.5305555556 \\
 \midrule
-Macro & 0.5300962807 \\
+Macro & 0.5334962669 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{B9 strict semantic routing: predeclared active experiment}
-
-The strict-routing hypothesis was derived from the label-free metadata audit in Table~\ref{tab:routing}, not from selecting target-wise winners on the gold set. B9 returns to the B7.1 architecture and B5 initialization. The only scientific change is exact \code{Fluid\_Sensitive} routing with no cross-contrast substitution. B6 labels, target balancing, augmentation, learning rates, four full passes, TTA, and bootstrap policy remain unchanged.
-
-At the present manuscript snapshot, B9 training is active and its gold evaluation has not been performed. No B9 AUC is therefore reported. The frozen comparison will be B7.1 versus B9 using the aligned 58 studies and 5,000 paired study-level bootstrap replicates.
-
-\section{Statistical evaluation}
-\label{sec:evaluation}
-
-For each target with both classes represented, ROC AUC is computed and the primary score is
+The point difference relative to B7.1 was $-0.0309840276$. In the aligned paired bootstrap,
 \begin{equation}
-\mathrm{AUC}_{\mathrm{macro}}
-=\frac{1}{12}\sum_{c=1}^{12}\mathrm{AUC}_c.
+\operatorname{median}(\mathrm{B9}-\mathrm{B7.1})=-0.0302397961,
 \end{equation}
-All twelve target AUCs are defined on the current 58-study gold set.
+with 95\% interval $[-0.0679414819,0.0070291202]$. Only 5.62\% of valid replicates favored B9, equivalently 94.38\% favored B7.1. Because the interval still crosses zero, the comparison is described as strong directional evidence against B9 rather than a formally conclusive difference. B9 is rejected as a replacement for B7.1, and no target-specific restoration of substituted streams is selected from the observed gold outcomes.
 
-Uncertainty is estimated with study-level bootstrap resampling. Current B7/B8/B9 development evaluation uses 5,000 replicates. For paired comparison of models $A$ and $B$, the same resampled study indices are applied to both prediction matrices:
-\begin{equation}
-\Delta_b=
-\mathrm{AUC}_{B,b}-\mathrm{AUC}_{A,b}.
-\end{equation}
-We report the median difference, percentile 95\% interval, and fraction of valid replicates with $\Delta_b>0$.
-
-Because the 58 studies have informed repeated development decisions, these bootstrap intervals quantify sampling variability within the current development surface; they do not restore independent-test status.
-
-\section{Runtime and reproducibility}
+\section{Runtime and execution policy}
 \label{sec:runtime}
 
-The conservative execution path uses one GPU and CPU multiprocessing for DICOM/data loading. External image pretraining is disabled. Long experiments use an 8.5-hour software budget with a 10-minute reserve. Checkpoints are written after completed epochs and record variant identity, model specification, source checkpoint provenance, B6 version, supervision policy, training history, and zero-gold-gradient certification.
+Competition mode uses one requested GPU with CPU multiprocessing for DICOM/data work. The software budget is 8.5 h with a 10-min reserve. Long stages checkpoint after completed epochs and record whether the budget limited the run. B7.1, B8, and B9 all completed their predefined four-epoch training contracts without budget truncation on the NVIDIA RTX A4500 Laptop GPU used for the local experiments.
 
-The principal full-coverage B7.1 experiment completed in approximately 2.05 hours on the verified local GPU environment. B8, with four times as many MRI memory tokens, required approximately 3.14 hours. Runtime is reported as an implementation property rather than a predictive metric.
+The primary neural evaluation uses center offsets $[-1,0,1]$. Multiple views are generated from the same decoded volume and probabilities are averaged. Runtime-only DataLoader changes, such as disabling persistent workers for a final evaluation, do not alter the scientific model or TTA contract.
 
-Random seeds are derived from base seed 2026. Bitwise determinism across all accelerated kernels is not claimed, but experiment variants, supervision contracts, routing policy, and checkpoint identity are explicitly serialized.
+\section{Reproducibility and artifacts}
+\label{sec:reproducibility}
 
-\section{Installation and current workflow}
-\label{sec:usage}
+Every long experiment writes explicit configuration/provenance information together with model checkpoints and measured histories. For B7-family runs, artifacts include the model checkpoint, \code{history.json}, \code{policy.json}, \code{supervision\_plan.json}, and evaluation prediction/JSON files. B9 additionally stores \code{routing\_audit.json}, which certifies zero strict semantic mismatches before any gold evaluation. Prediction files retain StudyInstanceUID order for paired comparisons.
 
-A clean installation is:
-\begin{verbatim}
-git clone https://github.com/mtalafha90/CNN_CPC.git
-cd CNN_CPC
-conda create -n rsna-knee python=3.12 -y
-conda activate rsna-knee
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e .
-python -m pip install pytest pillow
-pytest -q
-\end{verbatim}
-
-The current package exposes dedicated B7, B8, and B9 training/evaluation entry points. The active B9 run is launched with:
-\begin{verbatim}
-rsna-knee-b9 \
-  --config configs/b9_strict_routing.yaml \
-  --data-root "$DATA_ROOT" \
-  --b5-checkpoint runs/b5_report_ssl/b5_encoder.pt \
-  --b6-root runs/b6_report_labels_v121 \
-  --out-root runs/b9_strict_routing
-\end{verbatim}
-
-After four complete epochs and artifact inspection, the frozen gold evaluation is:
-\begin{verbatim}
-rsna-knee-b9-eval \
-  --config configs/b9_strict_routing.yaml \
-  --data-root "$DATA_ROOT" \
-  --checkpoint runs/b9_strict_routing/b9_model.pt \
-  --out-root runs/b9_strict_routing/gold_eval
-\end{verbatim}
+The current package exposes dedicated commands \code{rsna-knee-b7}, \code{rsna-knee-b7-eval}, \code{rsna-knee-b8}, \code{rsna-knee-b8-eval}, \code{rsna-knee-b9}, and \code{rsna-knee-b9-eval}. Canonical experiment status and exact local run commands are maintained in the repository documentation.
 
 \section{Discussion}
 \label{sec:discussion}
 
-The experiment ladder highlights three recurring lessons. First, representation quality matters: competition-only MRI self-supervision and later image--report alignment both improved the development point estimate over the random baseline. Second, direct pathology-specific weak supervision was more useful than representation alignment alone. B7-v1 improved on B5, and the B7.1 full-coverage correction produced the strongest standalone development point estimate to date. Third, additional architectural complexity is not automatically beneficial. B8 optimized smoothly but generalized worse than the simpler globally pooled B7.1 model.
+The experiment ladder yields several consistent conclusions. First, representation quality matters. Competition-only MRI self-supervision and subsequent image--report alignment improved on the random neural baseline. Second, direct pathology-specific report supervision was more useful than representation alignment alone. B7-v1 improved on B5, and complete weak-corpus coverage in B7.1 produced the strongest standalone development estimate. Third, additional architectural complexity is not automatically beneficial: the spatially richer B8 model optimized smoothly but generalized worse than the simpler 96-token B7.1 representation.
 
-The routing audit adds a distinct lesson. Semantic stream embeddings are useful only if the upstream acquisition assignment is semantically consistent. A model told that an image is ``axial structural'' while the metadata identify it as fluid-sensitive receives contradictory supervision at the representation level. The historical selector created this contradiction in 552 selected streams. Strict routing deliberately accepts more missing streams in exchange for cleaner semantic identity. Whether that trade-off improves predictive AUC remains an empirical question reserved for B9's frozen evaluation.
+The B9 result adds a less obvious lesson. The historical router did contain a genuine metadata inconsistency: hundreds of acquisitions were assigned to stream roles that contradicted the supplied fluid-sensitivity flag. Strict routing corrected this perfectly. Nevertheless, predictive ranking deteriorated. This shows that eliminating a semantic inconsistency and improving the training objective are not sufficient evidence of improved generalization. A plausible interpretation is that the historical fallback sometimes supplied an additional informative acquisition even when its semantic embedding was imperfect, whereas strict routing converted those cases into missing streams. This interpretation is supported by the fact that B9 reduced the active training-stream count by 442, while the gold input itself changed very little. However, this mechanism remains an inference rather than a demonstrated causal explanation and should not be turned into a post-hoc hybrid on the same 58 labels.
 
-The weak-label audit also shows why report supervision must be asymmetric. Negated report findings had high negative predictive value, whereas positive mentions were noisier relative to challenge labels. B7 therefore downweights positive weak cells globally rather than pretending all report-derived labels are equally reliable. Importantly, target-specific weights are not tuned after observing target AUCs.
+The paired result also illustrates why point estimates should not be overinterpreted. B9 was lower than B7.1 by approximately 0.031 macro AUC and 94.38\% of paired bootstrap replicates favored B7.1, yet the 95\% interval still extended slightly above zero. With only 58 studies and repeated development use, uncertainty remains substantial. The appropriate decision is therefore operational rather than absolute: retain B7.1, close B9-v1, and avoid claiming that semantic routing can never help on a larger independent set.
 
-Several limitations remain. The 58-study development set is very small and has been reused across a long experiment campaign, so apparent improvements may be unstable and selection-biased. B6 is a deterministic report parser and can miss unusual multilingual phrasing or contextual nuance. The six-stream representation remains metadata-driven rather than learned end to end. The 2.5D input does not preserve complete volumetric geometry. Physical pixel spacing is not explicitly normalized before resizing to $224\times224$, leaving scanner/protocol scale variation as a possible domain-shift source. Finally, no current result should be interpreted as a hidden-test or clinical-performance claim.
+Weak-label reliability remains another important limitation. The B6 audit showed high sensitivity and NPV but lower positive precision, motivating globally asymmetric weak supervision. Synovitis in particular has very few explicit negative report cells, so target-specific conclusions are unstable. The parser is deterministic and can miss unusual multilingual phrasing. These issues argue for better supervision sources in future experiments rather than repeated optimization of the same 58-study evaluation surface.
 
-Future work should prioritize improvements that can be justified without target-wise post-hoc tuning: scanner/physical-scale normalization, stronger competition-only representation learning, robust self-training with independent teachers, pathology-family specialists trained under predeclared rules, denser or adaptive slice sampling, and efficient 3D or hybrid 2.5D/3D representations. External validation and an actual competition submission are necessary to establish generalization beyond the current development surface.
+Other limitations include the metadata-driven six-stream abstraction, incomplete preservation of three-dimensional geometry by 2.5D triplets, lack of explicit physical PixelSpacing normalization before resizing, and the absence of an independent hidden-test result at the current manuscript snapshot. These limitations should guide the next generation of experiments.
+
+\section{Future directions}
+\label{sec:future}
+
+The B8 and B9 negative results suggest that the next gains are more likely to come from stronger supervision and information-preserving sequence modeling than from hard-coded spatial or semantic constraints. Promising directions include: (i) teacher--student self-training using a frozen high-confidence MRI teacher over report-silent cells; (ii) pathology-family specialist heads trained from the same shared encoder while maintaining global evaluation rules; (iii) adaptive or denser slice sampling for focal abnormalities; (iv) sequence-set modeling that can ingest multiple acquisitions per plane without forcing every acquisition into exactly one fluid/structural slot; (v) physical-scale normalization or explicit PixelSpacing features; and (vi) independent external or leaderboard validation before further development decisions are made from the 58-study set.
+
+Any new candidate should be explicitly named before evaluation and compared against B7.1 with the same aligned study-level bootstrap. Target-specific winner selection and ensemble-weight optimization on the current gold set should remain prohibited.
 
 \section{Conclusions}
 \label{sec:conclusion}
 
-CNN\_CPC provides a reproducible framework for weakly supervised multi-sequence knee MRI classification under severe label scarcity. The retained pipeline combines robust DICOM handling, six semantic MRI streams, distributed 2.5D ConvNeXt features, cross-sequence Transformer fusion, interacting pathology queries, competition-only representation initialization, and conservative structured report supervision. On the repeatedly used 58-study development set, complete weak-corpus coverage produced the current best standalone point estimate, macro ROC AUC 0.5645, while a more complex spatial-token architecture decreased performance to 0.5301 and was rejected.
+CNN\_CPC provides an end-to-end framework for weakly supervised multi-sequence knee MRI classification with explicit DICOM handling, conservative report supervision, competition-only representation learning, pathology-query attention, experiment provenance, and paired uncertainty estimation. The strongest measured standalone development model is B7.1, which combines B5 image--report initialization, frozen B6 pathology labels, the globally pooled six-stream Transformer architecture, and four complete passes over all 3,120 active weakly labelled studies. It reaches macro AUC 0.5644802945 on the repeatedly used 58-study development set.
 
-A subsequent label-free metadata audit exposed cross-contrast sequence substitution in the historical six-stream selector, motivating the current B9 strict-routing experiment. B9 is deliberately evaluated as a separate predeclared development variant, and no predictive result is claimed until its frozen training and gold evaluation are complete. This separation between measured evidence, active hypotheses, and unresolved validation is a central design principle of the software.
+Two subsequent controlled ablations did not improve this result. B8 spatial-token learning reached 0.5300962807. B9 strict semantic routing corrected all identified fluid/structural assignment mismatches but reached 0.5334962669, with paired median difference $-0.0302397961$ relative to B7.1 and only 5.62\% of bootstrap replicates favoring B9. These negative experiments are scientifically useful: they show that smoother optimization, increased spatial detail, and stricter metadata consistency do not necessarily improve study-level macro AUC. The retained conclusion is therefore conservative: B7.1 remains the development champion, while hidden-test and clinical performance remain unknown until evaluated on genuinely independent data.
 
 \section*{Code availability}
-The source code, experiment documentation, and configurations are available at
-\url{https://github.com/mtalafha90/CNN_CPC}. Competition data are distributed separately by the organizer and are not redistributed by the repository. A formal open-source license should be selected before journal submission.
+The source code and documentation are available at \url{https://github.com/mtalafha90/CNN_CPC}. Competition data are distributed separately by the competition organizer and are not redistributed by this repository.
 
 \section*{Acknowledgements}
 The author acknowledges the University of Sharjah and the Research Institute of Sciences and Engineering for research support and computational facilities. The RSNA Knee Abnormality Detection competition organizers are acknowledged for providing the challenge data and evaluation framework.
 
 \appendix
-
-\section{Fixed target and stream order}
+\section{Exact target and stream order}
 \label{app:contracts}
-
 The target order is:
 \begin{verbatim}
 ACL
@@ -677,8 +415,7 @@ Baker's
 Contusion
 Fracture
 \end{verbatim}
-
-The semantic stream order is:
+The stream order is:
 \begin{verbatim}
 sagittal_fluid
 sagittal_structural
@@ -687,31 +424,27 @@ coronal_structural
 axial_fluid
 axial_structural
 \end{verbatim}
+Changing either ordering without retraining violates the checkpoint contract.
 
-Changing either ordering without corresponding retraining violates the checkpoint contract.
+\section{B9 training audit}
+\label{app:b9audit}
+B9 trained on all 3,120 active B6 studies in every epoch. Each epoch contained 1,560 batches, 3,120 study draws, 14,123 active supervision cells, 6,871 positive cells, and 7,252 negative cells. No epoch was budget-limited. The measured epoch durations were 2,155.91, 2,641.09, 2,508.23, and 2,494.68 s.
 
-\section{Current experiment reporting checklist}
-\label{app:checklist}
+The training-subset routing audit reported:
+\begin{verbatim}
+routing_policy                    fluid_sensitive_exact_v1
+legacy_selected_streams           15468
+strict_selected_streams           15026
+legacy_semantic_mismatches          442
+strict_semantic_mismatches            0
+changed_stream_assignments          666
+removed_cross_contrast_substitutions 442
+\end{verbatim}
 
-Before promoting a new candidate:
-\begin{enumerate}
-\item verify the exact experiment variant and checkpoint provenance;
-\item confirm that all predefined epochs completed without budget limiting;
-\item confirm the expected number of study draws and usable weak cells per epoch;
-\item verify that no gold studies entered the gradient or early stopping;
-\item inspect the routing audit and metadata-repair records;
-\item run the predeclared TTA policy without target-specific adjustment;
-\item compute the macro AUC and target-wise AUCs on aligned gold studies;
-\item report study-level bootstrap uncertainty;
-\item use paired bootstrap for direct candidate comparisons;
-\item do not select target-specific post-hoc winners;
-\item do not optimize ensemble weights on the same 58 studies;
-\item label all current 58-study scores as development/model-selection estimates;
-\item separate any future leaderboard score from the development table.
-\end{enumerate}
+\section{Recommended reporting checklist}
+Before interpreting a future result, verify that: the intended checkpoint completed its frozen training contract; the supervision and routing audits match the declared experiment; all twelve gold AUCs are defined; bootstrap replicates are reported; paired comparisons use aligned StudyInstanceUIDs; no target-specific model or blend weights were selected from the same gold outcomes; and any leaderboard result is clearly separated from development performance.
 
 \begin{thebibliography}{00}
-
 \bibitem{bien2018mrnet}
 N. Bien, P. Rajpurkar, R.L. Ball, J. Irvin, A. Park, E. Jones, M. Bereket, B.N. Patel, K.W. Yeom, K. Shpanskaya, F.G. Halabi, E.J. Zucker, A.M. Fanton, H. Amanatullah, C.F. Beaulieu, G.M. Riley, R.J. Stewart, L. Blankenberg, D. Larson, R.H. Jones, C.P. Langlotz, A.Y. Ng, M.P. Lungren,
 Deep-learning-assisted diagnosis for knee magnetic resonance imaging: Development and retrospective validation of MRNet,
@@ -731,12 +464,6 @@ Advances in Neural Information Processing Systems 30 (2017).
 A. Paszke, S. Gross, F. Massa, A. Lerer, J. Bradbury, G. Chanan, T. Killeen, Z. Lin, N. Gimelshein, L. Antiga, et al.,
 PyTorch: An imperative style, high-performance deep learning library,
 Advances in Neural Information Processing Systems 32 (2019).
-
-\bibitem{chen2020simclr}
-T. Chen, S. Kornblith, M. Norouzi, G. Hinton,
-A simple framework for contrastive learning of visual representations,
-Proceedings of the 37th International Conference on Machine Learning (2020) 1597--1607.
-
 \end{thebibliography}
 
 \end{document}
