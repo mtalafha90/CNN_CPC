@@ -1,7 +1,8 @@
-# B11.1 calibration-aware teacher pseudo-label audit.
-# This is a separately named follow-up after B11-v1 failed its label-free
-# viability gate because absolute teacher probabilities were strongly
-# target-dependent. No gold labels are used to derive quantile thresholds.
+# B11.1 calibration-aware quantile teacher student.
+# B11-v1 failed its label-free viability gate because absolute teacher
+# probabilities were strongly target-dependent. B11.1 uses frozen per-target
+# 5/95% teacher tails and passed its label-free viability audit before this
+# student training implementation was enabled.
 
 data_root: /data/rsna-knee-abnormality-detection
 train_csv: train.csv
@@ -17,6 +18,9 @@ precision: auto
 runtime_budget_hours: 8.5
 runtime_reserve_minutes: 10
 
+b11_1_experiment_name: B11.1_quantile_teacher_student
+
+# Loader/runtime: unchanged B7.1.
 num_workers: null
 persistent_workers: true
 prefetch_factor: 2
@@ -25,13 +29,47 @@ series_cache_mb_per_worker: 256
 strict_dicom: false
 strict_dicom_inference: true
 
-# Teacher/evaluation image contract: B7.1.
+# Student model: unchanged B7.1 architecture.
 b7_n_slices: 16
 b7_image_size: 224
 b7_triplet_gap: 1
-b7_eval_batch_size: 2
+b7_batch_size: 2
+b7_encoder_batch_size: 24
+b7_gradient_checkpointing: true
+b7_dropout: 0.25
+b7_transformer_layers: 2
+b7_transformer_heads: 8
+b7_transformer_ff_mult: 2.0
+b7_pathology_layers: 1
 
-# Frozen B11.1 label-free tail policy.
+# Student optimization: unchanged B7.1 hyperparameters. Full-coverage batches
+# are derived from the frozen viable pseudo pool (3454 studies -> 1727 batches).
+b7_epochs: 4
+b7_encoder_lr: 0.00001
+b7_head_lr: 0.0001
+b7_min_lr: 0.000001
+b7_weight_decay: 0.0001
+b7_grad_clip: 1.0
+
+# Frozen B6 policy.
+b7_min_confidence: 0.75
+b7_positive_target: 0.85
+b7_negative_target: 0.05
+b7_positive_weight: 0.50
+b7_negative_weight: 1.00
+
+# MRI augmentation: unchanged B7.1.
+b7_noise_std: 0.02
+b7_slice_dropout: 0.08
+b7_train_gap_choices: [1, 2]
+b7_center_jitter: 2
+b7_rotation_deg: 5.0
+b7_translate_frac: 0.03
+b7_scale_jitter: 0.05
+b7_gamma_jitter: 0.12
+b7_bias_field_strength: 0.08
+
+# Frozen B11.1 label-free teacher-tail policy.
 b11_1_teacher_tta_offsets: [-1, 0, 1]
 b11_1_low_quantile: 0.05
 b11_1_high_quantile: 0.95
@@ -43,3 +81,8 @@ b11_1_pseudo_mass_cap_fraction: 0.15
 b11_1_min_total_pseudo_cells: 2500
 b11_1_min_pseudo_cells_per_target: 100
 b11_1_min_cells_per_tail: 50
+
+# Frozen gold evaluation.
+b7_eval_tta_offsets: [-1, 0, 1]
+b7_eval_batch_size: 2
+b7_n_bootstrap: 5000
