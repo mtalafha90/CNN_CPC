@@ -1,6 +1,6 @@
 # B8 — pathology-aware spatial anatomy learning
 
-> **Status — 2026-08-10:** **IMPLEMENTED / REAL TRAINING PENDING.** The B8-v1 recipe is frozen before its first 58-study gold development evaluation.
+> **Status — 2026-08-10:** **IMPLEMENTED / REAL-DATA TRAINING IN PROGRESS.** The B8-v1 recipe was frozen before training and before its first 58-study gold development evaluation. No B8 gold score has been recorded yet.
 
 ## Motivation
 
@@ -70,7 +70,7 @@ These priors are based on general knee MRI anatomy and sequence sensitivity, not
 
 ### Why no fixed in-plane quadrant prior
 
-The current preprocessing does not certify a canonical left/right or anterior/posterior pixel orientation across every selected series. Therefore B8 does **not** hard-code a quadrant as "medial", "lateral", "anterior", or "posterior". The fixed prior is uniform across the four in-plane regions, while the region embeddings and pathology queries learn spatial preferences from weak supervision.
+The current preprocessing does not certify a canonical left/right or anterior/posterior pixel orientation across every selected series. Therefore B8 does **not** hard-code a quadrant as medial, lateral, anterior or posterior. The fixed prior is uniform across the four in-plane regions, while the region embeddings and pathology queries learn spatial preferences from weak supervision.
 
 This avoids injecting a potentially wrong orientation assumption while still preserving spatial information that B7.1 discarded.
 
@@ -159,6 +159,21 @@ slice prior floor            0.80
 
 No gold labels are used for training loss or early stopping.
 
+## Package / entry points
+
+Current package:
+
+```text
+0.13.0
+```
+
+Entry points:
+
+```text
+rsna-knee-b8
+rsna-knee-b8-eval
+```
+
 ## Install and test
 
 ```bash
@@ -167,11 +182,13 @@ git pull
 python -m pip install -e .
 
 pytest -q \
+  tests/test_b6_report_labels.py \
+  tests/test_b6_gold_audit.py \
   tests/test_b7_weak_supervision.py \
   tests/test_b8_anatomy_spatial.py
 ```
 
-## Train B8-v1
+## Train B8-v1 — active run
 
 ```bash
 rsna-knee-b8 \
@@ -194,16 +211,32 @@ runs/b8_spatial_anatomy/
 
 The checkpoint is saved after every completed epoch.
 
-Before gold evaluation, inspect:
+**Current state:** the real-data training command is running. Documentation must not infer a final epoch count, final loss or B8 AUC until those artifacts are produced.
+
+## Before gold evaluation
+
+When training finishes, inspect:
 
 ```bash
 cat runs/b8_spatial_anatomy/history.json
 cat runs/b8_spatial_anatomy/supervision_plan.json
 ```
 
+For each complete full epoch, the expected supervision counts are:
+
+```text
+batches                    1560
+study draws                3120
+active supervision cells  14123
+positive cells             6871
+negative cells             7252
+```
+
+Check that losses are finite, the training pool did not change, and no epoch was unexpectedly budget-limited.
+
 ## Gold development evaluation
 
-Only after the frozen B8-v1 training run is complete:
+Only after the frozen B8-v1 training run is complete and its artifacts are inspected:
 
 ```bash
 rsna-knee-b8-eval \
@@ -215,8 +248,16 @@ rsna-knee-b8-eval \
 
 Use a runtime-only workers=0 copy of the config if DataLoader worker teardown is noisy; this does not alter the scientific model.
 
+Primary benchmark:
+
+```text
+B7.1 macro AUC = 0.5644802945
+```
+
+Primary statistical test: paired B7.1 -> B8 study-level bootstrap with 5,000 replicates.
+
 ## Decision rule
 
-B8-v1 is evaluated once under this frozen rule. Do not search spatial grid sizes, anatomy-prior strengths, target-specific priors, epochs, or blend weights on the 58-study development labels and still call the result B8-v1.
+B8-v1 is evaluated once under this frozen rule. Do not search spatial grid sizes, anatomy-prior strengths, target-specific priors, epochs or blend weights on the 58-study development labels and still call the result B8-v1.
 
-The primary paired comparison is B7.1 -> B8. Because B8 was designed after prior development results on the same 58 studies, its gold score is a further **development estimate**, not independent validation.
+Because B8 was designed after prior development results on the same 58 studies, its gold score will be a further **development estimate**, not independent validation.
