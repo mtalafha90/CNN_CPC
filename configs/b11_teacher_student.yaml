@@ -1,0 +1,87 @@
+# B11 teacher-student completion.
+# Single scientific change versus B7.1: conservative frozen B7.1-teacher
+# supervision is added ONLY to B6-unsupervised target cells.  Student
+# initialization, routing, legacy resizing, model, optimizer, augmentations,
+# four-epoch schedule, TTA and bootstrap remain B7.1-equivalent.
+
+data_root: /data/rsna-knee-abnormality-detection
+train_csv: train.csv
+train_series_csv: train_series.csv
+
+seed: 2026
+competition_mode: true
+requested_gpus: 1
+allow_external_pretrained: false
+pretrained: false
+device: auto
+precision: auto
+runtime_budget_hours: 8.5
+runtime_reserve_minutes: 10
+
+b11_experiment_name: B11_teacher_student_completion
+
+# Loader/runtime.
+num_workers: null
+persistent_workers: true
+prefetch_factor: 2
+multiprocessing_context: spawn
+series_cache_mb_per_worker: 256
+strict_dicom: false
+strict_dicom_inference: true
+
+# Student model: unchanged B7.1 architecture.
+b7_n_slices: 16
+b7_image_size: 224
+b7_triplet_gap: 1
+b7_batch_size: 2
+b7_encoder_batch_size: 24
+b7_gradient_checkpointing: true
+b7_dropout: 0.25
+b7_transformer_layers: 2
+b7_transformer_heads: 8
+b7_transformer_ff_mult: 2.0
+b7_pathology_layers: 1
+
+# Student optimization: unchanged B7.1 hyperparameters.  B11 covers the full
+# combined-supervision pool once per epoch, so the number of batches is derived
+# from the label-free pseudo audit rather than hard-coded at 1560.
+b7_epochs: 4
+b7_max_batches_per_epoch: 1560
+b7_encoder_lr: 0.00001
+b7_head_lr: 0.0001
+b7_min_lr: 0.000001
+b7_weight_decay: 0.0001
+b7_grad_clip: 1.0
+
+# Frozen B6 policy.
+b7_min_confidence: 0.75
+b7_positive_target: 0.85
+b7_negative_target: 0.05
+b7_positive_weight: 0.50
+b7_negative_weight: 1.00
+
+# MRI augmentation: unchanged B7.1.
+b7_noise_std: 0.02
+b7_slice_dropout: 0.08
+b7_train_gap_choices: [1, 2]
+b7_center_jitter: 2
+b7_rotation_deg: 5.0
+b7_translate_frac: 0.03
+b7_scale_jitter: 0.05
+b7_gamma_jitter: 0.12
+b7_bias_field_strength: 0.08
+
+# Frozen B11-v1 teacher pseudo-label policy.
+b11_teacher_tta_offsets: [-1, 0, 1]
+b11_positive_threshold: 0.90
+b11_negative_threshold: 0.10
+b11_max_tta_range: 0.05
+b11_pseudo_base_weight: 0.20
+b11_pseudo_mass_cap_fraction: 0.25
+b11_min_total_pseudo_cells: 500
+b11_min_pseudo_cells_per_target: 25
+
+# Frozen gold evaluation.
+b7_eval_tta_offsets: [-1, 0, 1]
+b7_eval_batch_size: 2
+b7_n_bootstrap: 5000
