@@ -14,6 +14,7 @@ This file is the canonical repository summary for measured experiment status. Th
 - Paired B7-v1 -> B7.1 bootstrap: median difference `+0.0241102714`, 95% CI `[-0.0140197876, +0.0660558004]`, `P(B7.1 > B7-v1)=0.8694`.
 - Paired B5 -> B7.1 bootstrap: median difference `+0.0399233552`, 95% CI `[-0.0301354430, +0.1092349994]`, `P(B7.1 > B5)=0.8716`.
 - Both paired intervals still cross zero; superiority is therefore not statistically conclusive on only 58 studies.
+- The predeclared fixed B5+B7.1 50:50 rank ensemble scored `0.5540141184`, below B7.1. Its paired median difference versus B7.1 was `-0.0105429030`, with `P(ensemble > B7.1)=0.3054`; the ensemble is rejected and no blend-weight search will follow.
 - B7.1 is retained as the current main standalone model. No target-specific post-hoc tuning or ensemble-weight search is allowed on the same 58 labels.
 
 ## Completed experiments
@@ -36,6 +37,7 @@ This file is the canonical repository summary for measured experiment status. Th
 | B6 | multilingual structured report labels | n/a | completed; frozen weak-label source |
 | B7-v1 | B5-init pathology-query MRI model + frozen B6 weak labels, 500 batches/epoch | `0.5397724412` | retained ablation |
 | **B7.1** | **same B7 recipe with full 3,120-study coverage each epoch** | **`0.5644802945`** | **best standalone development point estimate** |
+| B5+B7.1 rank | fixed global 50:50 rank ensemble | `0.5540141184` | rejected versus B7.1; no weight search |
 
 ## B6 weak supervision
 
@@ -149,11 +151,26 @@ median difference +0.0399233552
 P(B7.1 > B5)      0.8716
 ```
 
+### B7.1 versus fixed B5+B7.1 rank ensemble
+
+The fixed ensemble was documented before evaluation and used one global 50:50 percentile-rank rule across all 12 targets.
+
+```text
+B7.1 macro AUC             0.5644802945
+fixed rank ensemble AUC    0.5540141184
+median(ensemble - B7.1)   -0.0105429030
+95% paired CI             [-0.0523218181, +0.0333886570]
+P(ensemble > B7.1)         0.3054
+```
+
+Decision: reject the ensemble as the campaign leader. Do not search alternative blend weights, target-specific blends, raw probability averages, or calibration transforms from this result.
+
 ## Decision policy from here
 
 1. Keep B7.1 as the main standalone development model.
 2. Do not tune B6 parser rules, target-specific weak-label weights, target-specific model winners, or ensemble weights from the 58 gold labels.
-3. A fixed global 50:50 rank ensemble of materially different retained models may be tested if it is documented before evaluation; no weight search is allowed.
+3. The fixed B5+B7.1 ensemble question is closed after the predeclared 50:50 rank blend underperformed B7.1.
 4. New trained variants must be explicitly named and interpreted as additional development on the same 58-study set.
-5. Report paired bootstrap uncertainty with every comparison.
-6. Actual competition leaderboard performance remains unknown until a real submission is made.
+5. Prefer substantive model/data improvements over additional blending or post-hoc gold tuning.
+6. Report paired bootstrap uncertainty with every comparison.
+7. Actual competition leaderboard performance remains unknown until a real submission has been made.
