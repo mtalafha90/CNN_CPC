@@ -1,6 +1,6 @@
 # B6 — structured multilingual report labels
 
-> **Status — 2026-08-10:** **COMPLETE / FROZEN at v1.2.1.** B6 now serves as the weak-label source for B7. No additional parser or confidence-threshold tuning should be performed using the 58 gold studies.
+> **Status — 2026-08-10:** **COMPLETE / FROZEN at v1.2.1.** B6 is the frozen weak-label source for B7-v1, B7.1, and the currently training B8 experiment. No additional parser or confidence-threshold tuning should be performed using the 58 gold studies.
 
 ## Goal
 
@@ -104,15 +104,15 @@ balanced accuracy  = 0.790425
 coverage           = 0.360632
 ```
 
-The main scientific conclusion is asymmetric: **B6 explicit negatives are much more reliable than B6 explicit positives.** This motivates the fixed B7-v1 weak-supervision policy:
+The main scientific conclusion is asymmetric: **B6 explicit negatives are much more reliable than B6 explicit positives.** This motivates the fixed global weak-supervision policy used by B7-v1, B7.1, and B8:
 
 ```text
-B6 positive -> B7 target 0.85, weight 0.50
-B6 negated  -> B7 target 0.05, weight 1.00
+B6 positive -> target 0.85, weight 0.50
+B6 negated  -> target 0.05, weight 1.00
 uncertain/unmentioned -> ignored
 ```
 
-The global B7 policy was chosen after inspecting the B6 gold audit, so subsequent B7 gold performance is development performance rather than pristine independent validation.
+Because the global policy was chosen after inspecting the B6 gold audit, subsequent B7/B7.1/B8 performance on the same 58 studies is development performance rather than pristine independent validation.
 
 ## Frozen artifacts
 
@@ -129,8 +129,20 @@ runs/b6_report_labels_v121/
     └── gold_mismatches.csv
 ```
 
+## Downstream experiment record
+
+The frozen B6 export has now supported:
+
+```text
+B7-v1  macro AUC = 0.5397724412
+B7.1   macro AUC = 0.5644802945  [current leader]
+B8     pending                     [training in progress]
+```
+
+B7.1 improved the point estimate after increasing weak-training coverage from about 1.28 nominal corpus passes to four full passes. B8 keeps this same B6 supervision and full coverage while changing only the MRI spatial representation/attention path.
+
 ## Final decision
 
-**B6 = PASS as asymmetric weak supervision.**
+**B6 = PASS as asymmetric weak supervision and is frozen.**
 
-Do not create another B6 parser revision based on the existing gold audit. The next experiment is B7, documented in `docs/B7_WEAK_SUPERVISION.md`.
+Do not create another B6 parser revision based on the existing gold audit or later B7/B8 target-level results. Current downstream status is documented in `docs/B7_WEAK_SUPERVISION.md`, `docs/B7_1_FULL_COVERAGE.md`, `docs/B8_SPATIAL_ANATOMY.md`, and `docs/EXPERIMENT_STATUS.md`.
