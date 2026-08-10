@@ -13,10 +13,11 @@ This file is the canonical repository summary for measured experiment status. Th
 - B7.1 improves the point estimate over B7-v1 (`0.5397724412`) by `+0.0247078534` and over B5 (`0.5243650851`) by `+0.0401152095`.
 - Paired B7-v1 -> B7.1 bootstrap: median difference `+0.0241102714`, 95% CI `[-0.0140197876, +0.0660558004]`, `P(B7.1 > B7-v1)=0.8694`.
 - Paired B5 -> B7.1 bootstrap: median difference `+0.0399233552`, 95% CI `[-0.0301354430, +0.1092349994]`, `P(B7.1 > B5)=0.8716`.
-- Both paired intervals still cross zero; superiority is therefore not statistically conclusive on only 58 studies.
 - The predeclared fixed B5+B7.1 50:50 rank ensemble scored `0.5540141184`, below B7.1, and is rejected with no blend-weight search.
-- **B8 spatial-anatomy training is now complete.** Four full epochs covered all 3,120 active weakly labelled studies and all 14,123 usable weak-label cells per epoch, with no budget limiting and monotonic weak-training loss `0.6707552306 -> 0.5997290100`.
-- **No B8 gold-development score has been recorded yet.** B7.1 remains the current leader until the predeclared one-shot B8 evaluation is completed.
+- **B8 spatial-anatomy learning completed but underperformed B7.1:** macro AUC `0.5300962807`, 95% CI `[0.4723014866, 0.5867732651]`.
+- Paired B7.1 -> B8 bootstrap: median difference `-0.0335501423`, 95% CI `[-0.0900453633, +0.0223997827]`, `P(B8 > B7.1)=0.1156`. The interval crosses zero, but the point estimate and paired direction favor B7.1 strongly.
+- B8 improved only 3/12 target point estimates and declined on 9/12. These differences are descriptive only and are not used for target-specific model selection.
+- **Decision:** reject B8-v1 as a replacement; retain B7.1 as the current main standalone development model. The B8 spatial-prior branch is closed to post-hoc tuning on these 58 labels.
 
 ## Completed measured experiments
 
@@ -39,12 +40,7 @@ This file is the canonical repository summary for measured experiment status. Th
 | B7-v1 | B5-init pathology-query MRI model + frozen B6 weak labels, 500 batches/epoch | `0.5397724412` | retained coverage ablation |
 | **B7.1** | **same B7 recipe with full 3,120-study coverage each epoch** | **`0.5644802945`** | **best standalone development point estimate** |
 | B5+B7.1 rank | fixed global 50:50 rank ensemble | `0.5540141184` | rejected versus B7.1; no weight search |
-
-## Trained experiment awaiting first gold evaluation
-
-| ID | Method | Status |
-|---|---|---|
-| **B8** | **B7.1-init 2x2 within-slice spatial tokens + fixed soft pathology stream/slice priors; same B6/full-coverage training** | **training complete; artifacts inspected; one-shot gold evaluation pending** |
+| B8 | B7.1-init 2x2 within-slice spatial tokens + fixed soft pathology stream/slice priors | `0.5300962807` | rejected versus B7.1; spatial-prior branch closed |
 
 ## B6 weak supervision
 
@@ -122,41 +118,62 @@ Contusion         0.5398110661
 Fracture          0.5916666667
 ```
 
-## B8 spatial anatomy — completed training
+## B8 spatial anatomy — completed / rejected
 
-B8 initializes from the completed B7.1 checkpoint and changes the MRI memory before pathology-query cross-attention:
+B8 initialized from B7.1 and increased MRI memory from 96 to 384 tokens by retaining a `2x2` ConvNeXt spatial grid for each sampled slice. It added fixed gentle pathology-specific stream/slice attention priors while leaving the frozen B6 supervision, full 3,120-study coverage and four-epoch optimization recipe unchanged.
 
-```text
-B7.1: 6 streams x 16 slices x 1 globally pooled token = 96 MRI tokens
-B8:   6 streams x 16 slices x 4 spatial regions       = 384 MRI tokens
-```
-
-The fixed anatomy prior is soft. Preferred streams have prior `1.0`, nonpreferred streams `0.75`; focal targets have a broad center-slice prior with floor `0.80`, while diffuse/fluid findings are slice-neutral. The four in-plane regions have no hard-coded anatomical direction because the current preprocessing does not certify canonical within-slice orientation.
-
-B8 keeps the same frozen B6 v1.2.1 weak labels, target balancing, 3,120-study full coverage, four epochs, learning-rate schedule, augmentations, and zero gold-gradient/early-stopping use.
-
-Completed training:
-
-| Epoch | Loss | Batches | Study draws | Active cells | Positive | Negative | Seconds |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | `0.6707552306` | 1560 | 3120 | 14123 | 6871 | 7252 | 2239.67 |
-| 2 | `0.6445401128` | 1560 | 3120 | 14123 | 6871 | 7252 | 3071.56 |
-| 3 | `0.6186956850` | 1560 | 3120 | 14123 | 6871 | 7252 | 3256.41 |
-| 4 | `0.5997290100` | 1560 | 3120 | 14123 | 6871 | 7252 | 2724.49 |
+Training completed cleanly:
 
 ```text
-completed epochs       4
-batches              6240
-study draws         12480
-nominal corpus passes 4.0
-training seconds     11292.13
-budget limited       false
-checkpoint           runs/b8_spatial_anatomy/b8_model.pt
-gold evaluation      pending
-benchmark to beat    B7.1 = 0.5644802945
+epoch 1 loss 0.6707552306
+epoch 2 loss 0.6445401128
+epoch 3 loss 0.6186956850
+epoch 4 loss 0.5997290100
+batches/epoch 1560
+studies/epoch 3120
+usable cells/epoch 14123
+budget limited false
 ```
 
-Training optimization was stable and monotonic. The lower weak-training loss is not by itself evidence of improved gold AUC.
+Gold development result:
+
+```text
+macro AUC = 0.5300962807
+95% CI   = [0.4723014866, 0.5867732651]
+```
+
+Per-target AUC:
+
+```text
+ACL               0.4767156863
+MCL               0.4739229025
+Medial Meniscus   0.6045673077
+Lateral Meniscus  0.5801242236
+Medial OA         0.5317829457
+Lateral OA        0.4100580271
+PF OA             0.5135135135
+Effusion          0.5788819876
+Synovitis         0.5818399044
+Baker's           0.5181159420
+Contusion         0.5249662618
+Fracture          0.5666666667
+```
+
+Relative to B7.1, B8 improved only MCL, Medial Meniscus and Medial OA point estimates; the other nine targets declined. This is descriptive only and must not be used to create a target-specific B7.1/B8 hybrid.
+
+Paired B7.1 -> B8:
+
+```text
+B7.1 macro AUC       0.5644802945
+B8 macro AUC         0.5300962807
+point difference     -0.0343840138
+median difference    -0.0335501423
+95% paired CI        [-0.0900453633, +0.0223997827]
+P(B8 > B7.1)         0.1156
+P(B7.1 > B8)         0.8844
+```
+
+Decision: reject B8 as a replacement for B7.1. Do not tune spatial-grid size, anatomy-prior strength, target-specific priors, epoch count, target-specific winners or blend weights from this result.
 
 ## Key paired comparisons
 
@@ -187,7 +204,7 @@ B5 macro AUC      0.5243650851
 B7.1 macro AUC    0.5644802945
 median difference +0.0399233552
 95% paired CI    [-0.0301354430, +0.1092349994]
-P(B7.1 > B5)      = 0.8716
+P(B7.1 > B5)      0.8716
 ```
 
 ### B7.1 versus fixed B5+B7.1 rank ensemble
@@ -200,15 +217,23 @@ median(ensemble - B7.1)   -0.0105429030
 P(ensemble > B7.1)         0.3054
 ```
 
-The fixed ensemble is rejected; no alternative blend-weight search follows.
+### B7.1 versus B8
+
+```text
+B7.1 macro AUC       0.5644802945
+B8 macro AUC         0.5300962807
+median(B8 - B7.1)   -0.0335501423
+95% paired CI       [-0.0900453633, +0.0223997827]
+P(B8 > B7.1)         0.1156
+```
 
 ## Decision policy from here
 
-1. Keep B7.1 as the current main standalone development model until B8 completes its frozen evaluation.
-2. Run the first B8 gold evaluation exactly once with the completed `runs/b8_spatial_anatomy/b8_model.pt` checkpoint.
-3. The primary B8 comparison is paired B7.1 -> B8 with 5,000 study-level bootstrap replicates.
-4. Do not tune B8 spatial grid, target-specific priors, prior strength, epochs or blend weights from the 58 gold labels and still call it B8-v1.
-5. Do not tune B6 parser rules, target-specific weak-label weights, target-specific model winners, or ensemble weights from the 58 gold labels.
-6. New trained variants must be explicitly named and interpreted as additional development on the same 58-study set.
-7. Prefer substantive model/data improvements over post-hoc gold tuning.
+1. Keep B7.1 as the main standalone development model.
+2. Close the B8 spatial-prior branch; do not retune it from target-level gold outcomes.
+3. Do not tune B6 parser rules, target-specific weak-label weights, target-specific model winners, or ensemble weights from the 58 gold labels.
+4. The fixed B5+B7.1 ensemble question is closed.
+5. New trained variants must be explicitly named and interpreted as additional development on the same 58-study set.
+6. Prefer substantive supervision/representation improvements that preserve the successful B7.1 global-token architecture over further post-hoc spatial-prior tuning.
+7. Report paired bootstrap uncertainty with every comparison.
 8. Actual competition leaderboard performance remains unknown until a real submission has been made.
