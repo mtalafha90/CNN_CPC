@@ -1,12 +1,10 @@
 # Dataset and DICOM handling
 
-> **Snapshot: 2026-08-10.** Data/audit facts below are verified on the downloaded competition release. Experiment scores live in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). B6 v1.2.1 is the frozen structured weak-label source; B7.1 is the current development leader; B8 spatial-anatomy training is in progress.
+> **Snapshot: 2026-08-10.** Data/audit facts below are verified on the downloaded competition release. B7.1 is the current development leader; B8 is rejected; B9 strict semantic routing is the active predeclared experiment. Scores live in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
 
 ## CSV contract
 
-`train.csv` contains `StudyInstanceUID`, `Report`, and the 12 targets. `test.csv` contains study UIDs and does not provide the report supervision used during training.
-
-Series metadata contain:
+`train.csv` contains `StudyInstanceUID`, `Report`, and 12 targets. `test.csv` contains study UIDs. Series metadata contain:
 
 - `StudyInstanceUID`;
 - `SeriesInstanceUID`;
@@ -24,30 +22,13 @@ fully gold-labelled       58
 report-only studies    4,349
 reports present        4,407
 training series rows  24,371
+local test studies          3
+local test series          15
 ```
 
-All 58 gold studies have all 12 official target cells populated. There are no partially gold-labelled rows in the current download.
+All 58 gold studies have all 12 official target cells populated.
 
-The local test metadata currently contains 3 studies and 15 series rows.
-
-## Gold class counts
-
-| Target | Positive | Negative |
-|---|---:|---:|
-| ACL | 24 | 34 |
-| MCL | 9 | 49 |
-| Medial Meniscus | 26 | 32 |
-| Lateral Meniscus | 23 | 35 |
-| Medial OA | 15 | 43 |
-| Lateral OA | 11 | 47 |
-| PF OA | 21 | 37 |
-| Effusion | 35 | 23 |
-| Synovitis | 27 | 31 |
-| Baker's | 12 | 46 |
-| Contusion | 19 | 39 |
-| Fracture | 18 | 40 |
-
-## Six-stream routing
+## Six-stream semantic contract
 
 ```text
 sagittal_fluid       sagittal_structural
@@ -55,30 +36,100 @@ coronal_fluid        coronal_structural
 axial_fluid          axial_structural
 ```
 
-Observed coverage:
+In the released metadata, `Fluid_Sensitive` and `Fat_Suppression` are perfectly coupled. Populated CSV metadata are authoritative; DICOM-derived metadata are fallback only.
 
-| Stream | Selected | Missing | Coverage |
+## Historical routing coverage
+
+The historical `mode="dual"` selector selected:
+
+| Stream | Selected | Missing |
+|---|---:|---:|
+| sagittal_fluid | 4,401 | 6 |
+| sagittal_structural | 4,294 | 113 |
+| coronal_fluid | 4,250 | 157 |
+| coronal_structural | 3,440 | 967 |
+| axial_fluid | 4,407 | 0 |
+| axial_structural | 1,094 | 3,313 |
+| **Total** | **21,886** | — |
+
+Those 21,886 streams were all successfully audited for DICOM decoding; two selected series each contained one unreadable instance, but no selected series was lost.
+
+## B9 routing audit: semantic mismatch in the historical selector
+
+The historical selector tries to populate both fluid and structural slots when a plane has multiple series. If a study has multiple acquisitions from only one contrast class, one series can be placed in the opposite semantic slot.
+
+Full 4,407-study metadata audit:
+
+| Stream | Historical selected | Strict selected | Historical wrong-slot assignments removed |
 |---|---:|---:|---:|
-| sagittal_fluid | 4,401 | 6 | 99.86% |
-| sagittal_structural | 4,294 | 113 | 97.44% |
-| coronal_fluid | 4,250 | 157 | 96.44% |
-| coronal_structural | 3,440 | 967 | 78.06% |
-| axial_fluid | 4,407 | 0 | 100.00% |
-| axial_structural | 1,094 | 3,313 | 24.82% |
+| sagittal_fluid | 4,401 | 4,150 | 251 |
+| sagittal_structural | 4,294 | 4,266 | 28 |
+| coronal_fluid | 4,250 | 4,248 | 2 |
+| coronal_structural | 3,440 | 3,406 | 34 |
+| axial_fluid | 4,407 | 4,407 | 0 |
+| axial_structural | 1,094 | 857 | 237 |
+| **Total** | **21,886** | **21,334** | **552** |
 
-Missing streams are normal and represented by explicit presence masks. They are never synthesized.
+Therefore:
 
-In this release `Fluid_Sensitive` and `Fat_Suppression` are perfectly coupled in the metadata table, although the implementation keeps them separate for robustness.
+```text
+historical semantic mismatches  552
+historical selected streams   21886
+wrong-slot fraction            2.52%
+strict semantic mismatches         0
+strict selected streams       21334
+```
+
+Because removing a false assignment can also change which valid same-class series occupies the remaining slot, 805 stream assignments differ between the historical and strict indexes in total.
+
+## Local test metadata routing audit
+
+The provided three-study test surface contains one analogous wrong-slot assignment:
+
+```text
+historical selected streams 14
+strict selected streams     13
+historical mismatches         1
+strict mismatches             0
+```
+
+One study has two sagittal structural series and no sagittal fluid series. Historical routing fabricates `sagittal_fluid`; B9 leaves it missing.
+
+This test audit uses no labels and is not scientific validation.
+
+## B9 strict routing rule
+
+```text
+*_fluid:
+    candidates = Fluid_Sensitive == True only
+
+*_structural:
+    candidates = Fluid_Sensitive == False only
+
+if no candidate exists:
+    slot = None
+    presence mask = False
+```
+
+Unknown contrast after metadata repair is not promoted into either slot.
+
+The historical selector remains unchanged for B7.1 reproducibility; B9 uses `src/rsna_knee/strict_routing.py`.
 
 ## Metadata repair
 
-Missing plane/sequence metadata can be backfilled from DICOM headers using orientation, timing/weighting and acquisition cues. Populated CSV fields remain authoritative.
+Missing plane/sequence metadata can be backfilled from DICOM headers. The current production-selected surface required no repair. CSV values remain authoritative when present.
 
-The verified selected-series audit required no metadata repair for the production-selected surface.
+DICOM fallback uses:
+
+- plane from `ImageOrientationPatient`;
+- weighting from TE/TR/inversion time;
+- fat suppression cues from acquisition tags.
+
+The uploaded train/test DICOM examples confirm that scanner vendor, matrix size, pixel spacing and sequence timings vary across acquisitions. The current pipeline handles these through DICOM decoding, percentile intensity normalization and resizing; B9 does not change physical-scale preprocessing.
 
 ## DICOM decoding
 
-The reader supports common DICOM naming and enhanced/multi-frame arrays. Processing includes:
+The reader supports single-frame and enhanced/multi-frame arrays and performs:
 
 1. physical slice ordering from orientation/position;
 2. `InstanceNumber` fallback;
@@ -88,112 +139,37 @@ The reader supports common DICOM naming and enhanced/multi-frame arrays. Process
 6. mixed-size center crop/pad;
 7. finite percentile clipping/normalization.
 
-Physical ordering uses the image-plane normal:
+Verified historical audit:
 
 ```text
-n = row_direction x column_direction
-z_i = ImagePositionPatient_i . n
+selected series checked  21,886
+selected series decoded  21,886
+candidate DICOM files   732,556
+failed DICOM files            2
+selected series failed        0
 ```
-
-## Verified train preflight
-
-```text
-studies sampled               24
-streams possible             144
-streams selected             121
-streams decoded              121
-candidate files            4,045
-file failures                  0
-missing stream rate       0.1597
-```
-
-## Verified complete local-test preflight
-
-```text
-studies sampled                3
-streams possible              18
-streams selected              14
-streams decoded               14
-candidate files              533
-file failures                  0
-missing stream rate       0.2222
-```
-
-## Verified full selected-series audit
-
-```text
-selected series checked             21,886
-selected series decoded             21,886
-selected series failed                   0
-series with partial file failures        2
-candidate DICOM files              732,556
-failed DICOM files                       2
-global file failure rate       2.7302e-06
-per-series failure limit               0.20
-global failure limit                   0.02
-```
-
-Two selected series each contain one unreadable file (35/36 and 37/38 frames decoded). Both remain valid and are retained.
 
 ## 2.5D representation
 
-Each active series is normalized and sampled into triplets:
+Each active series is normalized and sampled as distributed triplets:
 
 ```text
 [I_(c-gap), I_c, I_(c+gap)]
 ```
 
-Typical production settings:
-
-```yaml
-n_slices: 16
-image_size: 224
-triplet_gap: 1
-train_gap_choices: [1, 2]
-center_jitter: 2
-```
-
-Training may add mild affine, gamma, bias-field, Gaussian-noise and slice-dropout perturbations. Validation/inference are deterministic apart from predeclared TTA.
-
-## Strong SSL data scope
-
-The completed strong MRI SSL checkpoint uses only the 4,349 non-gold competition studies. The 58 gold studies are excluded from representation pretraining.
-
-Checkpoint:
+Production values:
 
 ```text
-runs/ssl_strong/ssl_encoder.pt
+n_slices       16
+image_size     224
+triplet_gap      1
+train gaps     [1,2]
+center jitter    2
 ```
 
-## B4/B5 frozen-feature data contract
+B9 keeps this representation unchanged from B7.1.
 
-B4/B5 extract deterministic features only after representation pretraining. The verified gold cache contract is:
-
-```text
-study_uids = (58,)
-features   = (58, 6, 2304)
-present    = (58, 6)
-finite     = true
-```
-
-Mean, standard deviation and maximum are pooled per stream. Presence flags are explicitly available to the classical classifier.
-
-B5 representation training uses the 4,349 report-only studies and excludes all 58 gold studies.
-
-## B6 structured report data contract
-
-Each report/target cell is represented as:
-
-```text
-positive
-negated
-uncertain
-unmentioned
-```
-
-Report silence is not a negative.
-
-Frozen B6 v1.2.1 report-only training export:
+## B6 weak-supervision data contract
 
 ```text
 report-only rows                  4349
@@ -206,39 +182,13 @@ confidence threshold              0.75
 gold rows in training_targets.csv    0
 ```
 
-Per-target usable counts:
+B6 is frozen. B9 changes no report parsing, labels, confidence thresholds or target weights.
 
-| Target | Positive | Negative | Usable |
-|---|---:|---:|---:|
-| ACL | 572 | 1,089 | 1,661 |
-| MCL | 271 | 1,089 | 1,360 |
-| Medial Meniscus | 1,126 | 536 | 1,662 |
-| Lateral Meniscus | 448 | 1,182 | 1,630 |
-| Medial OA | 484 | 334 | 818 |
-| Lateral OA | 402 | 382 | 784 |
-| PF OA | 682 | 372 | 1,054 |
-| Effusion | 1,338 | 757 | 2,095 |
-| Synovitis | 399 | 17 | 416 |
-| Baker's | 557 | 476 | 1,033 |
-| Contusion | 389 | 466 | 855 |
-| Fracture | 203 | 552 | 755 |
+## B7.1/B9 training data contract
 
-B6 is frozen after its gold audit. Do not alter parser rules or confidence thresholds from later B7/B8 gold outcomes.
+B7.1 uses all 3,120 report-only studies with at least one usable B6 cell. Every training study has axial fluid imaging in the released metadata, so strict routing is not expected to remove all MRI streams from any active weak-training study.
 
-## B7/B7.1 training data contract
-
-B7/B7.1 use only the 3,120 report-only studies with at least one usable B6 cell. In the audited run:
-
-```text
-active studies before MRI filter  3120
-studies without selected MRI         0
-training studies                  3120
-training usable cells            14123
-```
-
-B7-v1 sampled only 1,000 study draws/epoch because of the 500-batch cap.
-
-B7.1 uses:
+B9 keeps:
 
 ```text
 batch size          2
@@ -247,36 +197,14 @@ study draws/epoch 3120
 epochs              4
 ```
 
-so every complete epoch covers the entire active weak-training pool once.
-
-B7.1 development result:
+The actual active-pool routing audit is written to:
 
 ```text
-macro AUC = 0.5644802945
+runs/b9_strict_routing/routing_audit.json
 ```
 
-## B8 spatial-token data contract
+and must report zero strict semantic mismatches before gold evaluation.
 
-B8 keeps exactly the same study/series/B6 supervision pool as B7.1. The data change is not a new cohort or new label source; it is the representation retained from each sampled MRI slice.
+## Validation role
 
-```text
-B7.1: 1 globally pooled ConvNeXt token/slice
-B8:   2x2 ConvNeXt spatial grid = 4 tokens/slice
-```
-
-For the standard six streams and 16 sampled slices:
-
-```text
-B7.1 memory tokens/study = 96
-B8 memory tokens/study   = 384
-```
-
-No extra MRI studies, external images, external labels or external language resources are introduced by B8.
-
-B8 real-data training is currently in progress. No B8 gold-development result is recorded in this data document.
-
-## Validation data roles
-
-The 58 gold studies have supported multiple controlled method decisions. They are excluded from B5 representation training and B6 weak-training export, and they do not enter B7/B7.1/B8 gradients or early stopping.
-
-However, the B6 audit and later model choices have used the same 58 studies for development decisions. Therefore current experiment tables should be interpreted as **model-selection cross-validation/development estimates**, not an untouched independent test set.
+The 58 gold studies do not enter B9 gradients or early stopping. However, the broader campaign has repeatedly used these studies for method decisions, so B9's eventual score is a development/model-selection estimate rather than untouched independent validation.
