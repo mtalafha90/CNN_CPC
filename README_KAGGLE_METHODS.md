@@ -1,18 +1,12 @@
 # RSNA Knee Abnormality Detection — Public Code Methodology Review
 
 **Repository:** `mtalafha90/CNN_CPC`  
-**Review/status snapshot:** 2026-08-09  
-**Purpose:** methodology context, not a leaderboard claim.
+**Review/status snapshot:** 2026-08-10  
+**Purpose:** methodology context and repository-measured development evidence, not a leaderboard claim.
 
-> Repository-measured experiment results are maintained in [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md). B5 is currently running and has no OOF score yet.
+> Canonical measured results are maintained in [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md). **B7.1 is the current best standalone development model at macro AUC `0.5644802945`; B8 spatial-anatomy learning is currently training and has no gold score yet.**
 
-## Scope
-
-This document summarizes public early-competition ideas that informed the design review and records what the `CNN_CPC` experiments actually supported or rejected.
-
-Public notebooks/repositories change during an active competition and self-reported scores are not treated as independently verified benchmarks.
-
-## 1. Dataset facts that dominate the methodology
+## 1. Problem structure
 
 ```text
 4,407 training studies
@@ -20,47 +14,37 @@ Public notebooks/repositories change during an active competition and self-repor
 4,349 report-only studies
 24,371 series rows
 12 study-level targets
-macro ROC AUC
+primary metric: macro ROC AUC
 ```
 
-This is fundamentally a weak/semi-supervised representation problem with an extremely small trusted evaluation set.
+This is fundamentally a **weak/semi-supervised multi-sequence MRI problem with an extremely small trusted development set**.
 
 ## 2. Public implementation families reviewed
 
-The review included, where available:
+The methodology review included public RSNA-knee repositories/notebooks and MRNet-style historical work. These are used for design context only; public self-reported scores are not treated as independently verified benchmarks.
 
-- `Chagatai404/knee-abnormality-ML`
-- `jiaweizhong/rsna-knee`
-- `andreluizpedroso/rsna-knee-abnormality-detection`
-- `chaitanyajamble/RSNA-Knee-Abnormality-Detection`
-- `dianisay/RSNA-Knee-Abnormality-Detection`
-- `soumic28/RSNA-knee-abnormality-predictin`
-- `JunhaoLiXD/RSNA_Knee_Abnormality_Detection`
-- `Msmile-shiny/CVproject_RSNA-knee-detection`
-- `Saianiruthm/rsna-knee-abnormality`
-- `tomyimkc/sophia-agi` RSNA knee work
-- `bollimunthasripavan-oss/RSNA-Knee-MRI-Abnormality-Detection`
-- MRNet-style historical knee MRI work.
+The repository's own decisions are based on controlled experiments recorded in [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md).
 
-These are methodology references, not certified winning solutions.
+## 3. Reports should supervise training, not be required at inference
 
-## 3. Reports should supervise representation/training, not be required at inference
+The hidden/test path is MRI-only. Reports are therefore used only during training.
 
-The test path is MRI-only. This remains a hard design constraint.
-
-The first supervised report-teacher benchmark used rules + word/character TF-IDF and achieved only:
+The first report-teacher attempt—rules plus TF-IDF—reached only:
 
 ```text
 macro OOF AUC = 0.49245
 ```
 
-It was rejected as a general 12-target teacher.
+and was rejected as a general 12-target MRI teacher.
 
-This changed the report strategy: B5 uses the 4,349 reports as **semantic representation targets** rather than trying to infer strong binary pseudo-labels from only 58 labelled reports.
+The report strategy then evolved in two directions:
+
+- **B5:** use reports as semantic representation targets for image-report alignment;
+- **B6/B7:** extract conservative pathology-specific report states and use them as direct weak MRI supervision.
 
 ## 4. Unmentioned is not negative
 
-`CNN_CPC` uses:
+B6 uses four states:
 
 ```text
 positive
@@ -69,27 +53,44 @@ uncertain
 unmentioned
 ```
 
-`unmentioned` receives zero direct report weight by default. Official finite labels override weak labels.
+`unmentioned` is never silently converted to a negative target. B7/B7.1/B8 ignore uncertain/unmentioned cells entirely.
 
-This remains important even though B5's main report path is now unsupervised semantic alignment rather than target-probability distillation.
+Frozen B6 v1.2.1 training export:
 
-## 5. Audit report supervision before trusting it
+```text
+report-only studies             4349
+active weakly labelled studies  3120
+usable cells                   14123
+positive cells                  6871
+negative cells                  7252
+```
 
-The original OA lexicon produced zero useful OA supervision. The real-data audit triggered a compartment-aware parser expansion without lowering confidence thresholds.
+## 5. Weak supervision must be audited before image training
 
-Verified states:
+The completed B6 gold audit covered 251 usable cells and showed asymmetric reliability:
 
-| Target | Positive | Negated | Unmentioned |
-|---|---:|---:|---:|
-| Medial OA | 492 | 339 | 3,576 |
-| Lateral OA | 409 | 387 | 3,611 |
-| PF OA | 695 | 379 | 3,333 |
+```text
+pooled positive precision  0.6905
+pooled sensitivity         0.9748
+pooled specificity         0.6061
+pooled NPV                 0.9639
+pooled balanced accuracy   0.7904
+```
 
-General lesson: weak-label coverage must be measured on the actual corpus before training.
+This motivated one global B7 supervision policy:
+
+| state | soft target | base weight |
+|---|---:|---:|
+| positive | 0.85 | 0.50 |
+| negated | 0.05 | 1.00 |
+| uncertain | ignored | 0.00 |
+| unmentioned | ignored | 0.00 |
+
+The parser and global policy are frozen after that audit. The same 58-study set therefore becomes a development/model-selection set for later experiments rather than pristine independent validation.
 
 ## 6. DICOM preprocessing is model infrastructure
 
-Implemented:
+Implemented and audited:
 
 - physical orientation/position ordering;
 - `InstanceNumber` fallback;
@@ -106,12 +107,12 @@ Verified:
 ```text
 21,886 / 21,886 selected series decoded
 732,554 / 732,556 files decoded
-0 selected series failed
+0 selected series lost
 ```
 
 ## 7. Multiple sequence roles matter
 
-The repository routes up to six semantic MRI streams:
+The model routes up to six semantic MRI streams:
 
 ```text
 sagittal fluid       sagittal structural
@@ -119,9 +120,9 @@ coronal fluid        coronal structural
 axial fluid          axial structural
 ```
 
-Missing roles are explicitly masked. This matters because `axial_structural` is absent in most studies.
+Missing roles are explicitly masked. This is important because some streams—especially axial structural—are absent in many studies.
 
-## 8. 2.5D remains the core image representation
+## 8. 2.5D remains the core input representation
 
 Distributed three-slice triplets:
 
@@ -129,13 +130,11 @@ Distributed three-slice triplets:
 [z-gap, z, z+gap]
 ```
 
-retain local through-plane information while allowing efficient ConvNeXt encoding.
+retain local through-plane information while keeping ConvNeXt inference practical.
 
-Strong SSL increases representation coverage by sampling multiple positions from active streams.
+## 9. Strong competition-only MRI SSL improved representation quality
 
-## 9. Strong competition-only MRI SSL helped the point estimate
-
-The strong SSL run used only the 4,349 non-gold MRI studies:
+The strong SSL run used only the 4,349 non-gold competition MRI studies:
 
 ```text
 8 epochs
@@ -145,160 +144,185 @@ The strong SSL run used only the 4,349 non-gold MRI studies:
 238,274 active 2.5D examples
 ```
 
-Controlled Stage-1 results:
+Controlled Stage-1 result:
 
 ```text
 B0 random initialization = 0.4762536432
 B1 strong SSL            = 0.5030284974
 ```
 
-Paired bootstrap gave `P(B1 > B0)=0.771`, encouraging but not decisive with only 58 gold studies.
+The paired bootstrap favored B1 (`P=0.771`) but was not decisive on 58 studies.
 
-## 10. Small optimizer/head changes did not solve the problem
-
-B2 reduced only the encoder learning rate:
+## 10. Small optimizer/head changes were not the main lever
 
 ```text
-B2 = 0.4993244663
+B2 lower encoder LR = 0.4993244663
+B3 pathology MIL    = 0.4944652486
 ```
 
-B3 replaced the global Transformer/pathology stack with lower-capacity target-specific MIL:
+Neither improved B1 globally. This discouraged repeated supervised-head redesign on only 58 labels.
+
+## 11. Frozen representation probes were informative
+
+B4 froze the strong SSL encoder and used mean/std/max stream features with target-wise PCA + balanced logistic regression:
 
 ```text
-B3 = 0.4944652486
+B4 macro AUC = 0.5137567459
 ```
 
-Neither improved pooled B1 performance.
+B4.1/B4.2/B4.3 attempts to stabilize the tiny-fold downstream selector all reduced pooled performance. That selector branch is closed.
 
-General lesson: once representation quality improves, repeatedly changing the supervised head on 58 labels can add variance rather than reliable signal.
+## 12. B5: image-report representation learning helped, but modestly
 
-## 11. Frozen representation probes are highly informative
+B5 aligned competition MRI with TF-IDF/SVD report semantics while excluding all 58 gold studies from representation training.
 
-B4 froze the strong SSL encoder and reduced each stream to mean/std/max slice embeddings, followed by target-specific PCA + balanced logistic regression.
+Frozen unchanged B4 probe result:
 
 ```text
-B4 = 0.5137567459
-95% CI = [0.4619827141, 0.5642366629]
+B5 macro AUC = 0.5243650851
+95% CI      = [0.4728108406, 0.5761619105]
 ```
 
-This is the best clean standalone point estimate so far.
-
-Because the supervised probe is low-capacity, B4 is useful evidence that the strong SSL encoder itself contains pathology-separable information.
-
-## 12. Target-specific downstream flexibility matters, but its selector is noisy
-
-B4 target-wise hyperparameters varied strongly across the three tiny inner folds. Three controlled stabilizers were tested:
+Paired B4 -> B5:
 
 ```text
-B4.1 one shared policy                 0.4847792672
-B4.2 four predefined group policies   0.4901328905
-B4.3 target-wise two-way CV selector  0.4966083942
+median difference = +0.0105821232
+95% paired CI     = [-0.0408197338, +0.0622131599]
+P(B5 > B4)        = 0.656
 ```
 
-All were below B4.
+B5 became the retained report-aligned representation baseline, but the gain was not statistically conclusive.
 
-General lesson: the pathologies are heterogeneous enough that broad policy sharing hurts, but further selector redesign from the same outer labels risks meta-overfitting. The selector branch is closed.
+## 13. B6: structured multilingual report labels enabled direct weak supervision
 
-## 13. Rank ensembling can remove probability-scale mismatch, but gains must be paired-tested
+B6 v1.2.1 provides pathology-specific positive/negated/uncertain/unmentioned states with confidence. The final frozen export has 14,123 usable target cells over 3,120 report-only studies.
 
-Fixed B1+B4 ensembles:
+This was a strategic shift: instead of using reports only to shape a generic representation, the MRI model could now receive direct target-level weak supervision without calling unmentioned findings negative.
+
+## 14. B7: direct weak supervision improved the point estimate
+
+B7 initializes ConvNeXt from B5 and uses:
 
 ```text
-raw probability 50:50 = 0.5050
-rank 50:50            = 0.5167
+6 MRI streams
+-> 16 distributed 2.5D slices/stream
+-> slice + stream embeddings
+-> cross-sequence Transformer
+-> 12 interacting pathology queries
+-> 12 logits
 ```
 
-The rank ensemble is numerically highest, but versus B4:
+B7-v1 used 500 batches/epoch and reached:
 
 ```text
-median difference = +0.00276
-95% CI            = [-0.03513, +0.04174]
-P(ensemble > B4)  = 0.5544
+macro AUC = 0.5397724412
 ```
 
-Therefore it is treated as tied with B4. No weight search is performed.
+The supervision audit showed that this represented only about 1.28 nominal passes over the 3,120 active weak-training studies.
 
-## 14. B5: use report semantics to improve the MRI representation
+## 15. B7.1: full-corpus coverage was the clearest successful change
 
-The next methodological step is not another B4 classifier. B5 uses:
+B7.1 changed only:
 
 ```text
-report-only competition corpus
--> TF-IDF
--> TruncatedSVD semantic embedding
-
-competition MRI
--> strong SSL ConvNeXt
--> image-image SSL
--> acquisition metadata objectives
--> image-report alignment
+batches/epoch: 500 -> 1560
 ```
 
-A report embedding queue increases semantic negatives for small MRI batches, and exact duplicate normalized reports are masked as false negatives.
+with batch size 2, so every epoch covered all 3,120 active studies and all 14,123 weak-label cells.
 
-All 58 gold studies are excluded from B5 representation training. No external language model or image weights are used.
-
-**B5 is currently running; no performance result is available yet.**
-
-## 15. B5 evaluation is deliberately fixed
-
-The first B5 test reuses the **original B4 frozen-feature probe unchanged**.
+Result:
 
 ```text
-B4 image-only encoder -> B4 probe
-B5 image-report encoder -> same B4 probe
+macro AUC = 0.5644802945
+95% CI   = [0.5052432984, 0.6229422178]
 ```
 
-This isolates representation improvement from downstream model-selection changes.
+Paired B7-v1 -> B7.1:
 
-## 16. Tiny-gold validation requires campaign-level discipline
+```text
+median difference = +0.0241102714
+95% paired CI     = [-0.0140197876, +0.0660558004]
+P(B7.1 > B7-v1)   = 0.8694
+```
 
-Nested/cross-fitted logic prevents direct outer leakage within individual experiments, but the same 58 gold studies have now informed many sequential method choices.
+Paired B5 -> B7.1:
 
-The aggregate campaign must therefore be described as **model-selection cross-validation**.
+```text
+median difference = +0.0399233552
+95% paired CI     = [-0.0301354430, +0.1092349994]
+P(B7.1 > B5)      = 0.8716
+```
+
+B7.1 is therefore the current main standalone model, while superiority remains statistically inconclusive because the paired intervals cross zero.
+
+## 16. Fixed rank ensembling did not improve B7.1
+
+A single predeclared global B5+B7.1 50:50 percentile-rank ensemble was tested to avoid probability-scale mismatch.
+
+```text
+B7.1                       0.5644802945
+fixed B5+B7.1 rank blend   0.5540141184
+```
+
+Paired B7.1 -> ensemble:
+
+```text
+median(ensemble-B7.1) = -0.0105429030
+95% paired CI         = [-0.0523218181, +0.0333886570]
+P(ensemble > B7.1)     = 0.3054
+```
+
+The ensemble is rejected. No blend-weight search, raw-vs-rank search, calibration fitting, or target-specific mixture follows.
+
+## 17. B8: preserve spatial evidence before pathology attention
+
+B7.1 collapses each sampled slice to one global ConvNeXt vector before the MRI Transformer. B8 tests whether that loses pathology-relevant localization.
+
+B8 changes the memory from:
+
+```text
+B7.1: 6 streams x 16 slices x 1 pooled token = 96 tokens
+B8:   6 streams x 16 slices x 2x2 regions    = 384 tokens
+```
+
+B8 initializes all compatible weights from the completed B7.1 checkpoint and adds:
+
+- a 2x2 adaptive spatial grid from the final ConvNeXt feature map;
+- learned region-position embeddings;
+- fixed gentle pathology-specific stream/slice attention priors;
+- uniform fixed in-plane region prior because canonical medial/lateral/anterior/posterior pixel orientation is not guaranteed.
+
+The B6 supervision policy, target balancing, 3,120-study full-corpus coverage, four epochs, and learning rates remain frozen.
+
+**Current status: B8 training is in progress. No B8 gold score is recorded yet.**
+
+## 18. Current repository-measured evidence
+
+| Candidate | Macro AUC | Status |
+|---|---:|---|
+| B0 | `0.4763` | baseline |
+| report teacher | `0.49245` | rejected |
+| B1 | `0.5030` | retained reference |
+| B2 | `0.4993` | rejected |
+| B3 | `0.4945` | rejected |
+| B4 | `0.5138` | image-only ablation |
+| B5 | `0.524365` | report-aligned representation baseline |
+| B7-v1 | `0.539772` | coverage ablation |
+| **B7.1** | **`0.564480`** | **current leader** |
+| B5+B7.1 rank | `0.554014` | rejected ensemble |
+| B8 | pending | training in progress |
+
+## 19. Tiny-gold validation requires campaign-level discipline
+
+Nested/cross-fitted procedures prevent direct outer leakage within individual experiments, but the same 58 gold studies have informed many sequential method choices. The aggregate campaign is therefore **model-selection cross-validation**.
 
 Do not:
 
 - choose target-specific outer-OOF winners;
 - optimize ensemble weights;
-- create more B4 grouping/selector variants;
-- retune B5 after reading its OOF without declaring a new experiment;
+- retune B6 parser rules from the gold audit;
+- tune target-specific weak-label weights from observed B7/B7.1 AUCs;
+- search B8 spatial grid sizes, prior strengths, epochs, or target-specific priors after reading the first B8 result and still call it B8-v1;
 - describe the best current OOF point estimate as a hidden-test guarantee.
 
-## 17. Runtime is part of the method
-
-The repository uses one GPU and bounded runtime. Data audit, training, OOF generation and final inference must all fit the actual execution environment.
-
-A method that cannot finish reliably under the competition constraints is not a valid competition method.
-
-## 18. Current repository-measured evidence
-
-| Candidate | Macro AUC |
-|---|---:|
-| B0 | `0.4763` |
-| report teacher | `0.49245` |
-| B1 | `0.5030` |
-| B2 | `0.4993` |
-| B3 | `0.4945` |
-| B1+B3 rank | `0.5048` |
-| **B4** | **`0.5138`** |
-| B4.1 | `0.4848` |
-| B4.2 | `0.4901` |
-| B4.3 | `0.4966` |
-| B1+B4 raw | `0.5050` |
-| B1+B4 rank | `0.5167` |
-| B5 | pending/running |
-
-See [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md) for exact confidence intervals and paired comparisons.
-
-## 19. What is intentionally not claimed
-
-This repository does not claim:
-
-- that any reviewed public repository is a winner;
-- that self-reported public scores are independently verified;
-- that the B1+B4 rank ensemble is statistically superior to B4;
-- that B5 improves anything before its fixed probe completes;
-- that current model-selection OOF guarantees hidden-test or leaderboard performance.
-
-The design goal remains to add components only when controlled evidence supports them under the actual competition constraints.
+Actual leaderboard performance remains unknown until a real competition submission is made.
