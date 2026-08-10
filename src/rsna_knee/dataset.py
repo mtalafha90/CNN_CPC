@@ -11,6 +11,7 @@ from torchvision.transforms import functional as TVF
 
 from .constants import DUAL_STREAMS
 from .dicom import find_series_dir, preprocess_triplets, read_dicom_series
+from .physical_scale import resample_volume_inplane, validate_physical_scale_policy
 
 
 @dataclass
@@ -33,6 +34,7 @@ class DatasetConfig:
     gamma_jitter: float = 0.12
     bias_field_strength: float = 0.08
     series_cache_mb: int = 256
+    physical_scale_policy: dict | None = None
 
     def __post_init__(self) -> None:
         if self.n_slices < 1 or self.image_size < 1 or self.triplet_gap < 1:
@@ -43,15 +45,12 @@ class DatasetConfig:
             raise ValueError("jitter/noise/cache size must be non-negative")
         if not 0 <= self.slice_dropout < 1:
             raise ValueError("slice_dropout must be in [0,1)")
+        if self.physical_scale_policy is not None:
+            validate_physical_scale_policy(self.physical_scale_policy)
 
 
 class _VolumeLRU:
-    """Bounded per-process cache of decoded DICOM volumes.
-
-    DataLoader workers persist across epochs, so this avoids repeated pydicom
-    decoding when a recently used series is revisited while keeping RAM bounded.
-    Each worker owns its cache; no cross-process locks are required.
-    """
+    """Bounded per-process cache of decoded/preprocessed DICOM volumes."""
 
     def __init__(self, max_mb: int) -> None:
         self.max_bytes = int(max_mb) * 1024 * 1024
@@ -78,7 +77,15 @@ class _VolumeLRU:
 
 
 class KneeStudyDataset(Dataset):
-    def __init__(self, study_uids, series_index, config: DatasetConfig, targets=None, weights=None, train: bool = False):
+    def __init__(
+        self,
+        study_uids,
+        series_index,
+        config: DatasetConfig,
+        targets=None,
+        weights=None,
+        train: bool = False,
+    ):
         self.study_uids = [str(x) for x in study_uids]
         self.series_index = series_index
         self.config = config
@@ -120,13 +127,23 @@ class KneeStudyDataset(Dataset):
 
     def _augment_mri(self, volume: torch.Tensor) -> torch.Tensor:
         """Mild acquisition-like augmentation shared across one series."""
-        angle = float(torch.empty(1).uniform_(-self.config.rotation_deg, self.config.rotation_deg))
+        angle = float(
+            torch.empty(1).uniform_(-self.config.rotation_deg, self.config.rotation_deg)
+        )
         max_shift = int(round(self.config.translate_frac * self.config.image_size))
         translate = [
-            int(torch.randint(-max_shift, max_shift + 1, (1,)).item()) if max_shift else 0,
-            int(torch.randint(-max_shift, max_shift + 1, (1,)).item()) if max_shift else 0,
+            int(torch.randint(-max_shift, max_shift + 1, (1,)).item())
+            if max_shift
+            else 0,
+            int(torch.randint(-max_shift, max_shift + 1, (1,)).item())
+            if max_shift
+            else 0,
         ]
-        scale = float(torch.empty(1).uniform_(1 - self.config.scale_jitter, 1 + self.config.scale_jitter))
+        scale = float(
+            torch.empty(1).uniform_(
+                1 - self.config.scale_jitter, 1 + self.config.scale_jitter
+            )
+        )
         volume = TVF.affine(
             volume,
             angle=angle,
@@ -136,36 +153,66 @@ class KneeStudyDataset(Dataset):
             interpolation=InterpolationMode.BILINEAR,
         )
         if self.config.gamma_jitter > 0:
-            gamma = float(torch.empty(1).uniform_(1 - self.config.gamma_jitter, 1 + self.config.gamma_jitter))
+            gamma = float(
+                torch.empty(1).uniform_(
+                    1 - self.config.gamma_jitter, 1 + self.config.gamma_jitter
+                )
+            )
             volume = volume.clamp(0, 1).pow(gamma)
         if self.config.bias_field_strength > 0:
             h, w = volume.shape[-2:]
             yy = torch.linspace(-1, 1, h, device=volume.device).view(1, 1, h, 1)
             xx = torch.linspace(-1, 1, w, device=volume.device).view(1, 1, 1, w)
-            ax = float(torch.empty(1).uniform_(-self.config.bias_field_strength, self.config.bias_field_strength))
-            ay = float(torch.empty(1).uniform_(-self.config.bias_field_strength, self.config.bias_field_strength))
+            ax = float(
+                torch.empty(1).uniform_(
+                    -self.config.bias_field_strength, self.config.bias_field_strength
+                )
+            )
+            ay = float(
+                torch.empty(1).uniform_(
+                    -self.config.bias_field_strength, self.config.bias_field_strength
+                )
+            )
             field = (1 + ax * xx + ay * yy).clamp(0.8, 1.2)
             volume = (volume * field).clamp(0, 1)
         if self.config.noise_std > 0:
-            volume = (volume + torch.randn_like(volume) * self.config.noise_std).clamp(0, 1)
+            volume = (volume + torch.randn_like(volume) * self.config.noise_std).clamp(
+                0, 1
+            )
         if self.config.slice_dropout > 0:
             drop = torch.rand(volume.shape[0]) < self.config.slice_dropout
             volume[drop] = 0
         return volume
 
-    def _read_volume(self, path) -> np.ndarray:
-        key = str(path)
+    def _read_volume(self, path, stream_name: str) -> np.ndarray:
+        policy = self.config.physical_scale_policy
+        policy_tag = policy.get("policy_sha256", "") if policy is not None else "legacy"
+        key = f"{path}|{stream_name}|{policy_tag}"
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        raw = read_dicom_series(path)
+
+        if policy is None:
+            raw = read_dicom_series(path)
+        else:
+            raw, stats = read_dicom_series(path, return_stats=True)
+            plane = {
+                "sagittal": "Sagittal",
+                "coronal": "Coronal",
+                "axial": "Axial",
+            }[stream_name.split("_", 1)[0]]
+            raw, _ = resample_volume_inplane(
+                raw,
+                source_spacing_mm=stats.get("pixel_spacing_mm"),
+                plane=plane,
+                policy=policy,
+            )
         self._cache.put(key, raw)
         return raw
 
     def _training_view(self, raw: np.ndarray) -> torch.Tensor:
         choices = self.config.train_gap_choices
         gap = int(choices[int(torch.randint(len(choices), (1,)).item())])
-        # Derive NumPy jitter from the deterministic worker-local torch RNG.
         jitter_seed = int(torch.randint(0, 2**31 - 1, (1,)).item())
         rng = np.random.default_rng(jitter_seed)
         volume = preprocess_triplets(
@@ -204,16 +251,21 @@ class KneeStudyDataset(Dataset):
             jitter=0,
         )
 
-    def _load(self, uid, series_uid):
+    def _load(self, uid, series_uid, stream_name: str):
         if not series_uid:
             return self._zero(), 0.0
-        path = find_series_dir(self.config.data_root, self.config.split, uid, str(series_uid))
+        path = find_series_dir(
+            self.config.data_root,
+            self.config.split,
+            uid,
+            str(series_uid),
+        )
         if path is None:
             if self.config.strict_dicom:
                 raise FileNotFoundError(f"missing series {uid}/{series_uid}")
             return self._zero(), 0.0
         try:
-            raw = self._read_volume(path)
+            raw = self._read_volume(path, stream_name)
             volume = self._training_view(raw) if self.train else self._evaluation_view(raw)
         except Exception:
             if self.config.strict_dicom:
@@ -226,12 +278,11 @@ class KneeStudyDataset(Dataset):
         mapping = self.series_index.get(uid, {})
         volumes, present = [], []
         for name in self.stream_names:
-            volume, flag = self._load(uid, mapping.get(name))
+            volume, flag = self._load(uid, mapping.get(name), name)
             volumes.append(volume)
             present.append(flag)
         stacked = torch.stack(volumes)
         if self.config.tta_center_offsets:
-            # [K,V,S,C,H,W] -> [V,K,S,C,H,W]
             stacked = stacked.permute(1, 0, 2, 3, 4, 5).contiguous()
         item = {
             "study_uid": uid,
@@ -239,7 +290,11 @@ class KneeStudyDataset(Dataset):
             "present": torch.tensor(present, dtype=torch.float32),
         }
         if self.targets is not None:
-            item["target"] = torch.from_numpy(np.asarray(self.targets[idx], dtype=np.float32))
+            item["target"] = torch.from_numpy(
+                np.asarray(self.targets[idx], dtype=np.float32)
+            )
         if self.weights is not None:
-            item["weight"] = torch.from_numpy(np.asarray(self.weights[idx], dtype=np.float32))
+            item["weight"] = torch.from_numpy(
+                np.asarray(self.weights[idx], dtype=np.float32)
+            )
         return item
