@@ -1,0 +1,83 @@
+# B8: B7.1-initialized pathology-aware spatial MRI learning.
+# New scientific change: preserve a 2x2 ConvNeXt feature grid per sampled slice
+# and apply fixed gentle pathology-specific stream/slice attention priors.
+# B6 supervision, full-corpus coverage, augmentations, and optimization schedule
+# remain fixed from B7.1 unless explicitly named below.
+
+data_root: /data/rsna-knee-abnormality-detection
+train_csv: train.csv
+train_series_csv: train_series.csv
+
+seed: 2026
+competition_mode: true
+requested_gpus: 1
+allow_external_pretrained: false
+pretrained: false
+device: auto
+precision: auto
+runtime_budget_hours: 8.5
+runtime_reserve_minutes: 10
+
+b8_experiment_name: B8_spatial_anatomy_v1
+
+# Data-loader policy.
+num_workers: null
+persistent_workers: true
+prefetch_factor: 2
+multiprocessing_context: spawn
+series_cache_mb_per_worker: 256
+strict_dicom: false
+strict_dicom_inference: true
+
+# Inherited B7.1 data/model dimensions and augmentation contract.
+b7_n_slices: 16
+b7_image_size: 224
+b7_triplet_gap: 1
+b7_encoder_batch_size: 24
+b7_gradient_checkpointing: true
+b7_dropout: 0.25
+b7_transformer_layers: 2
+b7_transformer_heads: 8
+b7_transformer_ff_mult: 2.0
+b7_pathology_layers: 1
+
+# B8 spatial/anatomy change. 2x2 => 4 spatial regions per slice and
+# 6 streams x 16 slices x 4 regions = 384 MRI memory tokens per study.
+b8_spatial_grid_size: 2
+b8_anatomy_prior_strength: 1.0
+b8_nonpreferred_stream_prior: 0.75
+b8_slice_prior_floor: 0.80
+
+# Full-corpus weak-supervision training, retained from B7.1.
+b8_batch_size: 2
+b8_epochs: 4
+b8_max_batches_per_epoch: 1560
+b8_encoder_lr: 0.00001
+b8_head_lr: 0.0001
+b8_min_lr: 0.000001
+b8_weight_decay: 0.0001
+b8_grad_clip: 1.0
+
+# Frozen B6 asymmetric supervision contract. These b7_* names are read by the
+# shared frozen-policy/data helper and MUST remain identical to B7/B7.1.
+b7_min_confidence: 0.75
+b7_positive_target: 0.85
+b7_negative_target: 0.05
+b7_positive_weight: 0.50
+b7_negative_weight: 1.00
+
+# MRI augmentation inherited unchanged from B7.1.
+b7_noise_std: 0.02
+b7_slice_dropout: 0.08
+b7_train_gap_choices: [1, 2]
+b7_center_jitter: 2
+b7_rotation_deg: 5.0
+b7_translate_frac: 0.03
+b7_scale_jitter: 0.05
+b7_gamma_jitter: 0.12
+b7_bias_field_strength: 0.08
+
+# Fixed development evaluation.
+b8_eval_tta_offsets: [-1, 0, 1]
+b8_eval_batch_size: 2
+b8_n_bootstrap: 5000
