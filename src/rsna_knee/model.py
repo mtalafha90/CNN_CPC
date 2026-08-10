@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 from torchvision.models import ConvNeXt_Tiny_Weights, convnext_tiny
@@ -41,10 +42,33 @@ class ConvNeXtSliceEncoder(nn.Module):
         self.register_buffer("input_mean", mean.view(1, in_channels, 1, 1), persistent=False)
         self.register_buffer("input_std", std.view(1, in_channels, 1, 1), persistent=False)
 
-    def forward(self, x):
+    def _normalize(self, x: torch.Tensor) -> torch.Tensor:
         if self.normalize_input:
-            x = (x - self.input_mean.to(dtype=x.dtype)) / self.input_std.to(dtype=x.dtype)
+            return (x - self.input_mean.to(dtype=x.dtype)) / self.input_std.to(dtype=x.dtype)
+        return x
+
+    def forward(self, x):
+        x = self._normalize(x)
         return self.pre_classifier(self.avgpool(self.features(x)))
+
+    def forward_spatial(self, x: torch.Tensor, grid_size: int = 2) -> torch.Tensor:
+        """Return coarse ConvNeXt spatial tokens shaped [N, grid_size**2, D].
+
+        B7 collapses every 2.5D slice to one global vector. B8 reuses the same
+        ConvNeXt weights but retains a small spatial grid from the final feature
+        map. The classifier normalization is reused before the grid is flattened,
+        so B7/B5 encoder initialization remains meaningful.
+        """
+        grid_size = int(grid_size)
+        if grid_size < 1:
+            raise ValueError("grid_size must be >=1")
+        x = self._normalize(x)
+        feature_map = self.features(x)
+        pooled = F.adaptive_avg_pool2d(feature_map, (grid_size, grid_size))
+        # ConvNeXt's first classifier module is the learned channel normalization
+        # used by the ordinary globally pooled path and accepts NCHW tensors.
+        normalized = self.pre_classifier[0](pooled)
+        return normalized.permute(0, 2, 3, 1).reshape(x.shape[0], grid_size * grid_size, self.out_dim)
 
 
 class KneeMILNet(nn.Module):
@@ -193,6 +217,114 @@ class KneeMILNet(nn.Module):
             memory,
             memory,
             key_padding_mask=padding,
+            need_weights=False,
+        )
+        queries = self.dropout(self.query_norm(queries + attended))
+        logits = (queries * self.target_weight[None, :, :]).sum(dim=-1) + self.target_bias
+        return torch.where(empty[:, None], self.target_bias[None, :], logits)
+
+
+class SpatialAnatomyKneeMILNet(KneeMILNet):
+    """B8 model: B7 pathology queries over coarse within-slice spatial tokens.
+
+    The fixed attention bias is deliberately limited to stream and relative-slice
+    priors. Region embeddings are learned from weak supervision; no hard-coded
+    left/right or anterior/posterior quadrant semantics are assumed because the
+    current image pipeline does not guarantee canonical in-plane orientation.
+    """
+
+    def __init__(
+        self,
+        n_streams: int,
+        n_slices: int,
+        *,
+        spatial_grid_size: int = 2,
+        anatomy_attention_bias: torch.Tensor | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(n_streams, n_slices, **kwargs)
+        self.spatial_grid_size = int(spatial_grid_size)
+        if self.spatial_grid_size < 1:
+            raise ValueError("spatial_grid_size must be >=1")
+        self.n_regions = self.spatial_grid_size * self.spatial_grid_size
+        d = self.encoder.out_dim
+        self.region_embedding = nn.Parameter(torch.zeros(self.n_regions, d))
+        if anatomy_attention_bias is None:
+            anatomy_attention_bias = torch.zeros(
+                N_TARGETS,
+                self.n_streams * self.n_slices * self.n_regions,
+                dtype=torch.float32,
+            )
+        bias = torch.as_tensor(anatomy_attention_bias, dtype=torch.float32)
+        expected = (N_TARGETS, self.n_streams * self.n_slices * self.n_regions)
+        if tuple(bias.shape) != expected:
+            raise ValueError(f"anatomy_attention_bias shape {tuple(bias.shape)} != {expected}")
+        self.register_buffer("anatomy_attention_bias", bias.clone(), persistent=True)
+
+    def _encode_spatial_chunk(self, chunk: torch.Tensor) -> torch.Tensor:
+        if self.gradient_checkpointing and self.training and torch.is_grad_enabled():
+            return checkpoint(
+                lambda x: self.encoder.forward_spatial(x, self.spatial_grid_size),
+                chunk,
+                use_reentrant=False,
+            )
+        return self.encoder.forward_spatial(chunk, self.spatial_grid_size)
+
+    def _encode_spatial_slices(self, volumes: torch.Tensor, present: torch.Tensor) -> torch.Tensor:
+        stream_volumes, b, k, s = self._reshape(volumes)
+        active_indices = torch.nonzero(present.reshape(-1) > 0, as_tuple=False).flatten()
+        d, r = self.encoder.out_dim, self.n_regions
+        if active_indices.numel() == 0:
+            return volumes.new_zeros((b, k, s, r, d))
+        active = stream_volumes.index_select(0, active_indices)
+        flat = active.reshape(-1, *active.shape[2:])
+        encoded = torch.cat(
+            [self._encode_spatial_chunk(chunk) for chunk in flat.split(self.encoder_batch_size, dim=0)],
+            dim=0,
+        ).reshape(active.shape[0], s, r, d)
+        all_features = encoded.new_zeros((b * k, s, r, d)).index_copy(0, active_indices, encoded)
+        features = all_features.reshape(b, k, s, r, d)
+        active_mask = present[:, :, None, None, None].to(features.dtype)
+        return (
+            features
+            + self.slice_position[None, None, :, None, :]
+            + self.stream_embedding[None, :, None, None, :]
+            + self.region_embedding[None, None, None, :, :]
+        ) * active_mask
+
+    def _mri_tokens(self, volumes, present):
+        features = self._encode_spatial_slices(volumes, present)
+        b, k, s, r, d = features.shape
+        tokens = features.reshape(b, k * s * r, d)
+        padding = (
+            (present <= 0)[:, :, None, None]
+            .expand(b, k, s, r)
+            .reshape(b, k * s * r)
+        )
+        empty = padding.all(dim=1)
+        safe_padding = padding.clone()
+        if empty.any():
+            safe_padding[empty, 0] = False
+            tokens = tokens.clone()
+            tokens[empty, 0] = 0
+        contextual = self.context(tokens, src_key_padding_mask=safe_padding)
+        contextual = contextual.masked_fill(padding[:, :, None], 0.0)
+        return contextual, safe_padding, empty
+
+    def forward(self, volumes, present):
+        if present.ndim != 2 or present.shape[1] != self.n_streams:
+            raise ValueError("present mask does not match stream contract")
+        memory, padding, empty = self._mri_tokens(volumes, present)
+        b = memory.shape[0]
+        queries = self.pathology_tokens[None, :, :].expand(b, -1, -1)
+        queries = self.pathology_context(queries)
+        attention_bias = self.anatomy_attention_bias.to(device=queries.device, dtype=queries.dtype)
+        attended, _ = self.cross_attention(
+            queries,
+            memory,
+            memory,
+            key_padding_mask=padding,
+            attn_mask=attention_bias,
             need_weights=False,
         )
         queries = self.dropout(self.query_norm(queries + attended))
