@@ -16,7 +16,7 @@ The 58-study surface has supported repeated sequential development decisions and
 - **B10 rejected globally:** macro AUC `0.5523982721`; paired median `(B10-B7.1)=-0.0121030792`, 95% CI `[-0.0507382525,+0.0250750953]`, `P(B10>B7.1)=0.2706`.
 - **B11-v1 stopped before training:** absolute teacher threshold failed the label-free pseudo viability gate.
 - **B11.1 rejected globally:** macro AUC `0.5506902702`; paired median `(B11.1-B7.1)=-0.0126224565`, 95% CI `[-0.0487500119,+0.0195120537]`, `P(B11.1>B7.1)=0.2184`.
-- **B12 variable-number-of-series modeling is implemented and predeclared.** Its label-free series audit is now the active next step.
+- **B12 variable-number-of-series audit passed:** 17,475 eligible series versus 15,468 historical dual selections, retaining 2,007 extra series (+12.98%) across 1,099 studies (35.22%). **B12 training is now active.**
 
 ## Experiment ladder
 
@@ -38,7 +38,7 @@ The 58-study surface has supported repeated sequential development decisions and
 | B10 | plane-specific in-plane physical-scale normalization | `0.5523982721` | rejected globally |
 | B11-v1 | absolute-threshold B7.1 teacher completion | n/a | stopped at viability gate |
 | B11.1 | calibration-aware target-wise teacher tails | `0.5506902702` | rejected globally |
-| **B12** | **variable number of real MRI series** | pending | **implemented / series audit pending** |
+| **B12** | **variable number of real MRI series** | pending | **series audit passed / training active** |
 
 ## Frozen B6 supervision surface
 
@@ -128,9 +128,7 @@ The six-slot B7.1 representation can discard repeated/additional acquisitions. B
 
 ### Frozen controls
 
-B12 returns to the exact original B7.1 supervision surface. It does **not** use B11/B11.1 pseudo-labels.
-
-Unchanged:
+B12 returns to the exact original B7.1 supervision surface and does **not** use B11/B11.1 pseudo-labels.
 
 ```text
 B5 encoder initialization
@@ -162,19 +160,52 @@ six selected semantic slots
 
 There is no architecture-level maximum series count.
 
-### Pre-training label-free audit
-
-The audit is frozen on the 3,120 B6-active non-gold studies. Viability requires:
+### Frozen B12 series audit — passed
 
 ```text
-zero studies without eligible series
-zero historical selected series missing from B12
-extra series >= 5% of historical unique selected-series count
->=10% of studies have at least one extra retained series
+studies                                 3120
+eligible recognized-plane series      17475
+excluded unknown-plane series             0
+historical dual unique series          15468
+extra series retained                   2007
+extra series fraction                12.9752%
+studies with extra series               1099
+fraction studies with extras          35.2244%
+studies with zero eligible series          0
+historical selected series missing         0
+series/study min                           3
+series/study mean                    5.60096
+series/study median                        5
+series/study q90                           8
+series/study q95                           9
+series/study q99                          10
+series/study max                          14
+viability_passed                        true
 ```
 
-The exact variable-series mapping is SHA-256 signed. Training re-audits and refuses mapping drift.
+Frozen mapping SHA-256:
 
-See [`B12_VARIABLE_SERIES.md`](B12_VARIABLE_SERIES.md) for commands and integrity checks.
+```text
+5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376
+```
+
+The audit exceeds the predeclared gates (`>=5%` extra series and `>=10%` of studies gaining extras) by a wide margin. Training reconstructs the exact mapping and refuses signature/count drift.
+
+Expected per full training epoch:
+
+```text
+batches                        1560
+study_draws                    3120
+active_supervision_cells_seen 14123
+positive_cells_seen            6871
+negative_cells_seen            7252
+series_instances_seen         17475
+expected_series_instances     17475
+full_coverage                  true
+full_series_coverage           true
+budget_limited                 false
+```
+
+See [`B12_VARIABLE_SERIES.md`](B12_VARIABLE_SERIES.md) for the training/evaluation commands and integrity checks.
 
 Actual hidden-test / leaderboard performance remains unknown until a real competition submission is evaluated.
