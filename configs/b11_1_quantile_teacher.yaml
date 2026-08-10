@@ -1,0 +1,45 @@
+# B11.1 calibration-aware teacher pseudo-label audit.
+# This is a separately named follow-up after B11-v1 failed its label-free
+# viability gate because absolute teacher probabilities were strongly
+# target-dependent. No gold labels are used to derive quantile thresholds.
+
+data_root: /data/rsna-knee-abnormality-detection
+train_csv: train.csv
+train_series_csv: train_series.csv
+
+seed: 2026
+competition_mode: true
+requested_gpus: 1
+allow_external_pretrained: false
+pretrained: false
+device: auto
+precision: auto
+runtime_budget_hours: 8.5
+runtime_reserve_minutes: 10
+
+num_workers: null
+persistent_workers: true
+prefetch_factor: 2
+multiprocessing_context: spawn
+series_cache_mb_per_worker: 256
+strict_dicom: false
+strict_dicom_inference: true
+
+# Teacher/evaluation image contract: B7.1.
+b7_n_slices: 16
+b7_image_size: 224
+b7_triplet_gap: 1
+b7_eval_batch_size: 2
+
+# Frozen B11.1 label-free tail policy.
+b11_1_teacher_tta_offsets: [-1, 0, 1]
+b11_1_low_quantile: 0.05
+b11_1_high_quantile: 0.95
+b11_1_max_tta_range: 0.05
+b11_1_low_target: 0.10
+b11_1_high_target: 0.90
+b11_1_pseudo_base_weight: 0.10
+b11_1_pseudo_mass_cap_fraction: 0.15
+b11_1_min_total_pseudo_cells: 2500
+b11_1_min_pseudo_cells_per_target: 100
+b11_1_min_cells_per_tail: 50
