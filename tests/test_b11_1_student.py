@@ -15,7 +15,9 @@ def _write_artifacts(tmp_path, *, viable=True, gold_free=True):
     policy = {
         "policy": B11_1_POLICY,
         "viability_passed": viable,
-        "uses_gold_labels_to_choose_pseudo_cells": gold_free,
+        # The persisted field asks whether gold labels WERE used.  Therefore a
+        # gold-free fixture must certify False, not mirror the helper name.
+        "uses_gold_labels_to_choose_pseudo_cells": not gold_free,
         "pseudo_labels_sha256": _sha256_file(csv_path),
     }
     (tmp_path / "pseudo_policy.json").write_text(json.dumps(policy), encoding="utf-8")
@@ -33,6 +35,12 @@ def test_b11_1_loader_accepts_frozen_viable_gold_free_artifacts(tmp_path):
 def test_b11_1_loader_rejects_failed_viability(tmp_path):
     _write_artifacts(tmp_path, viable=False)
     with pytest.raises(ValueError, match="viability"):
+        _load_pseudo_artifacts(tmp_path)
+
+
+def test_b11_1_loader_rejects_gold_informed_pseudo_selection(tmp_path):
+    _write_artifacts(tmp_path, gold_free=False)
+    with pytest.raises(ValueError, match="label-free"):
         _load_pseudo_artifacts(tmp_path)
 
 
