@@ -1,6 +1,6 @@
 %% CNN_CPC manuscript draft for Computer Physics Communications.
-%% Implementation-faithful draft. Empirical numerical results are deliberately
-%% represented by placeholders until the production RSNA runs are completed.
+%% Updated 2026-08-10 to match repository package 0.14.0 and measured B0--B8 results.
+%% B9 strict-routing gold evaluation is intentionally left pending.
 \documentclass[preprint,12pt]{elsarticle}
 
 \usepackage{amsmath,amssymb}
@@ -16,24 +16,8 @@
 \usepackage{graphicx}
 
 \newcommand{\code}[1]{\texttt{#1}}
-\newcommand{\todoresult}[1]{\textcolor{red}{\textbf{[RESULT TO INSERT: #1]}}}
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\sigmoid}{\operatorname{sigmoid}}
-
-\newcounter{bla}
-\newenvironment{refnummer}{%
-\list{[\arabic{bla}]}%
-{\usecounter{bla}%
- \setlength{\itemindent}{0pt}%
- \setlength{\topsep}{0pt}%
- \setlength{\itemsep}{0pt}%
- \setlength{\labelsep}{2pt}%
- \setlength{\listparindent}{0pt}%
- \settowidth{\labelwidth}{[9]}%
- \setlength{\leftmargin}{\labelwidth}%
- \addtolength{\leftmargin}{\labelsep}%
- \setlength{\rightmargin}{0pt}}}
- {\endlist}
 
 \journal{Computer Physics Communications}
 
@@ -41,7 +25,7 @@
 
 \begin{frontmatter}
 
-\title{CNN\_CPC: A leakage-aware weakly supervised multi-sequence MRI framework for knee abnormality detection}
+\title{CNN\_CPC: Leakage-aware weak supervision and semantic sequence routing for multi-sequence knee MRI classification}
 
 \author[a]{Mohammed H. Talafha\corref{cor1}}
 \cortext[cor1]{Corresponding author.}
@@ -49,30 +33,28 @@
 % TODO before submission: add the corresponding author's e-mail address.
 
 \begin{abstract}
-Knee magnetic-resonance imaging (MRI) classification becomes methodologically difficult when only a small subset of studies carries trusted structured labels, while a much larger set contains radiology reports and heterogeneous imaging sequences. We present \code{CNN\_CPC}, a PyTorch framework for weakly supervised, multi-sequence, study-level knee MRI classification under explicit leakage, reproducibility, and wall-clock constraints. The software converts multilingual radiology reports into target-wise positive, negated, uncertain, and unmentioned states; calibrates report-derived probabilities only with gold labels permitted by the active training phase; and treats report silence as unlabeled by default. MRI studies are routed into as many as six semantic streams---fluid-sensitive and structural series for each of the sagittal, coronal, and axial planes---with missing streams represented by masks rather than fabricated data. DICOM slices are spatially ordered, intensity corrected, robustly normalized, converted to distributed 2.5D triplets, and encoded by ConvNeXt-Tiny. Learned slice and stream embeddings are fused by a cross-sequence Transformer, after which twelve interacting pathology queries cross-attend to the MRI memory and produce target-specific logits. Optimization combines a planned-epoch, pathology-balanced weighted binary cross-entropy with confidence-gated pairwise ranking. A nested three-fold procedure separates epoch selection from final out-of-fold evaluation, and a fresh model is retrained after the selection phase. Optional competition-data self-supervision and leakage-safe Stage-2 image/report co-training exploit the non-gold data without allowing held-out predictions to train themselves. The package further provides DICOM metadata repair, preflight decoding, full CPU multiprocessing audit, deterministic trusted/general sampling, bootstrap uncertainty, paired model comparison, checkpoint identity contracts, submission-matched test-time augmentation, and explicit sub-nine-hour runtime protection. This manuscript documents the implemented software in detail. Competition-scale predictive results are intentionally left as reproducible placeholders until the complete real-data production runs have finished.
-
+Knee magnetic-resonance imaging (MRI) classification is challenging when trusted structured labels are scarce, radiology reports are abundant but incomplete, and each examination contains a heterogeneous set of pulse sequences. We present \code{CNN\_CPC}, a PyTorch framework for leakage-aware weakly supervised, multi-sequence, study-level knee MRI classification. The released development surface contains 4,407 studies and 24,371 MRI series; only 58 studies carry complete labels for the twelve target abnormalities, while 4,349 studies are available primarily through their reports. The pipeline uses competition-only MRI representation learning, multilingual structured report states, six semantic MRI streams, distributed 2.5D ConvNeXt-Tiny features, a cross-sequence Transformer, and twelve interacting pathology queries. A frozen report parser converts each report/target cell to positive, negated, uncertain, or unmentioned; unmentioned findings are never treated as negative. The direct weak-supervision stage uses 3,120 report-only studies containing 14,123 usable target cells and excludes all 58 gold studies from the training gradient and early stopping. Increasing weak-training coverage from approximately 1.28 nominal corpus passes to four complete passes improved the macro ROC AUC from 0.5398 to 0.5645 on the repeatedly used 58-study development set. A subsequent 2x2 spatial-token model decreased macro AUC to 0.5301 and was rejected. A label-free metadata audit then revealed that the historical dual-stream selector placed 552 of 21,886 selected training streams (2.52\%) into a semantic slot inconsistent with the supplied \code{Fluid\_Sensitive} flag. This motivated a predeclared strict-routing experiment in which unavailable contrasts remain masked rather than being replaced by an opposite-contrast sequence. Its predictive evaluation is intentionally not reported until the frozen run is complete. The software includes DICOM metadata repair, geometry-aware slice ordering, robust intensity normalization, full decoding audits, checkpoint provenance, test-time augmentation, bootstrap uncertainty, paired model comparison, and single-GPU runtime protection. The current results are development/model-selection estimates rather than independent hidden-test performance.
 \vspace{1em}
-\noindent \textbf{PROGRAM SUMMARY}
+
+\noindent\textbf{PROGRAM SUMMARY}
 
 \begin{small}
 \noindent
 {\em Program Title:} CNN\_CPC \\
-{\em CPC Library link to program files:} (to be added by Technical Editor) \\
-{\em Developer's repository link:} \url{https://github.com/mtalafha90/CNN_CPC} \\
-{\em Licensing provisions:} Not yet specified; a repository license must be selected before CPC submission. \\
-{\em Programming language:} Python $\geq 3.10$; PyTorch implementation. \\
-{\em Supplementary material:} Source code, production configuration, command-line interface, unit and integration tests, Kaggle execution templates, training/validation documentation, and a four-study external technical DICOM fixture are distributed in the repository. \\
+{\em Developer's repository:} \url{https://github.com/mtalafha90/CNN_CPC} \\
+{\em Programming language:} Python $\geq 3.10$ with PyTorch. \\
+{\em Current package snapshot:} 0.14.0. \\
 
-{\em Nature of problem:} The target task is study-level multi-label classification of twelve knee MRI abnormalities from heterogeneous DICOM examinations. Only a small subset of training studies contains trusted structured target values, whereas the remaining studies contain free-text radiology reports. Naively mapping report omissions to negative labels creates systematic false negatives; calibrating report pseudo-labels with held-out gold cases produces leakage; and a conventional random train/validation split can duplicate nearly identical reports across folds. The imaging side is also non-trivial because each examination contains a variable set of sagittal, coronal, and axial sequences, metadata can be incomplete, DICOM files can be partially corrupt, and focal abnormalities may appear in only a small subset of slices. Finally, the target execution environment constrains the method to one GPU and a bounded wall-clock duration. \\
+{\em Nature of problem:} The task is study-level multi-label classification of twelve knee MRI abnormalities from heterogeneous DICOM examinations. Only a small gold subset provides complete structured labels, whereas most studies provide radiology reports that may omit normal or clinically secondary findings. Treating report silence as a negative label produces systematic label noise. On the imaging side, examinations contain variable sagittal, coronal, and axial acquisitions with different contrast sensitivity, spatial resolution, scanner vendors, and missing sequence types. A useful method must therefore combine weak supervision with explicit sequence semantics, missing-stream handling, leakage control, and practical runtime constraints. \\
 
-{\em Solution method:} CNN\_CPC validates the competition tables, repairs missing series metadata from DICOM headers, routes each study into six semantic MRI streams, and decodes each selected series using geometry-aware slice ordering. Intensities are rescaled, MONOCHROME1 data are inverted, the 1st--99th percentiles are clipped, and the result is normalized to $[0,1]$. Distributed 2.5D triplets are encoded by ConvNeXt-Tiny and fused using a Transformer with learned slice/stream embeddings. Twelve learned pathology tokens first interact with one another and then cross-attend to the MRI tokens. Reports provide deterministic multilingual weak supervision, with fold-safe empirical-Bayes calibration and confidence weights; finite official labels always override pseudo-labels target by target. The supervised objective is a macro-balanced weighted BCE plus a confidence-gated ranking loss. Nested validation, in-domain MRI self-supervision, fold-local weak out-of-fold image teachers, Stage-2 report/image consensus, bootstrap evaluation, checkpoint validation, and runtime-aware stopping complete the production workflow. \\
+{\em Solution method:} CNN\_CPC validates the competition tables, repairs missing MRI-series metadata from DICOM headers when necessary, and represents each study with up to six semantic streams: fluid-sensitive and structural acquisitions for the sagittal, coronal, and axial planes. DICOM slices are physically ordered from orientation/position information, rescaled, MONOCHROME1-corrected, percentile normalized, and sampled as distributed 2.5D triplets. A ConvNeXt-Tiny encoder produces slice features; learned slice and stream embeddings are fused by a Transformer; twelve pathology tokens interact and cross-attend to the MRI memory before target-specific classification. Competition reports are converted into conservative pathology-specific weak labels, with uncertain and unmentioned cells ignored. The main retained model is initialized from a competition-only image--report representation checkpoint and trained for four full passes over all 3,120 active weakly labelled studies using target-balanced weighted binary cross-entropy. \\
 
-{\em Additional comments including restrictions and unusual features:} The conservative production configuration uses one GPU, CPU multiprocessing for DICOM/data work, no distributed data parallel training, no external pretrained weights by default, and an 8.5-hour software budget with an additional final reserve. Missing streams are masked. Primary validation uses the same center-offset test-time augmentation as the planned submission. The distributed external DICOM fixture is a technical decode/routing test and must not be used to estimate scientific performance. CNN\_CPC is research software and is not a clinical diagnostic device. \\
+{\em Restrictions and unusual features:} Reports are used for training supervision only; final inference is MRI-only. External pretrained image weights are disabled in the conservative competition path. The current 58-study gold set has informed repeated development decisions, so reported scores are explicitly treated as development/model-selection estimates. The final competition leaderboard performance remains unknown until a real submission is evaluated. CNN\_CPC is research software and is not a clinical diagnostic device.
 \end{small}
 \end{abstract}
 
 \begin{keyword}
-knee MRI \sep weak supervision \sep DICOM \sep ConvNeXt \sep Transformer \sep nested validation \sep self-supervised learning \sep multi-label classification \sep positive-unlabeled learning
+knee MRI \sep weak supervision \sep DICOM \sep ConvNeXt \sep Transformer \sep multi-sequence MRI \sep self-supervised learning \sep semantic routing \sep multi-label classification
 \end{keyword}
 
 \end{frontmatter}
@@ -80,452 +62,544 @@ knee MRI \sep weak supervision \sep DICOM \sep ConvNeXt \sep Transformer \sep ne
 \section{Introduction}
 \label{sec:introduction}
 
-Magnetic-resonance imaging is a standard modality for evaluation of internal knee structures because it provides complementary information from different anatomical planes and pulse sequences. Deep learning has previously demonstrated the feasibility of examination-level knee MRI classification, with MRNet providing an influential multi-series baseline \cite{bien2018mrnet}. More recent convolutional architectures such as ConvNeXt \cite{liu2022convnext}, together with attention-based sequence models \cite{vaswani2017attention}, allow local visual features to be integrated across many slices and acquisitions. The principal difficulty addressed by the present software, however, is not simply network capacity. It is how to learn a twelve-target image classifier when trusted structured labels are scarce, free-text reports are abundant but incomplete, the MRI studies are heterogeneous, and validation must remain statistically defensible.
+Magnetic-resonance imaging provides complementary information about knee ligaments, menisci, cartilage, bone, synovium, and joint fluid through multiple anatomical planes and pulse sequences. Deep learning has demonstrated the feasibility of examination-level knee MRI classification, with MRNet providing an influential multi-series baseline \cite{bien2018mrnet}. Modern convolutional encoders such as ConvNeXt \cite{liu2022convnext} and attention-based sequence models \cite{vaswani2017attention} make it possible to integrate evidence from many slices and acquisitions. In the present setting, however, network capacity is not the only limiting factor. The central methodological problem is how to learn twelve target classifiers when structured labels are scarce, free-text reports are incomplete, MRI acquisition protocols vary substantially, and the same small gold set must be protected from direct training leakage.
 
-\code{CNN\_CPC} was developed around four principles. First, radiology reports are training teachers rather than required inference inputs. An unmentioned abnormality is therefore not automatically a negative case. Second, every use of gold labels for calibration or model selection must remain inside the appropriate training boundary. Third, sequence heterogeneity and missing acquisitions should be represented explicitly instead of hidden by ad-hoc preprocessing. Fourth, a method that cannot reliably complete training, out-of-fold prediction, and submission inference within the execution budget is not a production method.
+CNN\_CPC was developed around five principles. First, reports are training supervision rather than inference inputs. Second, report silence is not a negative label. Third, all MRI sequence roles and missing acquisitions are represented explicitly. Fourth, the gold studies do not enter the weak-training gradient or early stopping. Fifth, every new development experiment is named and evaluated under a predeclared rule so that post-hoc tuning on the 58 gold studies is visible rather than hidden.
 
-The software combines deterministic report supervision, fold-safe calibration, DICOM metadata repair, six-stream semantic sequence routing, distributed 2.5D representation, a ConvNeXt/Transformer/pathology-query model, metric-aligned optimization, nested validation, in-domain MRI self-supervision, leakage-safe image/report co-training, bootstrap evaluation, and wall-clock protection. The package is implemented in PyTorch \cite{paszke2019pytorch}. This article describes the complete implementation and its methodological safeguards. Predictive results are reported only after they are generated by the prescribed production workflow; no leaderboard or cross-validation values are inferred from software design alone.
+The current repository evolved through a controlled sequence of experiments. Competition-only MRI self-supervision improved the neural baseline; image--report representation alignment produced a stronger frozen representation; structured report states enabled direct pathology-specific weak supervision; complete corpus coverage further improved the retained model; a spatial-token architecture was tested and rejected; and a subsequent label-free metadata audit identified a semantic routing inconsistency that motivated the current strict-routing experiment. This manuscript documents the software and reports the measured development evidence available as of the package-0.14.0 snapshot.
 
 \section{Problem definition and data contract}
 \label{sec:problem}
 
-\subsection{Study-level targets}
+\subsection{Targets}
 
-The framework predicts twelve study-level binary abnormalities:
+For each study $i$, the model predicts
+\begin{equation}
+\hat{\mathbf y}_i\in[0,1]^{12},
+\end{equation}
+for the following twelve abnormalities:
 \begin{enumerate}[label=(\arabic*)]
-\item anterior cruciate ligament abnormality (ACL),
-\item medial collateral ligament abnormality (MCL),
-\item medial meniscus abnormality,
-\item lateral meniscus abnormality,
-\item medial compartment osteoarthritis (Medial OA),
-\item lateral compartment osteoarthritis (Lateral OA),
-\item patellofemoral osteoarthritis (PF OA),
+\item ACL,
+\item MCL,
+\item medial meniscus,
+\item lateral meniscus,
+\item medial osteoarthritis,
+\item lateral osteoarthritis,
+\item patellofemoral osteoarthritis,
 \item effusion,
 \item synovitis,
 \item Baker's cyst,
 \item contusion, and
 \item fracture.
 \end{enumerate}
-For a study $i$, the model output is a vector $\hat{\mathbf y}_i\in[0,1]^{12}$. The official structured target matrix may contain missing cells, so missing official values are retained as missing rather than converted to zero.
 
-\subsection{Training data surfaces}
+The primary development metric is the macro average of the twelve target-wise ROC AUC values.
 
-The production loader requires \code{train.csv} to contain a unique \code{StudyInstanceUID}, a \code{Report} field, and the twelve target columns. The corresponding \code{train\_series.csv} must contain a unique study/series pair together with \code{Anatomical\_Plane}, \code{Fluid\_Sensitive}, and \code{Fat\_Suppression}. Boolean fields are parsed conservatively with support for textual and numeric representations, while unknown values remain nullable long enough to permit DICOM-based repair.
+\subsection{Released data surface}
 
-At the current competition snapshot used to design the pipeline, the released training surface contains 4,407 studies, of which 58 contain at least one official target annotation and 4,349 are non-gold studies. These counts are not hard-coded in the software; they are inspected from the mounted data before training. The methodological consequence is that the task is weakly/semi-supervised rather than conventionally fully supervised.
+The verified release used in the current experiments contains:
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+Quantity & Count \\
+\midrule
+Training studies & 4,407 \\
+Fully gold-labelled studies & 58 \\
+Report-only studies & 4,349 \\
+Training series rows & 24,371 \\
+Targets & 12 \\
+\bottomrule
+\end{tabular}
+\end{center}
 
-\subsection{Positive-unlabeled interpretation}
+All 58 gold studies have all twelve target cells populated. The report-only pool is used for representation learning and weak supervision. The small gold set has supported repeated method choices and is therefore treated as a development/model-selection set rather than a pristine independent validation set.
 
-The absence of an abnormality from a report is not treated as evidence of absence. Let $r_{ic}$ be the report state for study $i$ and target $c$. In the default production configuration, an unmentioned report cell receives zero direct report-supervision weight. Thus, a study may still contribute to other targets while remaining effectively unlabeled for target $c$. Finite official labels override weak labels on a cell-by-cell basis, so partial structured annotations are supported without forcing all missing target cells to become negatives.
+\subsection{Series metadata}
 
-\section{Software architecture}
-\label{sec:software}
+Each series row contains at least
+\code{StudyInstanceUID}, \code{SeriesInstanceUID}, \code{Fluid\_Sensitive},
+\code{Fat\_Suppression}, and \code{Anatomical\_Plane}. The plane is normalized to sagittal, coronal, or axial. Boolean fields are parsed conservatively and may remain unknown until DICOM-based repair is attempted. Populated competition CSV metadata are treated as authoritative; DICOM-derived sequence characterization is a fallback for missing fields rather than a replacement for supplied labels.
 
-The repository separates data handling, modeling, validation, and execution safeguards into independent modules. The principal production components are:
-\begin{itemize}
-\item \code{data.py}: CSV validation, report grouping, balanced gold folds, metadata repair, and semantic series routing;
-\item \code{dicom.py} and \code{dicom\_meta.py}: DICOM discovery, decoding, spatial ordering, intensity processing, and metadata inference;
-\item \code{dataset.py}: worker-local DICOM cache, 2.5D triplet generation, augmentation, TTA view construction, and missing-stream masks;
-\item \code{report\_labels.py} and \code{calibration.py}: deterministic multilingual report teacher and fold-safe calibration;
-\item \code{model.py}: ConvNeXt-Tiny slice encoder, cross-sequence Transformer, pathology-token interaction, and cross-attention;
-\item \code{sampling.py} and \code{training.py}: trusted/general sampling, nested Phase-A/Phase-B training, objective computation, diagnostics, and OOF generation;
-\item \code{ssl.py}: competition-data in-domain self-supervised representation learning;
-\item \code{cotrain.py}: leakage-safe Stage-1 candidate selection and report/image consensus;
-\item \code{evaluation.py}: NaN-safe ROC AUC, study bootstrap, and paired comparisons;
-\item \code{budget.py}, \code{runtime.py}, and \code{policy.py}: one-GPU runtime resolution, execution policy, and wall-clock guards;
-\item \code{inference.py}: strict fold/stage/model/TTA-validated ensemble inference;
-\item \code{audit.py} and \code{preflight.py}: sampled and full data-quality gates.
-\end{itemize}
-All user-facing production operations are exposed by the \code{rsna-knee} command-line interface.
-
-\section{DICOM ingestion and semantic series routing}
+\section{DICOM ingestion}
 \label{sec:dicom}
 
-\subsection{Series discovery and slice ordering}
+\subsection{Series discovery and spatial ordering}
 
-A selected series may be found under either a \code{split\_series}, \code{split\_images}, or direct study/series hierarchy. Candidate DICOM files may have \code{.dcm}, \code{.dicom}, \code{.ima}, or no suffix. Each readable file is decoded using pydicom. When geometric tags are available, the spatial order is obtained from the image-plane normal. If $\mathbf r$ and $\mathbf c$ are the first and second triplets in \code{ImageOrientationPatient},
+Selected series are discovered under the configured training/test directory hierarchy. Each readable DICOM object is decoded using pydicom. When \code{ImageOrientationPatient} and \code{ImagePositionPatient} are available, the slice normal is
 \begin{equation}
-\mathbf n = \mathbf r\times\mathbf c,
+\mathbf n=\mathbf r\times\mathbf c,
 \end{equation}
-and a slice with \code{ImagePositionPatient} $\mathbf p$ receives scalar coordinate
+where $\mathbf r$ and $\mathbf c$ are the row and column direction cosines, and each slice receives coordinate
 \begin{equation}
-z = \mathbf p\cdot\mathbf n.
+z=\mathbf p\cdot\mathbf n.
 \end{equation}
-Slices are sorted by $z$. If the geometry cannot be constructed, \code{InstanceNumber} is used as the fallback ordering key. Multi-frame DICOM objects are expanded into individual frames with a small deterministic offset preserving their within-file order.
+Slices are ordered by $z$. \code{InstanceNumber} is used as a fallback. Multi-frame objects are expanded while preserving deterministic frame order.
 
-\subsection{Intensity correction and normalization}
+\subsection{Intensity handling}
 
-Decoded pixels $x$ are first transformed using the DICOM rescale parameters,
+Pixel values are converted to floating point and transformed using
 \begin{equation}
-x' = a x+b,
+x'=a x+b,
 \end{equation}
-where $a=\code{RescaleSlope}$ and $b=\code{RescaleIntercept}$, with defaults 1 and 0. \code{MONOCHROME1} series are inverted. If frames within a series have inconsistent matrix sizes, they are centrally padded or cropped to a common shape before stacking.
-
-For each volume, non-finite pixels are identified and the finite 1st and 99th percentiles, $q_{0.01}$ and $q_{0.99}$, are computed. Values are clipped to that interval and normalized as
+where $a$ and $b$ are the DICOM rescale slope and intercept. MONOCHROME1 images are inverted. The finite 1st and 99th percentiles are computed for each volume; intensities are clipped to this interval and normalized:
 \begin{equation}
-\tilde{x}=\frac{\operatorname{clip}(x',q_{0.01},q_{0.99})-q_{0.01}}
+\tilde{x}=
+\frac{\operatorname{clip}(x',q_{0.01},q_{0.99})-q_{0.01}}
 {\max(q_{0.99}-q_{0.01},10^{-6})}.
 \end{equation}
-The resulting values are approximately in $[0,1]$ and are resized by bilinear interpolation.
+Frames are resized to $224\times224$ by bilinear interpolation after volume normalization.
 
-\subsection{Metadata repair}
+\subsection{Verified decoding audit}
 
-The series table is not assumed to be complete. Missing anatomical plane, fluid-sensitivity, and fat-suppression fields are independently repaired by inspecting DICOM metadata for the corresponding series. Repair statistics are written to \code{metadata\_repair.json}. Unknown metadata are never silently converted into positive flags before the repair step.
+The historical production-selected surface was fully audited before long GPU training:
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+Audit quantity & Value \\
+\midrule
+Selected series checked & 21,886 \\
+Selected series decoded & 21,886 \\
+Selected series failed & 0 \\
+Candidate DICOM files & 732,556 \\
+Decoded DICOM files & 732,554 \\
+Failed DICOM files & 2 \\
+Series with partial one-file failures & 2 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Both partially affected series remained usable because only one instance failed in each series and the configured corruption threshold was not exceeded.
 
-\subsection{Six-stream routing}
+\section{Semantic MRI stream routing}
+\label{sec:routing}
 
-Each study is represented by up to six semantic streams in the fixed order
+\subsection{Six-stream representation}
+
+The neural model accepts up to six streams:
 \begin{align*}
 &\text{sagittal-fluid},\quad \text{sagittal-structural},\\
 &\text{coronal-fluid},\quad \text{coronal-structural},\\
 &\text{axial-fluid},\quad \text{axial-structural}.
 \end{align*}
-Within one plane, let $F\in\{0,1\}$ denote the fluid-sensitive flag and $S\in\{0,1\}$ the fat-suppression flag. The implemented routing scores are
-\begin{align}
-R_{\mathrm{fluid}} &= 2F+2S,\\
-R_{\mathrm{struct}} &= 2(1-S)+(1-F).
-\end{align}
-The highest-ranked fluid series is selected first. The structural stream is then assigned the highest-ranked different series whenever more than one series is available. If only one series exists, it is assigned to whichever semantic score is larger and the other stream remains absent. This prevents duplicating the same acquisition into both semantic slots in the ordinary multi-series case.
+A binary presence mask accompanies every study. Missing streams are represented by zeros and excluded from attention by the mask.
 
-A binary presence matrix $M\in\{0,1\}^{B\times6}$ accompanies every batch. Missing streams return zero tensors but remain masked throughout the model, so zeros are never interpreted as a real acquisition.
+\subsection{Historical dual selector}
+
+The historical B7/B7.1 selector ranked candidate series within each plane using supplied fluid-sensitivity and fat-suppression metadata. When several series were present, it attempted to populate both semantic slots with different acquisitions. This avoided duplicate use of one series but introduced a subtle failure mode: if a plane contained several acquisitions of only one contrast class, the selector could place one of them into the opposite semantic slot.
+
+A label-free audit over all training metadata found 552 semantic mismatches among 21,886 historically selected streams:
+\begin{table}[ht]
+\centering
+\caption{Historical versus strict semantic routing over the full training metadata.}
+\label{tab:routing}
+\begin{tabular}{lrrr}
+\toprule
+Stream & Historical & Strict & Mismatches removed \\
+\midrule
+Sagittal fluid & 4,401 & 4,150 & 251 \\
+Sagittal structural & 4,294 & 4,266 & 28 \\
+Coronal fluid & 4,250 & 4,248 & 2 \\
+Coronal structural & 3,440 & 3,406 & 34 \\
+Axial fluid & 4,407 & 4,407 & 0 \\
+Axial structural & 1,094 & 857 & 237 \\
+\midrule
+Total & 21,886 & 21,334 & 552 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Thus, 2.52\% of historically selected streams were assigned a semantic role inconsistent with the supplied \code{Fluid\_Sensitive} flag. The three-study test metadata surface exhibited one such mismatch among 14 historical stream assignments.
+
+\subsection{Strict-routing policy}
+
+The predeclared B9 policy enforces
+\begin{align}
+\text{fluid slot} &\Rightarrow \code{Fluid\_Sensitive=True},\\
+\text{structural slot} &\Rightarrow \code{Fluid\_Sensitive=False}.
+\end{align}
+If a contrast class is unavailable, the slot remains absent and is masked. Unknown contrast is not silently interpreted as structural. The B7.1 selector remains unchanged in the repository for exact reproducibility; B9 uses a separate strict-routing implementation.
 
 \section{Distributed 2.5D representation}
 \label{sec:25d}
 
-\subsection{Triplet construction}
-
-For a decoded series with $N$ frames, $S=16$ center positions are distributed approximately uniformly through the valid slice range. With triplet gap $g$, a center $c_s$ yields the three-channel input
+For a decoded series of $N$ frames, $S=16$ center positions are distributed approximately uniformly over the valid range. For center $c_s$ and triplet gap $g$,
 \begin{equation}
-X_s = [I_{c_s-g},I_{c_s},I_{c_s+g}],
+X_s=[I_{c_s-g},I_{c_s},I_{c_s+g}].
 \end{equation}
-with out-of-range indices clipped to the nearest valid frame. The default evaluation gap is $g=1$. During training, $g$ is sampled from $\{1,2\}$ and each distributed center may be jittered by up to two slice indices. Every triplet is resized to $224\times224$ pixels. Therefore the nominal model input shape is
+Evaluation uses $g=1$. Training samples $g\in\{1,2\}$ and may jitter the center by up to two slices. The nominal study tensor is therefore
 \begin{equation}
 [B,K,S,C,H,W]=[B,6,16,3,224,224].
 \end{equation}
 
-\subsection{Acquisition-like augmentation}
+Training augmentation is deliberately mild: rotation up to $5^\circ$, translation up to 3\%, scale jitter of 5\%, gamma perturbation, low-frequency multiplicative bias, Gaussian noise, and slice dropout. Decoded volumes are cached per DataLoader worker to reduce repeated DICOM I/O.
 
-All triplets from one stream receive the same mild spatial/intensity perturbation. Production defaults are: rotation within $\pm5^\circ$, translation up to 3\% of image size, isotropic scale factor in $[0.95,1.05]$, gamma factor in $[0.88,1.12]$, a low-frequency multiplicative bias field with strength 0.08, Gaussian noise with standard deviation 0.02, and independent slice-position dropout probability 0.08. The bias field is clipped to the range $[0.8,1.2]$. These augmentations are intended to reflect acquisition variability without introducing anatomically implausible deformations.
+\section{Competition-only representation learning}
+\label{sec:representation}
 
-\subsection{Worker-local DICOM cache}
+\subsection{Strong MRI self-supervision}
 
-Each persistent DataLoader worker owns a bounded least-recently-used cache of decoded raw volumes. The default limit is 256 MB per worker. The cache avoids repeated pydicom decoding when a series is revisited across epochs while avoiding shared-process locks and unbounded RAM growth.
+The strong in-domain MRI self-supervised checkpoint was trained only on the 4,349 non-gold competition studies. It completed eight epochs, 8,000 batches, and 24,000 study draws, corresponding to approximately 5.52 nominal corpus passes. The encoder learned from multiple semantic streams of the same knee and did not use external image weights.
 
-\section{Weak supervision from radiology reports}
+Relative to the random-initialization Stage-1 baseline, the strong SSL initialization improved macro development AUC from 0.4763 to 0.5030.
+
+\subsection{B5 image--report representation alignment}
+
+B5 retained competition-only MRI and aligned image representations with report semantics without using an external language model. Reports were represented using TF--IDF word 1--2 grams followed by truncated SVD and $\ell_2$ normalization. The MRI encoder was initialized from the strong SSL checkpoint and optimized with image--image and image--report alignment objectives.
+
+The completed B5 checkpoint used zero gold studies. A frozen downstream probe yielded
+\begin{equation}
+\mathrm{AUC}_{\mathrm{macro}}=0.5243650851,
+\end{equation}
+with 95\% bootstrap interval $[0.4728108406,0.5761619105]$. B5 became the representation initialization used for direct B6-supervised B7/B7.1/B9 training.
+
+\section{Structured weak supervision from reports}
 \label{sec:reports}
 
-\subsection{Report normalization and grouping}
+\subsection{Four-state target representation}
 
-Reports are converted to lower case, selected Turkish character variants are normalized, Unicode diacritics are stripped, and repeated whitespace is collapsed. A SHA-1 hash of this normalized text defines a \emph{report group}. Identical normalized reports are always kept together when gold folds or cross-fitting roles are assigned. This protects validation against near-trivial duplication of report text.
-
-\subsection{Deterministic multilingual report states}
-
-For every target, the rule teacher searches a multilingual lexicon containing target-specific terminology and common variants in several languages. Local negation expressions and target-dependent positive modifiers are evaluated around each mention. Each target/report pair is assigned one of four states:
+B6 v1.2.1 converts each report/target cell to
 \begin{equation}
-r_{ic}\in\{\mathrm{positive},\mathrm{negated},\mathrm{uncertain},\mathrm{unmentioned}\}.
+r_{ic}\in
+\{\mathrm{positive},\mathrm{negated},\mathrm{uncertain},\mathrm{unmentioned}\}.
 \end{equation}
-Before fold-specific calibration, the deterministic fallback probabilities/confidences are:
+The parser is deterministic and multilingual. Critically, \emph{unmentioned} is not mapped to a negative class. The parser was frozen after its audit; later image-model results are not used to retune its lexical rules.
+
+At confidence threshold 0.75, the report-only training export contains:
 \begin{center}
-\begin{tabular}{lcc}
+\begin{tabular}{lr}
 \toprule
-State & Probability & Confidence \\
+Weak-supervision quantity & Count \\
 \midrule
-positive & 0.92 & 0.80 \\
-negated & 0.06 & 0.80 \\
-uncertain mention & 0.50 & 0.12 \\
-unmentioned & 0.50 & 0.03 \\
+Report-only studies & 4,349 \\
+Active weakly labelled studies & 3,120 \\
+Inactive studies with zero usable cells & 1,229 \\
+Usable target cells & 14,123 \\
+Positive cells & 6,871 \\
+Negated cells & 7,252 \\
+Gold rows in weak-training export & 0 \\
 \bottomrule
 \end{tabular}
 \end{center}
-These values are only fallback weak labels. In production folds, the preferred path is gold-based fold-safe calibration whenever at least the configured minimum number of calibration studies is available.
 
-\subsection{Fold-safe empirical-Bayes calibration}
+The per-target usable counts are given in Table~\ref{tab:b6counts}.
 
-For target $c$, let $\pi_c$ be the prevalence among gold target cells permitted in the current calibration set. It is clipped to $[0.01,0.99]$. For report state $r$ with $n_{cr}$ finite gold observations and $k_{cr}$ positives, the calibrated probability is
-\begin{equation}
-\hat p_{cr}=\frac{k_{cr}+\alpha\pi_c}{n_{cr}+\alpha},
-\label{eq:calibration}
-\end{equation}
-with $\alpha=5$ by default and final clipping to $[0.005,0.995]$. States unseen in calibration fall back to $\pi_c$.
+\begin{table}[ht]
+\centering
+\caption{Frozen B6 v1.2.1 weak-supervision counts.}
+\label{tab:b6counts}
+\begin{tabular}{lrrr}
+\toprule
+Target & Positive & Negated & Usable \\
+\midrule
+ACL & 572 & 1,089 & 1,661 \\
+MCL & 271 & 1,089 & 1,360 \\
+Medial Meniscus & 1,126 & 536 & 1,662 \\
+Lateral Meniscus & 448 & 1,182 & 1,630 \\
+Medial OA & 484 & 334 & 818 \\
+Lateral OA & 402 & 382 & 784 \\
+PF OA & 682 & 372 & 1,054 \\
+Effusion & 1,338 & 757 & 2,095 \\
+Synovitis & 399 & 17 & 416 \\
+Baker's & 557 & 476 & 1,033 \\
+Contusion & 389 & 466 & 855 \\
+Fracture & 203 & 552 & 755 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-Calibration confidence combines the quantity of calibration evidence and the informativeness of that state relative to prevalence. Specifically,
-\begin{align}
-E_{cr} &= \frac{n_{cr}}{n_{cr}+\alpha},\\
-I_{cr} &= \min\left[1,\frac{|\hat p_{cr}-\pi_c|}{\max(\pi_c,1-\pi_c,10^{-6})}\right],\\
-w_{cr} &= E_{cr}I_{cr}.
-\end{align}
-Uncertain states are capped at 0.10 by default. Unmentioned states are capped at 0.0 in the conservative configuration, which implements the positive-unlabeled interpretation directly.
+\subsection{Gold audit and frozen asymmetric policy}
 
-\subsection{Official-label override}
+The B6 parser was audited on the 58 gold studies before direct weak MRI training. Across 251 usable audited cells, the pooled confusion counts were TP=116, TN=80, FP=52, and FN=3. This corresponds to sensitivity 0.9748, specificity 0.6061, positive precision 0.6905, and negative predictive value 0.9639.
 
-Let $\tilde y_{ic}$ and $\tilde w_{ic}$ denote a weak target and confidence. If the official target $y_{ic}^{(g)}$ is finite, the combined training pair becomes
-\begin{equation}
-(y_{ic},w_{ic})=(y_{ic}^{(g)},w_g),
-\end{equation}
-with default $w_g=8$. Otherwise $(y_{ic},w_{ic})=(\tilde y_{ic},\tilde w_{ic})$. This operation occurs per target cell, not per study row.
+The audit motivated one global asymmetric policy, subsequently frozen:
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+B6 state & Soft target & Base weight \\
+\midrule
+positive & 0.85 & 0.50 \\
+negated & 0.05 & 1.00 \\
+uncertain & ignored & 0.00 \\
+unmentioned & ignored & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Target-specific multipliers equalize total effective supervision mass across the twelve targets. No target-specific weights are tuned from later gold AUCs.
 
-\section{Neural architecture}
+\section{Pathology-query MRI classifier}
 \label{sec:model}
 
-\subsection{ConvNeXt-Tiny triplet encoder}
+\subsection{ConvNeXt-Tiny slice encoder}
 
-Every active 2.5D triplet is passed independently through a ConvNeXt-Tiny encoder. The conservative competition configuration sets external pretrained weights to false. The classifier head is removed, leaving the pooled feature vector of dimension $d=768$. Encoder inputs are processed in chunks of at most 24 triplets, and gradient checkpointing is enabled during training to reduce memory pressure.
+Every active 2.5D triplet is encoded by ConvNeXt-Tiny \cite{liu2022convnext}. External pretrained weights are disabled; B7/B7.1/B9 initialize the encoder from the competition-only B5 checkpoint. The final pooled feature dimension is $d=768$.
 
-For stream $k$ and sampled position $s$, let $\mathbf f_{ks}\in\R^d$ be the ConvNeXt feature. Learned slice-position and stream embeddings, $\mathbf p_s$ and $\mathbf e_k$, are added:
+For stream $k$ and sampled position $s$,
 \begin{equation}
-\mathbf h_{ks} = M_k\left(\mathbf f_{ks}+\mathbf p_s+\mathbf e_k\right).
+\mathbf h_{ks}
+=M_k(\mathbf f_{ks}+\mathbf p_s+\mathbf e_k),
 \end{equation}
-For missing streams ($M_k=0$), the resulting tokens remain zero and are marked as padding.
+where $\mathbf f_{ks}$ is the image feature, $\mathbf p_s$ is a learned slice-position embedding, $\mathbf e_k$ is a learned stream embedding, and $M_k$ is the stream presence mask.
 
-\subsection{Cross-sequence MRI Transformer}
+\subsection{Cross-sequence Transformer}
 
-The $K\times S$ features are flattened to $KS$ MRI tokens and passed through a Transformer encoder with two layers, eight attention heads, GELU activation, pre-normalization, feed-forward width $2d$, and dropout 0.25. Padding masks exclude absent-stream tokens. If a pathological empty-study input is encountered, one temporary zero token is exposed to avoid undefined all-masked attention and the contextual result is zeroed afterward.
+The standard B7.1 MRI memory contains
+\begin{equation}
+6\times16=96
+\end{equation}
+tokens. These are processed by a two-layer, eight-head Transformer encoder with pre-normalization, feed-forward width $2d$, and dropout 0.25.
 
 \subsection{Interacting pathology queries}
 
-The model learns twelve pathology embeddings
+Twelve learned pathology embeddings
 \begin{equation}
-Q^{(0)}\in\R^{12\times d}.
+Q^{(0)}\in\R^{12\times d}
 \end{equation}
-A one-layer Transformer encoder first permits target queries to exchange information, producing $Q^{(1)}$. This is useful because knee findings are not statistically independent. Multi-head cross-attention then uses the pathology queries as queries and the MRI tokens as keys/values:
+first interact through a one-layer Transformer. Multi-head cross-attention then uses the pathology tokens as queries and the MRI memory as keys and values:
 \begin{equation}
 A=\operatorname{MHA}(Q^{(1)},H,H).
 \end{equation}
-After a residual connection, layer normalization, and dropout,
+After residual normalization, each pathology token is mapped to one logit,
 \begin{equation}
-Q^{(2)}=\operatorname{Dropout}\left[\operatorname{LN}(Q^{(1)}+A)\right].
-\end{equation}
-Each target has a learned readout vector $\mathbf v_c$ and bias $b_c$,
-\begin{equation}
-z_c = \mathbf v_c^\top Q^{(2)}_c+b_c,
+z_c=\mathbf v_c^\top Q^{(2)}_c+b_c,
 \qquad
 \hat y_c=\sigmoid(z_c).
 \end{equation}
-This produces twelve independent probabilities after shared, target-aware interaction with the entire study.
 
-\section{Optimization and sampling}
-\label{sec:optimization}
+\section{Direct B6-supervised training}
+\label{sec:training}
 
-\subsection{Planned-epoch macro-balanced weighted BCE}
-
-A standard cell-weighted BCE can inadvertently emphasize pathologies that have non-zero weak-label weights in more batches. CNN\_CPC therefore constructs the deterministic batch plan for an epoch before optimization and computes each target's planned total supervision mass
+For logits $z_{ic}$, soft weak targets $y_{ic}$, base weights $w_{ic}$, and target-balance multiplier $m_c$, the training loss is
 \begin{equation}
-D_c=\sum_{i\in\mathcal P} w_{ic},
+L=
+\frac{\sum_{i,c}m_c w_{ic}\,
+\ell_{\mathrm{BCE}}(z_{ic},y_{ic})}
+{\sum_{i,c}m_c w_{ic}}.
 \end{equation}
-where $\mathcal P$ contains all study occurrences in the planned epoch. For a mini-batch $\mathcal B$, the BCE contribution for target $c$ is
+Only positive and negated B6 cells at confidence at least 0.75 contribute.
+
+The retained full-coverage recipe uses:
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+Parameter & Value \\
+\midrule
+Active weak-training studies & 3,120 \\
+Usable cells & 14,123 \\
+Batch size & 2 \\
+Batches per epoch & 1,560 \\
+Study draws per epoch & 3,120 \\
+Epochs & 4 \\
+Encoder learning rate & $10^{-5}$ \\
+Head learning rate & $10^{-4}$ \\
+Minimum learning rate & $10^{-6}$ \\
+Weight decay & $10^{-4}$ \\
+Gradient clipping & 1.0 \\
+Evaluation TTA offsets & $[-1,0,1]$ \\
+Bootstrap replicates & 5,000 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+No gold labels enter the B7/B7.1/B8/B9 training gradient or early stopping. Because the B6 gold audit informed the global weak-label policy, subsequent gold scores remain development estimates.
+
+\section{Controlled experiment ladder}
+\label{sec:experiments}
+
+Table~\ref{tab:ladder} summarizes the completed development ladder.
+
+\begin{table}[ht]
+\centering
+\caption{Measured macro ROC AUC on the 58-study development set.}
+\label{tab:ladder}
+\begin{tabular}{lll}
+\toprule
+ID & Method & Macro AUC \\
+\midrule
+B0 & Random-init Stage-1 & 0.4762536432 \\
+Report teacher & Fold-safe rules + TF--IDF & 0.49245 \\
+B1 & Strong competition-only MRI SSL & 0.5030284974 \\
+B2 & B1 with 0.1$\times$ encoder LR & 0.4993244663 \\
+B3 & Pathology-aware low-capacity MIL & 0.4944652486 \\
+B4 & Frozen SSL + target-wise PCA/LR & 0.5137567459 \\
+B4.1 & Shared probe policy & 0.4847792672 \\
+B4.2 & Pathology-group probe policies & 0.4901328905 \\
+B4.3 & Two-way-CV target selector & 0.4966083942 \\
+B5 & Image--report SSL + frozen probe & 0.5243650851 \\
+B7-v1 & Direct B6 weak supervision & 0.5397724412 \\
+\textbf{B7.1} & \textbf{B7 with complete epoch coverage} & \textbf{0.5644802945} \\
+B5+B7.1 & Fixed 50:50 rank ensemble & 0.5540141184 \\
+B8 & 2x2 spatial anatomy tokens & 0.5300962807 \\
+B9 & Strict semantic routing & pending \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The same 58 studies have supported sequential method development, so Table~\ref{tab:ladder} is not interpreted as a sequence of independent hypothesis tests. Its purpose is to document controlled development choices and their uncertainty.
+
+\section{Measured development results}
+\label{sec:results}
+
+\subsection{B5 representation improvement}
+
+B5 increased the frozen-probe macro AUC from the B4 value of 0.5137567459 to 0.5243650851. The paired B5--B4 bootstrap median difference was $+0.0105821232$ with 95\% interval $[-0.0408197338,+0.0622131599]$ and $P(\mathrm{B5}>\mathrm{B4})=0.656$. The interval crosses zero; the result was retained as a useful representation signal rather than claimed as conclusive superiority.
+
+\subsection{B7-v1 and full-corpus B7.1}
+
+B7-v1 used 500 batches per epoch at batch size 2. Over four epochs it therefore drew 4,000 studies, only approximately 1.28 nominal passes over the 3,120 active weak-training studies. Its macro AUC was
 \begin{equation}
-L_{\mathrm{BCE},c}^{(\mathcal B)}=
-\frac{\sum_{i\in\mathcal B} w_{ic}\,\ell_{\mathrm{BCE}}(z_{ic},y_{ic})}
-{\max(D_c,10^{-8})}.
+0.5397724412,
 \end{equation}
-The batch contribution is scaled by the number of planned batches, and valid target contributions are macro-averaged. Summed over the planned epoch, this gives each pathology comparable optimization influence despite sparse weak supervision.
+with 95\% bootstrap interval $[0.4733481702,0.6035621405]$.
 
-\subsection{Confidence-gated pairwise ranking loss}
-
-Because the evaluation metric is ROC AUC, an auxiliary ranking term encourages high-confidence positives to outrank high-confidence negatives. For target $c$, candidate positives satisfy
+B7.1 changed only the per-epoch coverage:
 \begin{equation}
-y_{ic}\geq0.75,\qquad w_{ic}\geq0.35,
+500\ \mathrm{batches/epoch}\rightarrow1560\ \mathrm{batches/epoch}.
 \end{equation}
-and negatives satisfy
+With batch size 2, each epoch covers all 3,120 active studies and all 14,123 usable weak cells. The four training losses were
 \begin{equation}
-y_{jc}\leq0.25,\qquad w_{jc}\geq0.35.
+0.752419\rightarrow0.665171\rightarrow0.639117\rightarrow0.612758.
 \end{equation}
-Up to 32 pairs per target and batch are sampled. For pair $(i,j)$,
+The B7.1 gold-development result was
 \begin{equation}
-L_{\mathrm{rank},c}^{ij}
-=\min(w_{ic},w_{jc},1)\,\operatorname{softplus}\left[-(z_{ic}-z_{jc})\right].
+\boxed{\mathrm{AUC}_{\mathrm{macro}}=0.5644802945},
 \end{equation}
-The total objective is
+with 95\% bootstrap interval
 \begin{equation}
-L=L_{\mathrm{BCE}}+\lambda_{\mathrm{rank}}L_{\mathrm{rank}},
+[0.5052432984,0.6229422178].
 \end{equation}
-with $\lambda_{\mathrm{rank}}=0.10$ by default. Per-target pair counts are recorded so the contribution of this auxiliary is measured rather than assumed.
 
-\subsection{Trusted/general study sampler}
-
-Studies are divided into a trusted pool and a general pool. The trusted pool contains official-gold studies plus pseudo-labeled studies satisfying the configured trusted confidence criterion (default threshold 0.60). A deterministic two-pool batch sampler targets a trusted fraction of 0.30, uses batch size 2, drops incomplete final batches, and caps each epoch at 300 batches. The sampler also receives the absolute runtime work deadline, so it cannot continue indefinitely after the safe stop point.
-
-\subsection{Optimizer and schedule}
-
-The supervised model is optimized with AdamW using initial learning rate $10^{-4}$ and weight decay $10^{-4}$. A cosine annealing schedule decreases the learning rate toward $10^{-6}$ across the active phase. The production maximum is eight epochs with early-stopping patience two during the selection phase. Gradient norm is clipped to 1.0 after mixed-precision unscaling.
-
-\section{Nested validation and leakage control}
-\label{sec:validation}
-
-\subsection{Balanced gold folds}
-
-Gold studies are first grouped by normalized report hash. Groups are assigned to three folds with a seeded greedy objective that attempts to balance both fold size and target-positive counts over the complete fold matrix. Each fold is explicitly seeded with at least one report group before general assignment, preventing a fold from being starved by the balancing heuristic.
-
-For an outer fold $k$, the default inner fold is
+The paired B7-v1$\rightarrow$B7.1 bootstrap gave median
 \begin{equation}
-k_{\mathrm{inner}}=(k+1)\bmod3.
+\Delta=+0.0241102714,
 \end{equation}
-An explicit validation manifest labels each gold study as \code{outer\_validation}, \code{inner\_selection}, or \code{gold\_train}.
+95\% interval $[-0.0140197876,+0.0660558004]$, and
+$P(\mathrm{B7.1}>\mathrm{B7-v1})=0.8694$.
+The interval still crosses zero.
 
-\subsection{Phase A: epoch-count selection}
+\subsection{B7.1 target-wise performance}
 
-For each outer fold, Phase A trains on data permitted by the selection boundary and evaluates only the inner gold fold. The outer fold is never used to choose training duration. In Stage 1, the non-gold studies reserved for fold-local weak OOF prediction are also excluded from the Phase-A and Phase-B training sets, including their duplicated report groups. In Stage 2, Phase A remains report-only even though a Stage-1 image teacher is mounted; image predictions are explicitly disabled during epoch selection.
+\begin{table}[ht]
+\centering
+\caption{B7.1 target-wise ROC AUC.}
+\label{tab:b71}
+\begin{tabular}{lr}
+\toprule
+Target & AUC \\
+\midrule
+ACL & 0.5159313725 \\
+MCL & 0.4693877551 \\
+Medial Meniscus & 0.5841346154 \\
+Lateral Meniscus & 0.5950310559 \\
+Medial OA & 0.4604651163 \\
+Lateral OA & 0.5764023211 \\
+PF OA & 0.5817245817 \\
+Effusion & 0.6484472050 \\
+Synovitis & 0.6654719235 \\
+Baker's & 0.5452898551 \\
+Contusion & 0.5398110661 \\
+Fracture & 0.5916666667 \\
+\midrule
+Macro & 0.5644802945 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-At the end of every Phase-A epoch, the model is evaluated on the inner fold using the predeclared validation TTA. The selected epoch count is the epoch with maximum finite inner macro AUC. A center-view macro AUC is also recorded for diagnostics, but it does not select the submission TTA policy.
+Target-wise values are descriptive and are not used to select target-specific model winners.
 
-\subsection{Phase B: fresh retraining}
+\subsection{Fixed B5+B7.1 rank ensemble}
 
-The Phase-A model is discarded. Random seeds are reset with a fold-specific offset, GPU cache is cleared when applicable, and a fresh model is initialized. Phase B trains for exactly the selected number of epochs. Its training boundary includes all non-outer gold studies. Stage 1 continues to hold out its fold-specific weak-image subset so that those predictions can be generated cross-fitted; Stage 2 instead uses the safe cross-fitted image teacher only in this fresh retraining phase.
+A single predeclared global 50:50 percentile-rank ensemble was tested. It scored 0.5540141184, below B7.1. The paired median difference (ensemble minus B7.1) was $-0.0105429030$ with 95\% interval $[-0.0523218181,+0.0333886570]$ and $P(\mathrm{ensemble}>\mathrm{B7.1})=0.3054$. The ensemble was rejected and no weight search was performed.
 
-Only after Phase B is complete is the outer fold evaluated. This separation prevents outer performance from influencing the selected number of epochs and prevents Phase-A parameter history from leaking through the final retraining model.
+\subsection{B8 spatial-anatomy experiment}
 
-\subsection{Validation and submission TTA parity}
-
-The default primary validation center offsets are
+B8 initialized from B7.1 and retained a 2x2 ConvNeXt feature grid from each sampled slice, increasing MRI memory from
 \begin{equation}
-\{-1,0,+1\},
+6\times16\times1=96
 \end{equation}
-which are exactly the planned submission offsets. Each view shifts the distributed triplet centers while reusing the same decoded DICOM volume. Probabilities are averaged across views. The center-only prediction is separately saved as \code{oof\_center.csv} for diagnostic comparison. Stage-1 weak OOF predictions use only center offset 0 by default to reduce runtime.
-
-The production policy rejects a configuration in which validation and requested submission TTA differ unless an explicit override is set. This prevents choosing a new inference policy after observing outer labels.
-
-\section{In-domain MRI self-supervision}
-\label{sec:ssl}
-
-Optional self-supervised learning uses only non-gold competition MRI studies in the conservative configuration. It uses the same ConvNeXt slice encoder but adds a projection head of dimension 256 and auxiliary metadata heads.
-
-For each active semantic stream in a mini-batch, the central sampled triplet is encoded to feature $\mathbf f$ and normalized projection $\mathbf z$. Streams originating from the same study are treated as positive pairs in a supervised-contrastive-style objective. With temperature $\tau=0.15$, similarity logits are
+tokens to
 \begin{equation}
-s_{ij}=\frac{\mathbf z_i^\top\mathbf z_j}{\tau},
+6\times16\times4=384
 \end{equation}
-with self-comparisons masked. For each anchor, the log-probability over all same-study positives is averaged.
-
-Two auxiliary heads predict anatomical plane (sagittal, coronal, axial) and semantic sequence type (fluid or structural). The SSL loss is
+tokens per study. It added learned region embeddings and fixed gentle pathology-specific stream/slice attention priors. All four full training passes completed, with weak-training loss
 \begin{equation}
-L_{\mathrm{SSL}}=L_{\mathrm{contrast}}+\lambda_m
-\left[L_{\mathrm{CE}}^{\mathrm{plane}}+L_{\mathrm{CE}}^{\mathrm{sequence}}\right],
+0.670755\rightarrow0.644540\rightarrow0.618696\rightarrow0.599729.
 \end{equation}
-where $\lambda_m=0.25$. Default SSL settings are batch size 4, five sampled positions per series, at most 300 batches per epoch, four epochs, learning rate $2\times10^{-4}$, weight decay $10^{-4}$, and Gaussian noise standard deviation 0.01. The SSL checkpoint records its source as \code{competition\_training\_data}; this provenance is validated before the encoder may be attached when external pretrained artifacts are disabled.
 
-\section{Stage-1 candidate selection}
-\label{sec:stage1selection}
-
-Two Stage-1 candidates are supported in the prescribed workflow: random initialization and competition-data SSL initialization. They are not chosen globally from pooled outer OOF performance. For outer fold $k$, the candidate selector reads \code{foldk/selection.json} from each candidate root and chooses the candidate with the highest \code{inner\_macro\_auc} for that same fold. It deliberately ignores \code{outer\_macro\_auc}.
-
-Candidate folds must agree on the inner fold and validation TTA contract, and each candidate must provide a Stage-1 checkpoint and \code{weak\_oof.csv}. This ensures that Stage 2 receives a teacher selected without looking at the outer target labels that Stage 2 will later evaluate.
-
-\section{Leakage-safe Stage-2 image/report co-training}
-\label{sec:stage2}
-
-\subsection{Cross-fitted non-gold roles}
-
-Every non-gold report group receives a deterministic cross-fit fold computed from the SHA-1 report-group digest modulo the number of folds. For Stage-1 outer fold $k$, non-gold studies whose \code{crossfit\_fold}$=k$ are excluded from that fold's Stage-1 training and are predicted only after Phase B. These predictions form \code{foldk/weak\_oof.csv}. The loader rejects a teacher file containing predictions for unsafe rows or omitting expected rows.
-
-\subsection{Report/image probability fusion}
-
-Let $p_r,w_r$ denote the report probability/confidence and $p_i$ the independent image-teacher probability. When $p_i$ is available, the base Stage-2 probability is
+Despite stable optimization, B8 scored
 \begin{equation}
-p=\beta p_r+(1-\beta)p_i,
+\mathrm{AUC}_{\mathrm{macro}}=0.5300962807,
 \end{equation}
-with $\beta=0.50$. Strong report and image positives are defined by probabilities at least 0.80; strong negatives are at most 0.20. If both teachers agree in one of these high-confidence regions, the weight is set to 0.90. If one is strongly positive and the other strongly negative, the existing weight is capped at 0.05.
-
-A second mechanism permits a very confident image teacher to add modest supervision when the report is effectively silent. If
+with 95\% bootstrap interval $[0.4723014866,0.5867732651]$. Relative to B7.1, the paired bootstrap median was
 \begin{equation}
-p_i\geq0.95\quad\text{or}\quad p_i\leq0.05,
+\Delta_{\mathrm{B8-B7.1}}=-0.0335501423,
 \end{equation}
-the report confidence is at most 0.10, and there is no strong conflict, then
-\begin{equation}
-p=(1-\gamma)p_r+\gamma p_i,
-\end{equation}
-with $\gamma=0.75$, and the confidence is increased to at least 0.20. These image-only cells are not promoted to the high-confidence ranking/trusted criteria merely by this modest BCE weight.
+95\% interval $[-0.0900453633,+0.0223997827]$, and
+$P(\mathrm{B8}>\mathrm{B7.1})=0.1156$.
+B8 was therefore rejected as a replacement for B7.1, and the spatial-prior branch was closed to post-hoc tuning on the same gold set.
 
-\subsection{Stage-2 phase separation}
+\begin{table}[ht]
+\centering
+\caption{B8 target-wise ROC AUC.}
+\label{tab:b8}
+\begin{tabular}{lr}
+\toprule
+Target & AUC \\
+\midrule
+ACL & 0.4767156863 \\
+MCL & 0.4739229025 \\
+Medial Meniscus & 0.6045673077 \\
+Lateral Meniscus & 0.5801242236 \\
+Medial OA & 0.5317829457 \\
+Lateral OA & 0.4100580271 \\
+PF OA & 0.5135135135 \\
+Effusion & 0.5788819876 \\
+Synovitis & 0.5818399044 \\
+Baker's & 0.5181159420 \\
+Contusion & 0.5249662618 \\
+Fracture & 0.5666666667 \\
+\midrule
+Macro & 0.5300962807 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-Stage-2 Phase A selects its epoch count using report supervision only. The image teacher is enabled only in the fresh Phase-B retraining set. This prevents image-derived labels from indirectly altering the inner epoch choice. Stage 2 does not export a new \code{weak\_oof.csv} because its relevant cross-fitted weak rows have entered the Phase-B training set. Instead, \code{stage2\_supervision.json} records, target by target, report-supervised cells, final Stage-2 supervised cells, zero-to-nonzero weight transitions, high-confidence cells, and probability changes.
+\subsection{B9 strict semantic routing: predeclared active experiment}
 
-\section{Runtime protection and execution policy}
-\label{sec:runtime}
+The strict-routing hypothesis was derived from the label-free metadata audit in Table~\ref{tab:routing}, not from selecting target-wise winners on the gold set. B9 returns to the B7.1 architecture and B5 initialization. The only scientific change is exact \code{Fluid\_Sensitive} routing with no cross-contrast substitution. B6 labels, target balancing, augmentation, learning rates, four full passes, TTA, and bootstrap policy remain unchanged.
 
-\subsection{Single-GPU contract}
-
-Competition mode requires exactly one requested GPU. DICOM/data work may use CPU multiprocessing, but no DDP or \code{torchrun} path is used. External pretrained weights are disabled by default. The production software budget is 8.5 hours, strictly below the configured nine-hour ceiling, with a 10-minute final reserve.
-
-\subsection{Hard and work deadlines}
-
-If $T_{\max}$ is the configured maximum runtime and $T_r$ the reserve, the budget defines
-\begin{align}
-T_{\mathrm{hard}} &= T_0+T_{\max},\\
-T_{\mathrm{work}} &= T_{\mathrm{hard}}-T_r.
-\end{align}
-New work is permitted only if the remaining time exceeds the estimated task time plus reserve. The same absolute work deadline is passed to the sampler, so direct Python calls and CLI runs obey the same stop condition.
-
-\subsection{Remaining-work estimator}
-
-After inner validation produces a measured inference time per study, the finish estimator reserves time for outer OOF prediction, Stage-1 weak OOF prediction when applicable, bootstrap evaluation, serialization, and loader startup. The baseline seconds-per-study estimate is lower-bounded by 0.25 s and multiplied by a default inference safety factor 1.75. Before starting fresh Phase B, the code additionally reserves 1.15 times the measured epoch duration for the selected number of retraining epochs.
-
-The default fixed reserves are 120 s for bootstrap, 180 s for serialization, 120 s for loader startup, and an initial prediction-batch guard of 180 s. If the complete remaining path cannot fit safely, selection ends early rather than consuming the time required to finish the run.
-
-\section{Preflight and full data audit}
-\label{sec:audit}
-
-Before long training runs, a strict sampled preflight decodes representative selected series. The default sample size is 24 studies with maximum accepted study-level and file-level decode-failure rates of 0.05. The full audit then evaluates the complete selected training surface using CPU multiprocessing.
-
-The audit records report-state coverage, teacher confidence, balanced-gold fold composition, selected/missing streams, every selected series' decode outcome, and partial DICOM file failures. The production thresholds include a maximum global selected-file failure rate of 0.02 and a maximum per-series partial failure rate of 0.20. Incomplete or threshold-violating audits are hard failures. The purpose is to discover codec, corruption, path, or routing problems before GPU time is consumed.
+At the present manuscript snapshot, B9 training is active and its gold evaluation has not been performed. No B9 AUC is therefore reported. The frozen comparison will be B7.1 versus B9 using the aligned 58 studies and 5,000 paired study-level bootstrap replicates.
 
 \section{Statistical evaluation}
 \label{sec:evaluation}
 
-\subsection{Per-target and macro ROC AUC}
-
-The evaluation code joins OOF predictions to the raw official target matrix and retains target-wise NaNs. For each target with at least one positive and one negative finite label, ROC AUC is computed from average ranks with tie handling. Undefined target AUCs remain NaN. The macro score is the mean over finite target AUCs,
+For each target with both classes represented, ROC AUC is computed and the primary score is
 \begin{equation}
-\mathrm{AUC}_{\mathrm{macro}}=
-\frac{1}{|\mathcal C^*|}\sum_{c\in\mathcal C^*}\mathrm{AUC}_c,
+\mathrm{AUC}_{\mathrm{macro}}
+=\frac{1}{12}\sum_{c=1}^{12}\mathrm{AUC}_c.
 \end{equation}
-where $\mathcal C^*$ is the set of defined target metrics.
+All twelve target AUCs are defined on the current 58-study gold set.
 
-\subsection{Study-level bootstrap}
-
-Uncertainty is estimated by resampling complete studies with replacement. The default is 2,000 bootstrap replicates with seed 2026. Each replicate recomputes macro AUC with the same NaN-safe logic. A percentile 95\% confidence interval is reported from finite replicates. The result also records how many bootstrap replicates yielded a defined macro score.
-
-\subsection{Paired comparison}
-
-For controlled comparisons, the same sampled study indices are applied to model A and model B. For bootstrap replicate $b$,
+Uncertainty is estimated with study-level bootstrap resampling. Current B7/B8/B9 development evaluation uses 5,000 replicates. For paired comparison of models $A$ and $B$, the same resampled study indices are applied to both prediction matrices:
 \begin{equation}
-\Delta_b=\mathrm{AUC}_{B,b}-\mathrm{AUC}_{A,b}.
+\Delta_b=
+\mathrm{AUC}_{B,b}-\mathrm{AUC}_{A,b}.
 \end{equation}
-The output includes the median $\Delta$, its 2.5th--97.5th percentile interval, the fraction of valid replicates with $\Delta>0$, and the number of valid replicates. Once an outer OOF comparison is used to choose the final algorithm, that OOF estimate is described as model-selection cross-validation rather than a pristine independent estimate.
+We report the median difference, percentile 95\% interval, and fraction of valid replicates with $\Delta_b>0$.
 
-\section{Checkpoint identity and final inference}
-\label{sec:inference}
+Because the 58 studies have informed repeated development decisions, these bootstrap intervals quantify sampling variability within the current development surface; they do not restore independent-test status.
 
-Each checkpoint stores the model state, complete model specification, stream order, saved training configuration, outer fold, inner fold, stage, selected epoch, inner score, validation TTA offsets, and Stage-1 teacher source when relevant. Final ensemble inference requires exactly the configured fold set (three folds by default), no duplicate/missing folds, one common checkpoint stage, identical model specifications, the fixed six-stream order, and validation TTA offsets exactly matching the requested submission TTA.
+\section{Runtime and reproducibility}
+\label{sec:runtime}
 
-Test data are loaded image-only. Missing series metadata are repaired, semantic routing is repeated, and strict DICOM decoding is enabled by default. All requested TTA center views are constructed from one decoded volume. For each view, predictions are averaged across fold models and then across views.
+The conservative execution path uses one GPU and CPU multiprocessing for DICOM/data loading. External image pretraining is disabled. Long experiments use an 8.5-hour software budget with a 10-minute reserve. Checkpoints are written after completed epochs and record variant identity, model specification, source checkpoint provenance, B6 version, supervision policy, training history, and zero-gold-gradient certification.
 
-The inference loop also enforces a batch-level wall-clock guard. After the first batch, projected total TTA cost is estimated. If multi-view inference cannot safely finish and \code{allow\_tta\_fallback} is enabled, the software may switch to the center view and records that event. Otherwise it fails rather than silently generating an incomplete submission. The final table is validated to contain exactly \code{StudyInstanceUID} followed by the twelve target columns, unique studies, finite values, and probabilities in $[0,1]$. Competition mode requires the filename \code{submission.csv}.
+The principal full-coverage B7.1 experiment completed in approximately 2.05 hours on the verified local GPU environment. B8, with four times as many MRI memory tokens, required approximately 3.14 hours. Runtime is reported as an implementation property rather than a predictive metric.
 
-\section{Reproducibility and generated artifacts}
-\label{sec:reproducibility}
+Random seeds are derived from base seed 2026. Bitwise determinism across all accelerated kernels is not claimed, but experiment variants, supervision contracts, routing policy, and checkpoint identity are explicitly serialized.
 
-Python, NumPy, and PyTorch RNGs are seeded from a base seed of 2026 plus deterministic fold/phase offsets. Worker-local NumPy center jitter is derived from the worker-local PyTorch RNG. This provides repeatable data sampling for fixed software, seeds, worker counts, and hardware settings, although bitwise determinism of all accelerated GPU kernels is not claimed.
-
-A successful Stage-1 fold writes at least:
-\begin{itemize}
-\item \code{best.pt}: self-describing final Phase-B checkpoint;
-\item \code{oof.csv}: primary outer TTA predictions;
-\item \code{oof\_center.csv}: center-only diagnostic predictions;
-\item \code{weak\_oof.csv}: cross-fitted non-gold image teacher;
-\item \code{selection.json}: inner/outer scores, selected epoch, stage, and TTA contract;
-\item \code{history.csv}: Phase-A and Phase-B optimization history;
-\item \code{training\_diagnostics.json}: target-wise ranking and supervision utilization;
-\item \code{supervision\_plan.json}: target-wise target/weight summaries;
-\item \code{sampling.json}: trusted/general and cross-fit row counts;
-\item \code{bootstrap.json}: outer macro-AUC uncertainty;
-\item \code{runtime.json}: device, timings, memory, budget, and prediction statistics;
-\item fold assignments, metadata repair, preflight, calibration, and configuration records.
-\end{itemize}
-Stage 2 adds \code{stage2\_supervision.json} and intentionally omits \code{weak\_oof.csv}.
-
-\section{Installation and command-line workflow}
+\section{Installation and current workflow}
 \label{sec:usage}
 
-A clean Conda setup is:
+A clean installation is:
 \begin{verbatim}
 git clone https://github.com/mtalafha90/CNN_CPC.git
 cd CNN_CPC
@@ -535,292 +609,60 @@ python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e .
 python -m pip install pytest pillow
 pytest -q
-python -m rsna_knee.cli --help
 \end{verbatim}
 
-After defining \code{DATA\_ROOT} and creating a machine-local configuration, the prescribed real-data sequence is:
+The current package exposes dedicated B7, B8, and B9 training/evaluation entry points. The active B9 run is launched with:
 \begin{verbatim}
-rsna-knee inspect --data-root "$DATA_ROOT"
-rsna-knee preflight --data-root "$DATA_ROOT" --split train ...
-rsna-knee audit --config configs/train_local.yaml --out-dir runs/audit
-rsna-knee validation-manifest --config configs/train_local.yaml --fold 0 ...
-rsna-knee train --config configs/train_local.yaml --fold 0 --smoke
-rsna-knee train --config configs/train_local.yaml --fold 0
-rsna-knee train --config configs/train_local.yaml --fold 1
-rsna-knee train --config configs/train_local.yaml --fold 2
-rsna-knee pretrain --config configs/train_local.yaml
-rsna-knee select-stage1 ...
-rsna-knee train --config configs/train_local_stage2.yaml --fold 0
-rsna-knee train --config configs/train_local_stage2.yaml --fold 1
-rsna-knee train --config configs/train_local_stage2.yaml --fold 2
-rsna-knee evaluate ...
-rsna-knee infer ... --out submission.csv
+rsna-knee-b9 \
+  --config configs/b9_strict_routing.yaml \
+  --data-root "$DATA_ROOT" \
+  --b5-checkpoint runs/b5_report_ssl/b5_encoder.pt \
+  --b6-root runs/b6_report_labels_v121 \
+  --out-root runs/b9_strict_routing
 \end{verbatim}
-The full terminal procedure, including environment creation and result inspection, is maintained in \code{docs/TRAINING\_FROM\_ZERO.md}.
 
-\section{Software verification}
-\label{sec:verification}
-
-The repository test suite covers data contracts, target handling, report-label behavior, fold separation, model forward/checkpoint round trips, inference stage/fold/TTA identity, multiprocessing DataLoader behavior, synthetic DICOM end-to-end training, and external DICOM fixture validation. A committed four-study technical fixture includes source-supported examples of ACL rupture, medial meniscus abnormality, Baker cyst with ACL rupture, and an unlabeled reference MRI slice. Each source JPEG is wrapped into a seven-frame $384\times384$ multi-frame DICOM solely to exercise real-pixel decoding/routing code paths. The fixture is explicitly excluded from scientific validation because repeated frames from a published single slice do not constitute a real MRI volume.
-
-The local fixture regression test and strict external preflight require zero DICOM/file failures. Full competition-data robustness is not inferred from this fixture; it is established only by the full official-data audit described in Section~\ref{sec:audit}.
-
-\section{Production configuration}
-\label{sec:config}
-
-Table~\ref{tab:config} summarizes the principal defaults in \code{configs/train.yaml}.
-
-\begin{table}[ht]
-\centering
-\caption{Principal production settings.}
-\label{tab:config}
-\begin{tabular}{ll}
-\toprule
-Setting & Default \\
-\midrule
-Gold folds & 3 \\
-Random seed & 2026 \\
-Requested GPUs & 1 \\
-Runtime budget & 8.5 h \\
-Final reserve & 10 min \\
-External pretrained weights & disabled \\
-MRI streams & 6 \\
-Sampled positions/stream & 16 \\
-Triplet channels & 3 \\
-Image size & $224\times224$ \\
-Batch size & 2 \\
-Encoder chunk size & 24 triplets \\
-Gradient checkpointing & enabled \\
-Transformer layers/heads & 2 / 8 \\
-Transformer FF multiplier & 2.0 \\
-Pathology interaction layers & 1 \\
-Dropout & 0.25 \\
-Supervised epochs (maximum) & 8 \\
-Max. batches/epoch & 300 \\
-Early-stop patience & 2 \\
-Learning rate / minimum & $10^{-4}/10^{-6}$ \\
-Weight decay & $10^{-4}$ \\
-Gold cell weight & 8.0 \\
-Unmentioned report weight & 0.0 \\
-Uncertain weight cap & 0.10 \\
-Ranking loss weight & 0.10 \\
-Ranking pairs/target & 32 \\
-Trusted fraction & 0.30 \\
-Trusted pseudo threshold & 0.60 \\
-Validation/submission TTA offsets & $[-1,0,1]$ \\
-Weak OOF TTA offsets & $[0]$ \\
-Bootstrap replicates & 2000 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\section{Results and production measurements}
-\label{sec:results}
-
-This section is intentionally structured before the experiments so that the reported analysis follows the predeclared workflow. Values must be populated from committed run artifacts; placeholders must not be replaced by estimates.
-
-\subsection{Official-data inspection and audit}
-
-\begin{table}[ht]
-\centering
-\caption{Real-data audit summary. Values will be read from the official-data inspection and \code{runs/audit/audit.json}.}
-\label{tab:audit}
-\begin{tabular}{lr}
-\toprule
-Quantity & Value \\
-\midrule
-Training studies & \todoresult{inspect output} \\
-Gold studies & \todoresult{inspect output} \\
-Non-gold studies & \todoresult{inspect output} \\
-Series rows & \todoresult{inspect output} \\
-Selected series & \todoresult{audit} \\
-Missing semantic streams & \todoresult{audit} \\
-Global DICOM file-decode failure rate & \todoresult{audit} \\
-Series exceeding partial-failure gate & \todoresult{audit} \\
-Metadata fields repaired & \todoresult{audit} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The audit should also report report-state counts and calibrated-confidence distributions for all twelve targets. Particular attention should be paid to targets for which the deterministic report teacher provides very little high-confidence supervision.
-
-\subsection{Gold fold composition}
-
-\begin{table}[ht]
-\centering
-\caption{Gold nested-validation composition. Target-specific positive counts should be added from the generated manifests/audit.}
-\label{tab:folds}
-\begin{tabular}{lccc}
-\toprule
- & Fold 0 & Fold 1 & Fold 2 \\
-\midrule
-Gold studies & \todoresult{n0} & \todoresult{n1} & \todoresult{n2} \\
-Unique report groups & \todoresult{g0} & \todoresult{g1} & \todoresult{g2} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Stage-1 random initialization}
-
-\begin{table}[ht]
-\centering
-\caption{Stage-1 random-initialization results. Values come from each fold's \code{selection.json}, \code{bootstrap.json}, and \code{runtime.json}.}
-\label{tab:stage1random}
-\begin{tabular}{lccccc}
-\toprule
-Fold & Selected epoch & Inner AUC & Outer AUC & 95\% CI & Runtime (h) \\
-\midrule
-0 & \todoresult{f0 epoch} & \todoresult{f0 inner} & \todoresult{f0 outer} & \todoresult{f0 CI} & \todoresult{f0 time} \\
-1 & \todoresult{f1 epoch} & \todoresult{f1 inner} & \todoresult{f1 outer} & \todoresult{f1 CI} & \todoresult{f1 time} \\
-2 & \todoresult{f2 epoch} & \todoresult{f2 inner} & \todoresult{f2 outer} & \todoresult{f2 CI} & \todoresult{f2 time} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The combined three-fold random Stage-1 macro AUC will be reported as \todoresult{random combined macro AUC and 95\% CI}. Training diagnostics should be inspected for actual ranking-pair counts and target-wise supervision mass before attributing any performance change to the auxiliary ranking term.
-
-\subsection{In-domain SSL and nested Stage-1 candidate choice}
-
-The SSL pretraining history should report completed epochs, batches, loss, and wall-clock limitation status. The downstream SSL-initialized folds are evaluated under the same nested fold and TTA policy as random initialization.
-
-\begin{table}[ht]
-\centering
-\caption{Leakage-safe Stage-1 candidate selection. The selected candidate for each outer fold is determined by that fold's inner AUC only.}
-\label{tab:selection}
-\begin{tabular}{lcccc}
-\toprule
-Outer fold & Random inner AUC & SSL inner AUC & Selected candidate & Selected inner AUC \\
-\midrule
-0 & \todoresult{random} & \todoresult{ssl} & \todoresult{choice} & \todoresult{score} \\
-1 & \todoresult{random} & \todoresult{ssl} & \todoresult{choice} & \todoresult{score} \\
-2 & \todoresult{random} & \todoresult{ssl} & \todoresult{choice} & \todoresult{score} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Outer AUCs may be shown for scientific diagnostics, but they must not be described as inputs to Table~\ref{tab:selection}.
-
-\subsection{Stage-2 added supervision}
-
-\begin{table}[ht]
-\centering
-\caption{Stage-2 image-teacher supervision. Values should be summarized from \code{stage2\_supervision.json}.}
-\label{tab:stage2supervision}
-\begin{tabular}{lccc}
-\toprule
-Target & Report nonzero cells & Stage-2 nonzero cells & Zero-to-nonzero additions \\
-\midrule
-ACL & \todoresult{} & \todoresult{} & \todoresult{} \\
-MCL & \todoresult{} & \todoresult{} & \todoresult{} \\
-Medial Meniscus & \todoresult{} & \todoresult{} & \todoresult{} \\
-Lateral Meniscus & \todoresult{} & \todoresult{} & \todoresult{} \\
-Medial OA & \todoresult{} & \todoresult{} & \todoresult{} \\
-Lateral OA & \todoresult{} & \todoresult{} & \todoresult{} \\
-PF OA & \todoresult{} & \todoresult{} & \todoresult{} \\
-Effusion & \todoresult{} & \todoresult{} & \todoresult{} \\
-Synovitis & \todoresult{} & \todoresult{} & \todoresult{} \\
-Baker's & \todoresult{} & \todoresult{} & \todoresult{} \\
-Contusion & \todoresult{} & \todoresult{} & \todoresult{} \\
-Fracture & \todoresult{} & \todoresult{} & \todoresult{} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Final per-target OOF performance}
-
-\begin{table}[ht]
-\centering
-\caption{Final outer-OOF ROC AUC by pathology.}
-\label{tab:targetauc}
-\begin{tabular}{lc}
-\toprule
-Target & AUC \\
-\midrule
-ACL & \todoresult{} \\
-MCL & \todoresult{} \\
-Medial Meniscus & \todoresult{} \\
-Lateral Meniscus & \todoresult{} \\
-Medial OA & \todoresult{} \\
-Lateral OA & \todoresult{} \\
-PF OA & \todoresult{} \\
-Effusion & \todoresult{} \\
-Synovitis & \todoresult{} \\
-Baker's & \todoresult{} \\
-Contusion & \todoresult{} \\
-Fracture & \todoresult{} \\
-\midrule
-Macro AUC & \todoresult{macro AUC with 95\% CI} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The primary TTA-vs-center diagnostic should report the paired bootstrap change in macro AUC as \todoresult{TTA minus center median difference, CI, and probability of improvement}. This comparison is diagnostic because the TTA policy was fixed before outer evaluation.
-
-\subsection{Stage-2 versus nested-selected Stage 1}
-
-The final paired bootstrap comparison will report
-\begin{equation*}
-\Delta_{\mathrm{Stage2-Stage1}}=
-\todoresult{median macro-AUC difference and 95\% interval}.
-\end{equation*}
-The fraction of valid paired bootstrap replicates favoring Stage 2 will be \todoresult{probability Stage 2 better}. If this outer comparison is used to choose the final submission stage, the resulting OOF score is explicitly treated as model-selection CV.
-
-\subsection{Runtime and resource use}
-
-\begin{table}[ht]
-\centering
-\caption{Measured runtime/resource summary from \code{runtime.json}.}
-\label{tab:runtime}
-\begin{tabular}{lccc}
-\toprule
-Run & Elapsed (h) & Peak GPU memory & Budget-limited? \\
-\midrule
-Stage-1 fold 0 & \todoresult{} & \todoresult{} & \todoresult{} \\
-Stage-1 fold 1 & \todoresult{} & \todoresult{} & \todoresult{} \\
-Stage-1 fold 2 & \todoresult{} & \todoresult{} & \todoresult{} \\
-SSL & \todoresult{} & \todoresult{} & \todoresult{} \\
-Stage-2 fold 0 & \todoresult{} & \todoresult{} & \todoresult{} \\
-Stage-2 fold 1 & \todoresult{} & \todoresult{} & \todoresult{} \\
-Stage-2 fold 2 & \todoresult{} & \todoresult{} & \todoresult{} \\
-Final inference & \todoresult{} & \todoresult{} & \todoresult{} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Competition submission}
-
-After the final method is frozen, the three stage-consistent checkpoints are ensembled and \code{submission.csv} is produced by the strict inference path. The public/private competition score, if disclosure is appropriate, will be reported here as \todoresult{leaderboard score/rank/date}. No leaderboard number is claimed in the present pre-experiment draft.
+After four complete epochs and artifact inspection, the frozen gold evaluation is:
+\begin{verbatim}
+rsna-knee-b9-eval \
+  --config configs/b9_strict_routing.yaml \
+  --data-root "$DATA_ROOT" \
+  --checkpoint runs/b9_strict_routing/b9_model.pt \
+  --out-root runs/b9_strict_routing/gold_eval
+\end{verbatim}
 
 \section{Discussion}
 \label{sec:discussion}
 
-The main methodological strength of CNN\_CPC is that weak supervision, image modeling, and evaluation are designed together. The report is not treated as ground truth: state-specific probabilities are calibrated only from permissible gold cases, confidence explicitly depends on information beyond prevalence, and silence carries zero weight by default. The nested Phase-A/Phase-B design further prevents outer labels from controlling the number of training epochs. Stage-1 random-versus-SSL choice is performed independently inside each outer fold using only the inner score, and the Stage-2 image teacher is cross-fitted at the non-gold study level.
+The experiment ladder highlights three recurring lessons. First, representation quality matters: competition-only MRI self-supervision and later image--report alignment both improved the development point estimate over the random baseline. Second, direct pathology-specific weak supervision was more useful than representation alignment alone. B7-v1 improved on B5, and the B7.1 full-coverage correction produced the strongest standalone development point estimate to date. Third, additional architectural complexity is not automatically beneficial. B8 optimized smoothly but generalized worse than the simpler globally pooled B7.1 model.
 
-The imaging design also avoids several common shortcuts. Series routing uses provided/repaired sequence metadata, missing acquisitions are represented by masks, DICOM slices use spatial geometry when available, and the model can integrate six distinct acquisition roles rather than reducing every examination to one sequence per plane. Distributed 2.5D sampling provides more anatomical coverage than a single central slice while remaining substantially cheaper than a dense 3D convolutional volume model. The pathology-query head allows target-specific attention while retaining interactions among related findings.
+The routing audit adds a distinct lesson. Semantic stream embeddings are useful only if the upstream acquisition assignment is semantically consistent. A model told that an image is ``axial structural'' while the metadata identify it as fluid-sensitive receives contradictory supervision at the representation level. The historical selector created this contradiction in 552 selected streams. Strict routing deliberately accepts more missing streams in exchange for cleaner semantic identity. Whether that trade-off improves predictive AUC remains an empirical question reserved for B9's frozen evaluation.
 
-A second strength is operational reproducibility. The code records fold roles, calibration tables, supervision mass, ranking-pair use, selected epochs, checkpoint contracts, runtime estimates, bootstrap uncertainty, and TTA policy. In a time-limited environment this instrumentation is part of the scientific method: an experiment that terminates before weak OOF generation or serialization cannot be interpreted in the same way as a completed run.
+The weak-label audit also shows why report supervision must be asymmetric. Negated report findings had high negative predictive value, whereas positive mentions were noisier relative to challenge labels. B7 therefore downweights positive weak cells globally rather than pretending all report-derived labels are equally reliable. Importantly, target-specific weights are not tuned after observing target AUCs.
 
-Several limitations must nevertheless be stated. First, the trusted gold set is small, so even nested cross-validation and bootstrap intervals may remain statistically wide, especially for rare targets. Second, the report teacher is deterministic and lexicon-based; multilingual wording, unusual negation, and contextual findings can be missed. Third, the six-slot router is metadata-driven rather than learned end to end. Fourth, 2.5D triplets do not encode the full volumetric geometry available to a true 3D network. Fifth, Stage-2 improvements depend on the accuracy and calibration of cross-fitted Stage-1 predictions. Sixth, emergency TTA fallback can alter the final inference policy if the runtime projection is unsafe, although this event is logged and can be disabled. Finally, the current implementation is competition/research software and has not undergone clinical validation, prospective testing, or regulatory assessment.
+Several limitations remain. The 58-study development set is very small and has been reused across a long experiment campaign, so apparent improvements may be unstable and selection-biased. B6 is a deterministic report parser and can miss unusual multilingual phrasing or contextual nuance. The six-stream representation remains metadata-driven rather than learned end to end. The 2.5D input does not preserve complete volumetric geometry. Physical pixel spacing is not explicitly normalized before resizing to $224\times224$, leaving scanner/protocol scale variation as a possible domain-shift source. Finally, no current result should be interpreted as a hidden-test or clinical-performance claim.
 
-Future work should evaluate learned sequence selection, calibrated language-model report teachers, richer self-supervised objectives, efficient 3D or hybrid 2.5D/3D encoders, uncertainty-aware teacher fusion, and larger external clinical validation sets. Such extensions should retain the same fold-safe and checkpoint-identity principles established here.
+Future work should prioritize improvements that can be justified without target-wise post-hoc tuning: scanner/physical-scale normalization, stronger competition-only representation learning, robust self-training with independent teachers, pathology-family specialists trained under predeclared rules, denser or adaptive slice sampling, and efficient 3D or hybrid 2.5D/3D representations. External validation and an actual competition submission are necessary to establish generalization beyond the current development surface.
 
 \section{Conclusions}
 \label{sec:conclusion}
 
-CNN\_CPC provides an end-to-end framework for weakly supervised multi-sequence knee MRI classification in a setting where trustworthy structured labels are scarce. The software couples robust DICOM handling and semantic routing with distributed 2.5D ConvNeXt features, Transformer-based cross-sequence fusion, pathology-specific queries, calibrated report supervision, metric-aligned optimization, nested retraining, competition-data SSL, and leakage-safe image/report co-training. Equally importantly, the implementation treats validation boundaries, runtime completion, artifact provenance, and inference identity as first-class components of the model. The manuscript has been structured so that the real-data audit and production results can be inserted directly from generated artifacts without changing the predeclared methodology.
+CNN\_CPC provides a reproducible framework for weakly supervised multi-sequence knee MRI classification under severe label scarcity. The retained pipeline combines robust DICOM handling, six semantic MRI streams, distributed 2.5D ConvNeXt features, cross-sequence Transformer fusion, interacting pathology queries, competition-only representation initialization, and conservative structured report supervision. On the repeatedly used 58-study development set, complete weak-corpus coverage produced the current best standalone point estimate, macro ROC AUC 0.5645, while a more complex spatial-token architecture decreased performance to 0.5301 and was rejected.
+
+A subsequent label-free metadata audit exposed cross-contrast sequence substitution in the historical six-stream selector, motivating the current B9 strict-routing experiment. B9 is deliberately evaluated as a separate predeclared development variant, and no predictive result is claimed until its frozen training and gold evaluation are complete. This separation between measured evidence, active hypotheses, and unresolved validation is a central design principle of the software.
 
 \section*{Code availability}
-The source code and documentation are available at \url{https://github.com/mtalafha90/CNN_CPC}. A formal open-source license must be selected before journal submission. Competition data are distributed separately by the competition organizer and are not redistributed by this repository.
+The source code, experiment documentation, and configurations are available at
+\url{https://github.com/mtalafha90/CNN_CPC}. Competition data are distributed separately by the organizer and are not redistributed by the repository. A formal open-source license should be selected before journal submission.
 
 \section*{Acknowledgements}
-The author acknowledges the University of Sharjah and the Research Institute of Sciences and Engineering for research support and computational facilities. The RSNA Knee Abnormality Detection competition organizers are acknowledged for providing the challenge data and evaluation framework. % Adapt this text before submission if additional institutional acknowledgements are required.
+The author acknowledges the University of Sharjah and the Research Institute of Sciences and Engineering for research support and computational facilities. The RSNA Knee Abnormality Detection competition organizers are acknowledged for providing the challenge data and evaluation framework.
 
 \appendix
 
-\section{Exact production targets and semantic stream order}
+\section{Fixed target and stream order}
 \label{app:contracts}
 
-The checkpoint/inference target order is fixed as:
+The target order is:
 \begin{verbatim}
 ACL
 MCL
@@ -835,7 +677,8 @@ Baker's
 Contusion
 Fracture
 \end{verbatim}
-The semantic stream order is fixed as:
+
+The semantic stream order is:
 \begin{verbatim}
 sagittal_fluid
 sagittal_structural
@@ -844,25 +687,27 @@ coronal_structural
 axial_fluid
 axial_structural
 \end{verbatim}
-Changing either ordering without retraining violates the checkpoint contract.
 
-\section{Recommended experimental reporting checklist}
+Changing either ordering without corresponding retraining violates the checkpoint contract.
+
+\section{Current experiment reporting checklist}
 \label{app:checklist}
 
-Before replacing any Results placeholder, verify the following:
+Before promoting a new candidate:
 \begin{enumerate}
-\item the full official-data audit completed without gate violations;
-\item fold manifests contain non-empty outer and inner gold sets;
-\item fold-0 and remaining smoke runs completed before production runs;
-\item \code{oof.csv} uses the predeclared submission-matched TTA;
-\item random-versus-SSL fold choices came from \code{inner\_macro\_auc} only;
-\item Stage-2 teacher files contain exactly the expected cross-fit rows;
-\item all reported AUCs are calculated from official finite gold target cells;
-\item confidence intervals record the number of usable bootstrap replicates;
-\item runtime tables are taken from \code{runtime.json}, not manual estimates;
-\item final inference uses exactly folds $\{0,1,2\}$ from one checkpoint stage;
-\item any automatic TTA fallback is explicitly disclosed;
-\item leaderboard results are dated and clearly separated from OOF results.
+\item verify the exact experiment variant and checkpoint provenance;
+\item confirm that all predefined epochs completed without budget limiting;
+\item confirm the expected number of study draws and usable weak cells per epoch;
+\item verify that no gold studies entered the gradient or early stopping;
+\item inspect the routing audit and metadata-repair records;
+\item run the predeclared TTA policy without target-specific adjustment;
+\item compute the macro AUC and target-wise AUCs on aligned gold studies;
+\item report study-level bootstrap uncertainty;
+\item use paired bootstrap for direct candidate comparisons;
+\item do not select target-specific post-hoc winners;
+\item do not optimize ensemble weights on the same 58 studies;
+\item label all current 58-study scores as development/model-selection estimates;
+\item separate any future leaderboard score from the development table.
 \end{enumerate}
 
 \begin{thebibliography}{00}
@@ -886,11 +731,6 @@ Advances in Neural Information Processing Systems 30 (2017).
 A. Paszke, S. Gross, F. Massa, A. Lerer, J. Bradbury, G. Chanan, T. Killeen, Z. Lin, N. Gimelshein, L. Antiga, et al.,
 PyTorch: An imperative style, high-performance deep learning library,
 Advances in Neural Information Processing Systems 32 (2019).
-
-\bibitem{loshchilov2019adamw}
-I. Loshchilov, F. Hutter,
-Decoupled weight decay regularization,
-International Conference on Learning Representations (2019).
 
 \bibitem{chen2020simclr}
 T. Chen, S. Kornblith, M. Norouzi, G. Hinton,
