@@ -1,33 +1,47 @@
 # Modeling strategy
 
-> **Snapshot: 2026-08-09.** Canonical measured results are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). B5 image-report representation training has completed all four predefined epochs; its frozen B4 probe is pending, so it has no OOF score yet.
+> **Snapshot: 2026-08-10.** Canonical measured results are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). **B7.1 full-corpus weak supervision is the current best standalone development model at macro AUC `0.5644802945`. B8 spatial-anatomy learning is implemented and currently training; no B8 gold score is recorded yet.**
 
 ## Core principle
 
-`CNN_CPC` treats the challenge as a **weakly supervised multi-sequence MRI problem with a tiny trusted gold set**. The strategy prioritizes supervision quality, leakage control, metric alignment, representation quality and runtime discipline before increasing model scale.
+`CNN_CPC` treats the challenge as a **weakly supervised multi-sequence MRI problem with a tiny trusted development set**. The strategy prioritizes supervision quality, leakage control, metric alignment, representation quality, pathology-specific evidence extraction and runtime discipline before increasing model scale.
 
-The verified release contains 4,407 training studies, of which only 58 are fully gold-labelled and 4,349 are report-only.
+Verified release:
 
-## What the completed experiments now show
+```text
+training studies       4407
+gold studies             58
+report-only studies     4349
+targets                   12
+```
+
+## What the experiment ladder now shows
 
 | Candidate | Macro AUC | Interpretation |
 |---|---:|---|
 | B0 random | `0.4763` | weak baseline |
 | B1 strong MRI SSL | `0.5030` | useful in-domain representation signal |
-| B2 lower encoder LR | `0.4993` | catastrophic forgetting not the main bottleneck |
-| B3 pathology MIL | `0.4945` | architecture simplification not sufficient |
-| B4 frozen SSL + classical | `0.5138` | best clean standalone point estimate |
-| B4.1 shared policy | `0.4848` | too rigid |
-| B4.2 grouped policies | `0.4901` | still too rigid/noisy |
-| B4.3 two-way CV selector | `0.4966` | selector stabilization did not help |
-| B1+B4 rank 50:50 | `0.5167` | highest numerical score, statistically tied with B4 |
-| B5 image-report SSL | pending | representation training complete; frozen probe pending |
+| B2 lower encoder LR | `0.4993` | optimizer tweak not the main bottleneck |
+| B3 pathology MIL | `0.4945` | head simplification insufficient |
+| B4 frozen SSL + classical | `0.5138` | image-only representation ablation |
+| B5 image-report SSL | `0.524365` | report-aligned representation helped modestly |
+| B7-v1 direct B6 supervision | `0.539772` | direct weak supervision helped |
+| **B7.1 full coverage** | **`0.564480`** | **current best standalone development model** |
+| B5+B7.1 fixed rank | `0.554014` | rejected versus B7.1 |
+| B8 spatial anatomy | pending | current training experiment |
 
-The main strategic conclusion is that the current useful lever is **representation quality from the report-only corpus**, not more downstream policy search on the same 58 gold labels.
+The strongest strategic evidence is now:
+
+1. **representation quality matters**;
+2. **direct pathology-specific weak supervision from reports is more useful than generic report alignment alone**;
+3. **covering the entire weakly labelled corpus each epoch materially improved the point estimate**;
+4. the next substantive lever is **retaining/localizing spatial evidence before pathology-query attention**, not more blend tuning.
 
 ## 1. Reports are training supervision, not inference inputs
 
-Reports are converted to per-target states:
+Final inference is MRI-only. Reports are used only during training.
+
+B5 uses report semantics for representation alignment. B6 converts reports to structured pathology states for B7/B7.1/B8:
 
 ```text
 positive
@@ -36,67 +50,35 @@ uncertain
 unmentioned
 ```
 
-Report silence is not a negative. `unmentioned` receives zero direct report weight by default. Finite official labels override report-derived targets cell-by-cell.
+Report silence is not negative.
 
-Final inference remains MRI-only.
+## 2. B6 weak-label contract is frozen
 
-## 2. Fold-safe calibration
-
-Report-state calibration uses only gold studies allowed in the current phase/fold. Confidence reflects both evidence and informativeness beyond target prevalence.
-
-The trusted/pairwise-ranking thresholds are not lowered just to increase pseudo-label counts.
-
-## 3. Compartment-aware OA parsing
-
-The first real audit showed the original lexicon produced no useful OA supervision. The parser was expanded to recognize compartment-specific OA/arthrosis, cartilage loss, chondrosis/chondromalacia, osteophytes and related degenerative cartilage language while avoiding generic meniscal degeneration.
-
-Verified report states:
-
-| Target | Positive | Negated | Unmentioned |
-|---|---:|---:|---:|
-| Medial OA | 492 | 339 | 3,576 |
-| Lateral OA | 409 | 387 | 3,611 |
-| PF OA | 695 | 379 | 3,333 |
-
-These cells remain weak supervision rather than gold-equivalent trusted examples.
-
-## 4. Gold validation contract
-
-The 58 official gold studies are deterministically balanced across three folds:
-
-| Outer fold | Gold train | Inner selection | Outer validation |
-|---|---:|---:|---:|
-| 0 | 20 | 20 | 18 |
-| 1 | 18 | 20 | 20 |
-| 2 | 20 | 18 | 20 |
-
-Every target has positives and negatives in each outer fold.
-
-For the original neural Stage-1 protocol:
+Frozen B6 v1.2.1 training export:
 
 ```text
-outer gold -> final OOF only
-inner gold -> epoch selection
-remaining gold -> selection training
-Phase A discarded
-fresh Phase B -> all non-outer gold
+report-only rows                  4349
+active weakly labelled studies    3120
+inactive zero-usable studies      1229
+usable cells                     14123
+positive cells                    6871
+negative cells                    7252
 ```
 
-## 5. Macro-aligned loss and trusted pairing
+The completed gold audit showed high sensitivity/NPV but lower positive precision. One global asymmetric policy was therefore frozen:
 
-The supervised neural objective uses planned-epoch target normalization so weak-label coverage differences do not let frequently mentioned targets dominate the macro metric.
+| state | soft target | base weight |
+|---|---:|---:|
+| positive | 0.85 | 0.50 |
+| negated | 0.05 | 1.00 |
+| uncertain | ignored | 0.00 |
+| unmentioned | ignored | 0.00 |
 
-The pairwise ranking auxiliary is confidence-gated. The trusted/general sampler was changed to emit trusted rows in pairs for even batch sizes, activating ranking without weakening trust thresholds.
+Target balancing equalizes total expected supervision mass across the 12 pathologies.
 
-Verified smoke diagnostics:
+Do not tune parser rules or target-specific weak-label weights from subsequent gold results.
 
-```text
-selection ranking pairs = 63
-retrain ranking pairs   = 61
-all 12 targets          = active
-```
-
-## 6. Six-stream MRI contract
+## 3. Six-stream MRI contract
 
 ```text
 sagittal_fluid       sagittal_structural
@@ -104,154 +86,180 @@ coronal_fluid        coronal_structural
 axial_fluid          axial_structural
 ```
 
-Missing streams are explicit and masked. `axial_structural` is present in only about one quarter of training studies, so missing-stream handling is essential.
+Missing streams are explicit and masked. Each active series is represented with distributed 2.5D triplets and encoded with ConvNeXt-Tiny.
 
-Each active series is represented with distributed 2.5D triplets and encoded with ConvNeXt-Tiny.
+## 4. Strong competition-only MRI SSL
 
-## 7. Strong competition-only MRI SSL
-
-The strong SSL run uses only the 4,349 non-gold competition MRI studies. Same-study views/sequences provide representation positives; plane and sequence-type prediction are auxiliary objectives.
-
-Completed run:
+The strong SSL run used only the 4,349 non-gold MRI studies:
 
 ```text
-epochs                 8
-batches                 8,000
-study draws             24,000
-approx corpus passes    5.52
-active 2.5D examples    238,274
-loss                    ~3.434 -> ~2.862
+8 epochs
+8,000 batches
+24,000 study draws
+~5.52 corpus passes
+238,274 active 2.5D examples
 ```
 
-Checkpoint:
+This improved the Stage-1 point estimate from B0 `0.4763` to B1 `0.5030` and supplied the representation foundation for B4/B5.
 
-```text
-runs/ssl_strong/ssl_encoder.pt
-```
+## 5. B4 branch: useful representation probe, closed selector search
 
-No external pretrained weights are used.
-
-## 8. End-to-end neural findings: B1-B3
-
-B1 moved the point estimate above B0, but paired uncertainty remained wide. B2's 0.1x encoder LR did not improve B1, and B3's pathology-aware low-capacity MIL also did not improve pooled OOF.
-
-This argues against spending the next experiments on small optimizer/head variations.
-
-## 9. Frozen representation probe: B4
-
-B4 freezes the strong SSL encoder and extracts deterministic per-stream mean/std/max features. The verified cache has shape:
-
-```text
-[58, 6, 2304]
-```
-
-Each target selects between fixed `all`/`prior` feature modes plus PCA and balanced logistic regression.
-
-B4 reached:
+B4 froze the strong SSL encoder and used deterministic mean/std/max stream features plus target-wise PCA/logistic regression:
 
 ```text
 macro AUC = 0.5137567459
-95% CI   = [0.4619827141, 0.5642366629]
-P(B4 > B1) = 0.6378
 ```
 
-This is the best clean standalone point estimate, but not a statistically proven improvement.
+B4.1/B4.2/B4.3 selector-stabilization attempts all reduced pooled OOF. The B4 selector branch is closed; do not create further policy/grid variants from the same 58 labels.
 
-## 10. Why the B4 selector branch is closed
+## 6. B5: report-aligned representation
 
-B4 target-wise policies were visibly unstable across folds. Three controlled attempts to reduce that variance all lowered pooled OOF:
+B5 excluded all 58 gold studies from representation training and aligned competition MRI with TF-IDF/SVD report semantics.
 
-- B4.1 one shared policy: `0.4848`;
-- B4.2 four predefined group policies: `0.4901`;
-- B4.3 target-wise two-way-CV selector: `0.4966`.
-
-Further B4 policy/grid redesign driven by the same outer OOF would risk meta-overfitting. The B4 probe is therefore frozen for the first B5 comparison.
-
-## 11. Fixed ensemble finding
-
-A fixed B1+B4 raw-probability 50:50 average scored `0.5050`. A fixed 50:50 **rank** average scored `0.5167`.
-
-Against B4:
+Result under the unchanged B4 probe:
 
 ```text
-median ensemble-B4 difference = +0.00276
-95% CI                        = [-0.03513, +0.04174]
-P(ensemble > B4)              = 0.5544
+macro AUC = 0.5243650851
+95% CI   = [0.4728108406, 0.5761619105]
 ```
 
-Therefore the rank ensemble is kept as a fixed candidate but is not claimed to improve B4. No weight search is permitted on these 58 labels.
-
-## 12. B5 strategy and completed pretraining
-
-B5 changes the representation rather than the downstream classifier.
-
-Only the 4,349 report-only studies were used for B5 pretraining; all 58 gold studies were excluded.
-
-Text representation:
+Paired B4 -> B5 favored B5 but remained inconclusive:
 
 ```text
-normalized competition report
--> word TF-IDF (1-2 grams)
--> TruncatedSVD (<=256 dimensions)
--> normalized semantic target
+median difference = +0.0105821232
+95% paired CI     = [-0.0408197338, +0.0622131599]
+P(B5 > B4)        = 0.656
 ```
 
-MRI objective:
+B5 remains the representation baseline and the initialization source for B7.
+
+## 7. B7: direct pathology-specific weak supervision
+
+B7 is the first experiment to train the MRI classifier directly on frozen B6 target cells.
+
+Architecture:
 
 ```text
-strong SSL image-image objective
-+ plane/sequence metadata objective
-+ image-report contrastive alignment
-+ cosine report alignment
+6 MRI streams
+-> 16 sampled 2.5D slices/stream
+-> ConvNeXt slice features
+-> slice-position + stream embeddings
+-> cross-sequence Transformer
+-> 12 interacting pathology queries
+-> cross-attention to MRI memory
+-> 12 logits
 ```
 
-A report embedding queue of 256 supplies additional semantic negatives for small MRI batches. Exact duplicate normalized report hashes are masked as false negatives.
-
-No external language model and no external image weights were used. The report branch is discarded after training; the saved artifact is an MRI encoder.
-
-Completed B5 run:
+B7-v1 reached:
 
 ```text
-checkpoint              runs/b5_report_ssl/b5_encoder.pt
-epochs                  4
-batches               4000
-study draws          16000
-active 2.5D examples 158886
-total loss    5.5204 -> 4.7049
-image loss    3.0068 -> 2.8937
-report NCE    4.6031 -> 3.2901
-report cosine 0.8015 -> 0.5924
-budget limited          false
+macro AUC = 0.5397724412
 ```
 
-All logged objectives improved monotonically. This is stable optimization evidence, not yet a gold-label performance result.
+but its `500`-batch epoch cap yielded only 1,000 study draws/epoch, about 1.28 nominal corpus passes over four epochs.
 
-## 13. Fixed B5 evaluation rule — current next step
+## 8. B7.1: full-corpus coverage
 
-B5 must now be tested with the **original B4 probe unchanged**:
+The coverage limitation was identified before the B7-v1 gold result was used to design the follow-up. B7.1 changed only:
 
 ```text
-B4 encoder -> B4 frozen probe
-versus
-B5 encoder -> same B4 frozen probe
+batches/epoch 500 -> 1560
 ```
 
-This isolates representation quality. Do not modify B4 feature modes, PCA grid, logistic grid, target groupings, ensemble weights, or B5 epoch count based on the upcoming outer OOF and then reuse the same OOF as a pristine estimate.
+With batch size 2, every epoch covered all 3,120 active studies and all 14,123 usable cells.
 
-## 14. Validation campaign caveat
+Training loss:
 
-Although each experiment has an internally leakage-aware protocol, the same 58 gold studies have supported many method decisions. The campaign-level estimate is therefore increasingly **model-selection cross-validation**.
+```text
+0.752419 -> 0.665171 -> 0.639117 -> 0.612758
+```
+
+Gold development result:
+
+```text
+macro AUC = 0.5644802945
+95% CI   = [0.5052432984, 0.6229422178]
+```
+
+Paired B7-v1 -> B7.1:
+
+```text
+median difference = +0.0241102714
+95% paired CI     = [-0.0140197876, +0.0660558004]
+P(B7.1 > B7-v1)   = 0.8694
+```
+
+Paired B5 -> B7.1:
+
+```text
+median difference = +0.0399233552
+95% paired CI     = [-0.0301354430, +0.1092349994]
+P(B7.1 > B5)      = 0.8716
+```
+
+B7.1 is the current leader, but its superiority is not called statistically established because both paired intervals cross zero.
+
+## 9. Ensemble question is closed
+
+A single predeclared global B5+B7.1 50:50 rank ensemble scored:
+
+```text
+0.5540141184
+```
+
+below B7.1 `0.5644802945`.
+
+Paired comparison:
+
+```text
+median(ensemble-B7.1) = -0.0105429030
+95% paired CI         = [-0.0523218181, +0.0333886570]
+P(ensemble > B7.1)     = 0.3054
+```
+
+Do not search alternative blend weights, raw averages, calibration transforms or target-specific mixtures on these 58 labels.
+
+## 10. B8 strategy: preserve spatial evidence
+
+B7.1 globally pools each sampled ConvNeXt feature map to one vector before pathology attention. B8 tests whether this discards useful localization information.
+
+B8 changes MRI memory from:
+
+```text
+B7.1: 6 x 16 x 1   = 96 tokens
+B8:   6 x 16 x 2x2 = 384 tokens
+```
+
+B8 keeps all compatible B7.1 weights and adds:
+
+- 2x2 adaptive spatial pooling from the final ConvNeXt feature map;
+- learned region-position embeddings;
+- fixed soft pathology-specific stream preferences;
+- broad center-slice preference only for selected focal structures;
+- no hard stream/slice masking;
+- no fixed medial/lateral/anterior/posterior quadrant assumption.
+
+The in-plane fixed region prior is uniform because preprocessing does not certify canonical in-plane orientation across all series.
+
+B8 retains the frozen B6 supervision policy, target balancing, 3,120-study full coverage, four epochs, learning rates and MRI-only inference contract.
+
+**Current status: B8 training is in progress. Its first gold development evaluation must remain frozen and one-shot.**
+
+## 11. Validation campaign caveat
+
+The same 58 gold studies have now supported repeated method decisions. Each individual procedure may be leakage-aware internally, but the campaign as a whole is **model-selection cross-validation**.
 
 Do not:
 
-- select per-target winners after viewing outer OOF;
-- create more B4 selector variants;
+- select per-target winners after viewing gold predictions;
 - optimize ensemble weights;
-- tune B5 on gold outer results without a new predeclared experiment;
-- describe the best OOF point estimate as an independent hidden-test guarantee.
+- retune B6 parser rules or global weak-label policy;
+- derive target-specific B7/B8 weights from observed gold AUCs;
+- search B8 grid sizes, anatomy-prior strengths, epochs or target-specific priors after the first B8 score and still treat that score as untouched;
+- describe the best development AUC as a hidden-test or leaderboard guarantee.
 
-## 15. Runtime and competition policy
+## 12. Runtime and competition policy
 
-Long GPU runs use one GPU, CPU multiprocessing for data work, an 8.5-hour software budget and a ten-minute reserve. External pretrained weights remain disabled in the conservative configuration.
+Long GPU runs use one GPU, CPU multiprocessing for DICOM/data work, a bounded software runtime budget, no external pretrained image weights in the conservative path, and explicit checkpoint provenance.
 
-See [`competition_policy.md`](competition_policy.md) and [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
+See [`competition_policy.md`](competition_policy.md), [`B8_SPATIAL_ANATOMY.md`](B8_SPATIAL_ANATOMY.md) and [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
