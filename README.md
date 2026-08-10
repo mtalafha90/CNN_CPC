@@ -1,12 +1,21 @@
 # CNN_CPC — RSNA Knee Abnormality Detection
 
-`CNN_CPC` is a production-oriented PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The project is built around the released supervision regime: 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and macro ROC AUC across 12 pathologies.
+`CNN_CPC` is a production-oriented PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The released training regime contains 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and 12 study-level targets evaluated with macro ROC AUC.
 
-> **Current experiment snapshot — 2026-08-10:** **B5 image-report representation learning is the main standalone baseline and the highest current standalone point estimate**, with macro AUC `0.5243650851` and 95% bootstrap CI `[0.4728108406, 0.5761619105]`. Under the unchanged B4 downstream probe, the paired B5-vs-B4 bootstrap gives median difference `+0.0105821232`, 95% CI `[-0.0408197338, +0.0622131599]`, and `P(B5 > B4)=0.656`: positive but statistically inconclusive evidence of improvement. B4 (`0.5137567459`) is retained as the image-only ablation. A previously fixed B1+B4 rank ensemble scored `0.5167`; no new ensemble-weight tuning is performed on the same 58 gold studies.
+> **Current experiment snapshot — 2026-08-10:** **B7.1 full-corpus weak supervision is the current best standalone development model**, with macro AUC `0.5644802945` and 95% bootstrap CI `[0.5052432984, 0.6229422178]`. The paired bootstrap favors B7.1 over B7-v1 with `P=0.8694` and over B5 with `P=0.8716`, but both 95% paired intervals still cross zero on only 58 studies. The predeclared fixed B5+B7.1 50:50 rank ensemble scored `0.5540141184` and was rejected. **B8 pathology-aware spatial anatomy learning is implemented and currently training; no B8 gold score is recorded yet.**
 
-The canonical measured-results table is [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md).
+The canonical measured-results table is [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md). `docs/competition.md` is a preserved competition-summary document and is intentionally not rewritten by experiment updates.
 
-`docs/competition.md` is a preserved competition-summary document and is intentionally not changed by implementation or experiment updates.
+## Current software state
+
+```text
+package version     0.13.0
+current leader      B7.1 full-corpus weak supervision
+leader macro AUC    0.5644802945
+current experiment  B8 spatial anatomy learning — training in progress
+external pretrained weights  disabled
+final inference     MRI-only
+```
 
 ## Verified data status
 
@@ -48,53 +57,56 @@ coronal_fluid        coronal_structural
 axial_fluid          axial_structural
 ```
 
-Observed coverage:
+Missing streams are explicitly masked and never fabricated.
 
-| Stream | Selected | Missing |
-|---|---:|---:|
-| sagittal_fluid | 4,401 | 6 |
-| sagittal_structural | 4,294 | 113 |
-| coronal_fluid | 4,250 | 157 |
-| coronal_structural | 3,440 | 967 |
-| axial_fluid | 4,407 | 0 |
-| axial_structural | 1,094 | 3,313 |
-
-Missing streams are expected and explicitly masked; they are never fabricated.
-
-## Current methodology
+## Methodology evolution
 
 ```text
-COMPETITION MRI
-DICOM -> metadata repair -> six semantic streams
-      -> distributed 2.5D triplets
-      -> ConvNeXt-Tiny encoder
+competition MRI
+-> DICOM decoding / metadata repair
+-> six semantic streams
+-> distributed 2.5D triplets
+-> ConvNeXt-Tiny encoder
 
-B0/B1/B2
-encoder + Transformer/pathology heads -> 12 logits
+B0-B3
+-> neural supervised / weakly supervised baselines
 
-B3
-encoder + pathology-specific low-capacity MIL
-
-B4 — image-only ablation
-strong SSL encoder frozen
+B4
+-> frozen strong-SSL encoder
 -> mean/std/max stream features
--> target-specific PCA + logistic regression
+-> target-wise PCA + balanced logistic regression
 
-B5 — main standalone baseline
-strong SSL encoder
-+ competition reports represented by TF-IDF -> TruncatedSVD
-+ image-image SSL
-+ acquisition metadata loss
-+ image-report alignment
--> B5 MRI encoder frozen
--> same mean/std/max stream features
--> unchanged B4 target-specific PCA + logistic regression
--> MRI-only at inference
+B5
+-> competition-report TF-IDF/SVD alignment
+-> report-aligned MRI representation
+-> unchanged B4 frozen probe
+
+B6
+-> multilingual structured report states
+   positive / negated / uncertain / unmentioned
+-> frozen weak-label source
+
+B7
+-> B5-initialized six-stream Transformer
+-> 12 pathology queries
+-> direct B6 weak supervision
+
+B7.1
+-> same B7 recipe
+-> full 3,120-study coverage every epoch
+-> current best standalone development model
+
+B8 — current training experiment
+-> initialize from completed B7.1
+-> preserve 2x2 ConvNeXt spatial grid per sampled slice
+-> 384 MRI memory tokens/study instead of 96
+-> fixed gentle pathology stream/slice attention priors
+-> same frozen B6 supervision and full-corpus coverage
 ```
 
-Reports are training supervision only. The hidden/test inference path remains MRI-only.
+Reports are training supervision only. Hidden/test inference remains MRI-only.
 
-## Completed controlled experiments
+## Completed experiment ladder
 
 | ID | Method | Macro AUC | Decision |
 |---|---|---:|---|
@@ -109,128 +121,95 @@ Reports are training supervision only. The hidden/test inference path remains MR
 | B4.2 | four pathology-group policies | `0.4901328905` | rejected |
 | B4.3 | two-way-CV target selector | `0.4966083942` | rejected |
 | B1+B4 raw | fixed 50:50 probability average | `0.5050` | rejected |
-| B1+B4 rank | fixed 50:50 rank average | `0.5167` | retained fixed ensemble; no tuning |
-| **B5** | **image-report SSL + unchanged B4 probe** | **`0.5243650851`** | **main standalone baseline; best point estimate** |
+| B1+B4 rank | fixed 50:50 rank average | `0.5167` | historical fixed ensemble |
+| B5 | image-report SSL + unchanged B4 probe | `0.5243650851` | retained representation baseline |
+| B6 | structured multilingual report labels | n/a | completed / frozen weak-label source |
+| B7-v1 | B5-init pathology-query model + B6 weak labels | `0.5397724412` | retained coverage ablation |
+| **B7.1** | **B7 with full 3,120-study epoch coverage** | **`0.5644802945`** | **current best standalone model** |
+| B5+B7.1 rank | fixed global 50:50 rank ensemble | `0.5540141184` | rejected vs B7.1 |
+| B8 | B7.1-init 2x2 spatial anatomy/pathology attention | pending | **training in progress** |
 
-### Current statistical interpretation
+## Key current comparisons
 
-B4 versus B1:
-
-```text
-median B4-B1 difference = +0.01021
-95% CI                  = [-0.05143, +0.07094]
-P(B4 > B1)              = 0.6378
-```
-
-Fixed B1+B4 rank ensemble versus B4:
+B7-v1 -> B7.1:
 
 ```text
-median difference       = +0.00276
-95% CI                  = [-0.03513, +0.04174]
-P(ensemble > B4)        = 0.5544
+point delta               +0.0247078534
+paired median difference  +0.0241102714
+95% paired CI             [-0.0140197876, +0.0660558004]
+P(B7.1 > B7-v1)            0.8694
 ```
 
-B5 versus B4, using the same downstream probe:
+B5 -> B7.1:
 
 ```text
-B4 macro AUC            = 0.5137567459
-B5 macro AUC            = 0.5243650851
-B5 95% CI               = [0.4728108406, 0.5761619105]
-median B5-B4 difference = +0.0105821232
-95% paired CI           = [-0.0408197338, +0.0622131599]
-P(B5 > B4)              = 0.656
+point delta               +0.0401152095
+paired median difference  +0.0399233552
+95% paired CI             [-0.0301354430, +0.1092349994]
+P(B7.1 > B5)               0.8716
 ```
 
-B5 has the highest standalone point estimate, but its superiority over B4 is not claimed as statistically established because the paired interval crosses zero.
-
-## Why B4 selector tuning is closed
-
-B4's target-wise inner selections are unstable because each inner fold contains only about 18–20 studies. Three follow-ups tested shared, grouped, and two-way-CV policy selection. All three reduced pooled OOF performance. Further selector/grid variants based on the same 58 outer labels would increasingly meta-fit the validation campaign.
-
-B4 is retained as the image-only ablation. The completed B5 result shifts the primary representation baseline to report-aligned B5 without reopening the downstream selector.
-
-## B5 — completed main representation baseline
-
-B5 used only the 4,349 report-only competition studies for representation training. The 58 gold studies were excluded completely.
-
-Text branch:
+B7.1 -> fixed B5+B7.1 rank ensemble:
 
 ```text
-competition reports
--> word TF-IDF (1-2 grams)
--> TruncatedSVD (<=256 dimensions)
--> normalized report embedding
+B7.1 AUC                   0.5644802945
+ensemble AUC               0.5540141184
+median(ensemble-B7.1)     -0.0105429030
+95% paired CI             [-0.0523218181, +0.0333886570]
+P(ensemble > B7.1)         0.3054
 ```
 
-MRI branch:
+The fixed ensemble question is closed: no 60:40, 70:30, raw-probability, target-specific, or calibrated blend search is allowed on the same 58 development labels.
+
+## B6/B7 supervision contract
+
+Frozen B6 v1.2.1 training export:
 
 ```text
-strong competition-only SSL ConvNeXt
--> image-image SSL objective
--> plane/sequence metadata objectives
--> image-report alignment objective
+report-only studies             4349
+active weakly labelled studies  3120
+inactive zero-usable studies    1229
+usable target cells            14123
+positive cells                  6871
+negative cells                  7252
 ```
 
-No external language model and no external pretrained image weights were used. The report branch is discarded after training; the saved downstream artifact is an MRI encoder.
+B7/B7.1/B8 keep the same global asymmetric weak-label rule:
 
-Completed checkpoint:
+| B6 state | Soft target | Base weight |
+|---|---:|---:|
+| positive | `0.85` | `0.50` |
+| negated | `0.05` | `1.00` |
+| uncertain | ignored | `0.00` |
+| unmentioned | ignored | `0.00` |
+
+Gold labels do not enter B7/B7.1/B8 gradients or early stopping. The B6 gold audit informed the global policy, so these 58-study results are explicitly development/model-selection estimates rather than pristine independent validation.
+
+## B8 current experiment
+
+B8 is documented in [`docs/B8_SPATIAL_ANATOMY.md`](docs/B8_SPATIAL_ANATOMY.md).
+
+The frozen experiment changes the MRI memory representation while retaining the successful B7.1 initialization and supervision contract:
 
 ```text
-runs/b5_report_ssl/b5_encoder.pt
+B7.1: 6 streams x 16 slices x 1 token  = 96 MRI tokens
+B8:   6 streams x 16 slices x 4 regions = 384 MRI tokens
 ```
 
-Training summary:
+B8 uses a 2x2 spatial grid from the final ConvNeXt feature map and fixed gentle pathology-specific stream/slice attention priors. The in-plane fixed region prior is uniform because preprocessing does not certify a canonical left/right or anterior/posterior pixel orientation.
 
-```text
-epochs                  4
-batches               4000
-study draws          16000
-active 2.5D examples 158886
-loss          5.5204 -> 4.7049
-report NCE    4.6031 -> 3.2901
-report cosine 0.8015 -> 0.5924
-budget limited          false
+Current training command:
+
+```bash
+rsna-knee-b8 \
+  --config configs/b8_spatial_anatomy.yaml \
+  --data-root "$DATA_ROOT" \
+  --b71-checkpoint runs/b7_1_full_coverage/b7_model.pt \
+  --b6-root runs/b6_report_labels_v121 \
+  --out-root runs/b8_spatial_anatomy
 ```
 
-Frozen gold-feature audit:
-
-```text
-checkpoint             runs/b5_report_ssl/b5_encoder.pt
-studies                58
-feature shape          [58, 6, 2304]
-pooling                mean + std + max
-encoder frozen         true
-completed epochs       4
-external pretrained    false
-```
-
-Pooled B5 OOF result:
-
-```text
-macro AUC = 0.5243650851
-95% CI   = [0.4728108406, 0.5761619105]
-```
-
-Per-target AUC:
-
-| Target | B5 AUC |
-|---|---:|
-| ACL | `0.6678921569` |
-| MCL | `0.4058956916` |
-| Medial Meniscus | `0.6658653846` |
-| Lateral Meniscus | `0.6173913043` |
-| Medial OA | `0.6589147287` |
-| Lateral OA | `0.4042553191` |
-| PF OA | `0.6061776062` |
-| Effusion | `0.5167701863` |
-| Synovitis | `0.5555555556` |
-| Baker's | `0.3858695652` |
-| Contusion | `0.3994601889` |
-| Fracture | `0.4083333333` |
-
-B5 improves 8 of 12 target point estimates versus B4. The largest descriptive gains are Medial Meniscus, Synovitis, Medial OA, ACL and Effusion; the largest losses are Contusion and Fracture. These target-level differences are not used for post-hoc model selection.
-
-See [`docs/B5_IMAGE_REPORT_SSL.md`](docs/B5_IMAGE_REPORT_SSL.md) for the full controlled experiment and interpretation.
+Do not record a B8 AUC until the frozen training run completes and the first gold development evaluation is performed exactly once.
 
 ## Installation
 
@@ -243,111 +222,62 @@ python -m pip install pytest pillow
 pytest -q
 ```
 
-## Useful commands
+## Useful current commands
 
 ```bash
 # Inspect data
 python -m rsna_knee.cli inspect --data-root "$DATA_ROOT"
 
-# Preflight
-python -m rsna_knee.cli preflight \
+# B7.1 checkpoint audit
+python - <<'PY'
+import torch
+p=torch.load('runs/b7_1_full_coverage/b7_model.pt', map_location='cpu', weights_only=False)
+print(p['variant'])
+print(p['completed_epochs'])
+print(p['config'].get('b7_experiment_name'))
+print(p['supervision']['training_studies'])
+print(p['supervision']['training_usable_cells'])
+PY
+
+# B8 training
+rsna-knee-b8 \
+  --config configs/b8_spatial_anatomy.yaml \
   --data-root "$DATA_ROOT" \
-  --split train \
-  --sample-size 24
-
-# Strong competition-only SSL
-python -m rsna_knee.cli pretrain \
-  --config configs/train_local_ssl_pretrain.yaml
-
-# B1 Stage-1 folds
-python -m rsna_knee.cli train --config configs/train_local_ssl_strong.yaml --fold 0
-python -m rsna_knee.cli train --config configs/train_local_ssl_strong.yaml --fold 1
-python -m rsna_knee.cli train --config configs/train_local_ssl_strong.yaml --fold 2
-
-# B4 image-only frozen probe
-rsna-knee-b4 extract \
-  --config configs/train_local_ssl_strong.yaml \
-  --split train --scope gold \
-  --out runs/b4_frozen_ssl/gold_features.npz
-
-rsna-knee-b4 nested \
-  --config configs/train_local_ssl_strong.yaml \
-  --features runs/b4_frozen_ssl/gold_features.npz \
-  --out-root runs/b4_frozen_ssl \
-  --n-bootstrap 5000
-
-# B5 frozen probe
-mkdir -p runs/b5_frozen_probe
-rsna-knee-b4 extract \
-  --config configs/train_local_ssl_strong.yaml \
-  --checkpoint runs/b5_report_ssl/b5_encoder.pt \
-  --split train --scope gold \
-  --out runs/b5_frozen_probe/gold_features.npz
-
-rsna-knee-b4 nested \
-  --config configs/train_local_ssl_strong.yaml \
-  --features runs/b5_frozen_probe/gold_features.npz \
-  --out-root runs/b5_frozen_probe \
-  --n-bootstrap 5000
-
-python -m rsna_knee.cli evaluate \
-  --train-csv "$DATA_ROOT/train.csv" \
-  --oof runs/b5_frozen_probe/oof.csv \
-  --n-bootstrap 5000 \
-  --out runs/b5_frozen_probe/eval.json
-
-python -m rsna_knee.cli evaluate \
-  --train-csv "$DATA_ROOT/train.csv" \
-  --oof runs/b4_frozen_ssl/oof.csv \
-  --compare-oof runs/b5_frozen_probe/oof.csv \
-  --n-bootstrap 5000 \
-  --out runs/b4_vs_b5.json
+  --b71-checkpoint runs/b7_1_full_coverage/b7_model.pt \
+  --b6-root runs/b6_report_labels_v121 \
+  --out-root runs/b8_spatial_anatomy
 ```
+
+After B8 training completes, inspect `history.json` and `supervision_plan.json` before running `rsna-knee-b8-eval`.
 
 ## Documentation map
 
 - [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md) — canonical current results/status
-- [`docs/data.md`](docs/data.md) — verified data/DICOM contract
-- [`docs/strategy.md`](docs/strategy.md) — modeling strategy and decisions
-- [`docs/VALIDATION.md`](docs/VALIDATION.md) — validation protocol and caveats
-- [`docs/competition_policy.md`](docs/competition_policy.md) — conservative execution policy
+- [`docs/strategy.md`](docs/strategy.md) — modeling strategy and current next step
+- [`docs/VALIDATION.md`](docs/VALIDATION.md) — validation protocol and campaign caveats
 - [`docs/LOCAL_REAL_DATA_TRAINING.md`](docs/LOCAL_REAL_DATA_TRAINING.md) — current workstation runbook
-- [`docs/TRAINING_FROM_ZERO.md`](docs/TRAINING_FROM_ZERO.md) — fresh-machine runbook
-- [`docs/REPORT_TEACHER.md`](docs/REPORT_TEACHER.md) — report-teacher benchmark
-- [`docs/SSL_STRONG.md`](docs/SSL_STRONG.md) — strong SSL experiment
-- [`docs/B2_DISCRIMINATIVE_FINETUNE.md`](docs/B2_DISCRIMINATIVE_FINETUNE.md)
-- [`docs/B3_PATHOLOGY_AWARE_MIL.md`](docs/B3_PATHOLOGY_AWARE_MIL.md)
-- [`docs/B4_FROZEN_SSL_CLASSICAL.md`](docs/B4_FROZEN_SSL_CLASSICAL.md)
-- [`docs/B4_1_SHARED_POLICY.md`](docs/B4_1_SHARED_POLICY.md)
-- [`docs/B4_2_GROUPED_FROZEN_SSL.md`](docs/B4_2_GROUPED_FROZEN_SSL.md)
-- [`docs/B4_3_TWO_WAY_CV_FROZEN_SSL.md`](docs/B4_3_TWO_WAY_CV_FROZEN_SSL.md)
-- [`docs/B5_IMAGE_REPORT_SSL.md`](docs/B5_IMAGE_REPORT_SSL.md)
+- [`docs/TRAINING_FROM_ZERO.md`](docs/TRAINING_FROM_ZERO.md) — fresh-machine/current experiment ladder
+- [`docs/B5_IMAGE_REPORT_SSL.md`](docs/B5_IMAGE_REPORT_SSL.md) — B5 representation baseline
+- [`docs/B6_STRUCTURED_REPORT_LABELS.md`](docs/B6_STRUCTURED_REPORT_LABELS.md) — frozen B6 weak-label source
+- [`docs/B7_WEAK_SUPERVISION.md`](docs/B7_WEAK_SUPERVISION.md) — B7-v1 experiment
+- [`docs/B7_1_FULL_COVERAGE.md`](docs/B7_1_FULL_COVERAGE.md) — current leader
+- [`docs/B5_B71_FIXED_RANK_ENSEMBLE.md`](docs/B5_B71_FIXED_RANK_ENSEMBLE.md) — rejected fixed ensemble
+- [`docs/B8_SPATIAL_ANATOMY.md`](docs/B8_SPATIAL_ANATOMY.md) — current training experiment
 - [`README_KAGGLE_METHODS.md`](README_KAGGLE_METHODS.md) — public methodology review/context
+- [`docs/competition_policy.md`](docs/competition_policy.md) — conservative execution policy
+- [`docs/data.md`](docs/data.md) — verified data/DICOM contract
 - [`docs/references.md`](docs/references.md) — references and reviewed public work
 - [`docs/competition.md`](docs/competition.md) — preserved competition summary
 
 ## Validation caution
 
-Each individual candidate uses leakage-aware fold logic, but the same 58 gold studies have now supported multiple method decisions. The campaign as a whole is increasingly **model-selection cross-validation**, not a pristine independent estimate of hidden-test performance.
+The same 58 gold studies have now informed repeated method decisions. The campaign is **model-selection cross-validation**, not a pristine independent estimate of hidden-test performance.
 
 Do not:
 
 - optimize ensemble weights on the 58 gold labels;
-- select target-specific post-hoc model winners from outer OOF;
-- create further B4 selector variants from observed outer results;
-- tune B5 report-loss weights, temperatures, or extra epochs from the completed outer B5 OOF result;
-- use the target-level B4/B5 differences to construct a post-hoc mixed predictor;
+- select target-specific post-hoc model winners;
+- retune B6 parser rules from the gold audit;
+- tune target-specific B7/B8 weak-label weights from observed gold AUCs;
+- search B8 spatial grids, prior strengths, epochs, or target-specific priors after reading the first B8 score and still call it B8-v1;
 - claim leaderboard superiority without an actual competition submission result.
-
-## Competition execution policy
-
-The conservative defaults remain:
-
-- one GPU;
-- CPU multiprocessing for DICOM/data work;
-- `runtime_budget_hours: 8.5`;
-- external pretrained weights disabled;
-- competition-data checkpoint provenance checked;
-- validation/submission contracts recorded in checkpoints;
-- final inference MRI-only;
-- final output exactly `submission.csv`.
