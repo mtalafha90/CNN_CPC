@@ -2,18 +2,19 @@
 
 `CNN_CPC` is a PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The released training surface contains 4,407 studies, 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and 12 study-level targets evaluated with macro ROC AUC.
 
-> **Current snapshot — 2026-08-10:** **B7.1 full-corpus weak supervision remains the retained standalone champion**, macro AUC `0.5644802945`. B8 spatial-anatomy learning (`0.5300962807`) and B9 strict semantic routing (`0.5334962669`) were both rejected. **B10 physical-scale normalization is now implemented and predeclared; its label-free geometry audit must be frozen before training.**
+> **Current snapshot — 2026-08-10:** **B7.1 full-corpus weak supervision remains the retained standalone champion**, macro AUC `0.5644802945`. B8 spatial-anatomy learning (`0.5300962807`), B9 strict semantic routing (`0.5334962669`) and B10 physical-scale normalization (`0.5523982721`) were rejected as global replacements. B11-v1 teacher pseudo-labelling was stopped before training because its frozen viability gate failed. **B11.1 calibration-aware quantile teacher tails is now the active predeclared label-free pseudo-label audit.**
 
 Canonical measured status: [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md).  
-B10 protocol: [`docs/B10_PHYSICAL_SCALE.md`](docs/B10_PHYSICAL_SCALE.md).
+B11 protocol: [`docs/B11_TEACHER_STUDENT.md`](docs/B11_TEACHER_STUDENT.md).  
+B11.1 protocol: [`docs/B11_1_QUANTILE_TEACHER.md`](docs/B11_1_QUANTILE_TEACHER.md).
 
 ## Current software state
 
 ```text
-package version       0.15.0
+package version       0.17.0
 current leader        B7.1 full-corpus weak supervision
 leader macro AUC      0.5644802945
-active experiment     B10 physical-scale normalization
+active experiment     B11.1 calibration-aware quantile teacher tails
 external pretraining  disabled
 final inference       MRI-only
 ```
@@ -35,32 +36,144 @@ final inference       MRI-only
 | B5+B7.1 rank | fixed 50:50 rank ensemble | `0.5540141184` | rejected |
 | B8 | 2x2 spatial-token anatomy model | `0.5300962807` | rejected |
 | B9 | strict semantic routing | `0.5334962669` | rejected |
-| **B10** | **B7.1 + physical-scale normalization** | pending | **implemented / predeclared** |
+| B10 | B7.1 + physical-scale normalization | `0.5523982721` | rejected globally |
+| B11-v1 | absolute-threshold B7.1 teacher completion | n/a | stopped at pseudo viability gate |
+| **B11.1** | **per-target quantile teacher tails** | pending | **active / predeclared pseudo audit** |
 
-## Why B10
+## Retained B7.1 benchmark
 
-The existing preprocessing resizes every selected slice to `224 x 224`, which normalizes matrix size but not physical anatomy scale. Different scanners/protocols can have substantially different DICOM `PixelSpacing` and physical field of view.
+B7.1 uses:
 
-B10 keeps historical B7.1 routing and inserts only:
+- B5 competition-only image-report encoder initialization;
+- six historical dual MRI streams;
+- 16 distributed 2.5D positions per stream;
+- ConvNeXtTiny slice encoder;
+- cross-sequence Transformer memory;
+- 12 learned pathology queries;
+- frozen B6 v1.2.1 weak labels;
+- target-balanced weak BCE;
+- 3,120 active weak-training studies per epoch;
+- 4 complete epochs;
+- TTA center offsets `[-1, 0, 1]`.
+
+Measured development result:
+
+```text
+macro AUC = 0.5644802945
+n         = 58 gold studies
+bootstrap = 5000 study-level replicates
+```
+
+The 58-study surface has been reused for sequential development, so this is a **development/model-selection estimate**, not pristine independent validation.
+
+## B10 result — physical-scale normalization
+
+B10 tested the label-free geometry normalization:
 
 ```text
 native DICOM pixels
-  -> plane-specific canonical PixelSpacing
-  -> canonical physical FOV by center crop/pad
+  -> 0.3125 mm/pixel canonical in-plane spacing
+  -> approximately 160 mm physical FOV
   -> unchanged 224 x 224 resize
-  -> unchanged B7.1 model/training/evaluation
+  -> unchanged B7.1 model/training recipe
 ```
 
-Canonical geometry is derived without gold labels from the exact 3,120 active B6 weak-training studies. For sagittal, coronal and axial planes separately:
+The geometry audit covered all `15,468` selected weak-training series (`geometry_coverage = 1.0`) without gold-label use.
+
+B10 result:
 
 ```text
-target PixelSpacing = median valid training PixelSpacing
-target physical FOV = median valid training physical FOV
-minimum valid geometry coverage = 95%
-missing PixelSpacing -> legacy resize, do not discard study
+B10 macro AUC        0.5523982721
+95% CI              [0.4935605888, 0.6091548645]
+B7.1 macro AUC       0.5644802945
+median(B10-B7.1)    -0.0121030792
+95% paired CI       [-0.0507382525, +0.0250750953]
+P(B10 > B7.1)        0.2706
 ```
 
-The audit also records scanner/model/field strength, slice thickness/spacing, and a SHA-256 signature of the exact selected-series mapping. Training refuses a policy generated from a different routing state.
+Decision: reject B10-v1 as a global replacement. Do not construct target-specific B7.1/B10 winners from the same 58 studies.
+
+## B11-v1 result — pseudo-label viability gate failed
+
+B11-v1 asked whether the completed B7.1 model could add low-weight pseudo supervision to B6-unsupervised cells using one global absolute probability rule:
+
+```text
+teacher mean >= 0.90 OR teacher mean <= 0.10
+TTA probability range <= 0.05
+```
+
+The label-free audit found:
+
+```text
+B6 cells                14123
+pseudo cells              4794
+combined cells            18917
+B6 active studies          3120
+combined active studies    4000
+newly activated studies     880
+```
+
+However, pseudo labels were extremely asymmetric:
+
+```text
+pseudo positive cells       23
+pseudo negative cells     4771
+```
+
+Additional failures:
+
+```text
+Medial Meniscus pseudo cells   0
+Synovitis pseudo cells          0
+Lateral OA pseudo cells        21
+required minimum per target    25
+```
+
+Therefore `viability_passed = false` and **B11-v1 student training must not be run**.
+
+## Why B11.1 exists
+
+The follow-up label-free diagnostic showed that B11-v1 failed primarily because **teacher probability calibration differs strongly by target**, not because TTA predictions are unstable.
+
+Examples from B6-unsupervised cells:
+
+```text
+ACL teacher range              ~0.05 to 0.51
+MCL teacher range              ~0.03 to 0.40
+Medial Meniscus                ~0.18 to 0.89
+Synovitis                      ~0.72 to 0.89
+```
+
+Synovitis predictions are especially stable but never cross `0.90`; Medial Meniscus is also stable but never reaches the global positive threshold. A single `0.10/0.90` rule is therefore inappropriate across all 12 pathologies.
+
+## B11.1 frozen policy
+
+B11.1 replaces absolute probability cutoffs with **per-target relative teacher tails**, using only B6-unsupervised non-gold cells.
+
+For each target independently:
+
+1. compute the teacher probability 5th and 95th percentiles;
+2. require TTA probability range `<= 0.05`;
+3. stable bottom 5% tail -> pseudo target `0.10`;
+4. stable top 5% tail -> pseudo target `0.90`;
+5. pseudo base weight `0.10`;
+6. cap pseudo weight mass at `15%` of the original B6 base-weight mass for that target;
+7. never overwrite a B6-supervised cell.
+
+Quantile thresholds are derived without gold labels.
+
+### B11.1 viability gate
+
+Before any student training, the pseudo audit must satisfy:
+
+```text
+>= 2500 pseudo cells overall
+>= 100 pseudo cells per target
+>= 50 stable low-tail cells per target
+>= 50 stable high-tail cells per target
+```
+
+If the audit fails, do not tune the quantile fractions or TTA threshold using gold results.
 
 ## Install / update
 
@@ -75,85 +188,61 @@ python -c "import rsna_knee; print(rsna_knee.__version__)"
 Expected:
 
 ```text
-0.15.0
+0.17.0
 ```
 
 ## Tests
 
 ```bash
 python -m compileall -q src tests
+
 pytest -q \
   tests/test_b7_weak_supervision.py \
   tests/test_b9_strict_routing.py \
-  tests/test_b10_physical_scale.py
+  tests/test_b10_physical_scale.py \
+  tests/test_b11_teacher_student.py \
+  tests/test_b11_1_quantile_pseudo.py
 ```
 
-## B10 step 1 — label-free geometry audit
+## Active next step — B11.1 pseudo audit
 
 ```bash
 export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
 
-rsna-knee-b10-audit \
-  --config configs/b10_physical_scale.yaml \
+rsna-knee-b11-1-pseudo \
+  --config configs/b11_1_quantile_teacher.yaml \
   --data-root "$DATA_ROOT" \
+  --teacher-checkpoint runs/b7_1_full_coverage/b7_model.pt \
   --b6-root runs/b6_report_labels_v121 \
-  --out-root runs/b10_physical_scale/audit
+  --out-root runs/b11_1_quantile_teacher/pseudo
 ```
 
-Inspect:
+Inspect before any B11.1 student training:
 
 ```bash
-cat runs/b10_physical_scale/audit/spacing_audit.json
-cat runs/b10_physical_scale/audit/physical_scale_policy.json
+cat runs/b11_1_quantile_teacher/pseudo/pseudo_summary.json
+cat runs/b11_1_quantile_teacher/pseudo/pseudo_policy.json
 ```
 
-Do **not** start B10 training until the audit is inspected. The geometry coverage must be at least `0.95`, the study count should be `3120`, and `uses_gold_labels` must be `false`.
-
-## B10 step 2 — training
-
-```bash
-rsna-knee-b10 \
-  --config configs/b10_physical_scale.yaml \
-  --data-root "$DATA_ROOT" \
-  --b5-checkpoint runs/b5_report_ssl/b5_encoder.pt \
-  --b6-root runs/b6_report_labels_v121 \
-  --physical-policy runs/b10_physical_scale/audit/physical_scale_policy.json \
-  --out-root runs/b10_physical_scale
-```
-
-Expected per complete epoch:
+Important quantities:
 
 ```text
-batches                       1560
-study_draws                   3120
-active_supervision_cells_seen 14123
-positive_cells_seen            6871
-negative_cells_seen            7252
-budget_limited                 false
+viability_passed
+pseudo_cells
+combined_active_studies
+newly_activated_studies
+per-target low-tail counts
+per-target high-tail counts
+per-target quantile thresholds
+per-target applied pseudo mass
 ```
 
-## B10 step 3 — frozen gold evaluation
-
-After four complete epochs and artifact inspection:
-
-```bash
-rsna-knee-b10-eval \
-  --config configs/b10_physical_scale.yaml \
-  --data-root "$DATA_ROOT" \
-  --checkpoint runs/b10_physical_scale/b10_model.pt \
-  --out-root runs/b10_physical_scale/gold_eval
-```
-
-Primary benchmark:
-
-```text
-B7.1 macro AUC = 0.5644802945
-```
-
-The primary comparison is an aligned B7.1 -> B10 study-level paired bootstrap with 5,000 replicates.
+**Do not train from the old B11-v1 pseudo artifacts.** B11.1 student training should only be implemented/run after the B11.1 label-free pseudo audit passes and its artifacts are frozen.
 
 ## Validation caution
 
-The same 58 gold studies have informed repeated method decisions. Current scores are **development/model-selection estimates**, not pristine hidden-test estimates. Do not tune target-specific routing, physical spacing/FOV, weak-label weights, per-target model winners, or ensemble weights from these 58 labels and then present the result as independent validation.
+The same 58 gold studies have informed repeated method decisions. Current scores are **development/model-selection estimates**, not pristine hidden-test estimates. Do not tune target-specific routing, physical spacing/FOV, weak-label weights, pseudo-label thresholds, per-target model winners, or ensemble weights from these 58 labels and then present the result as independent validation.
+
+Actual hidden-test / leaderboard performance remains unknown until a real competition submission is evaluated.
 
 `docs/competition.md` remains a preserved competition-summary document and is intentionally not rewritten by experiment updates.
