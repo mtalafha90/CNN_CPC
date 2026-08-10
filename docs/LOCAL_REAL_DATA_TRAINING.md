@@ -1,8 +1,6 @@
 # Local Real-Data Training Runbook
 
-> **Current stage — 2026-08-10:** package `0.13.0`. **B7.1 full-corpus weak supervision is the current best standalone development model at macro AUC `0.5644802945`. The fixed B5+B7.1 rank ensemble is rejected. B8 spatial-anatomy learning is currently training.** See [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md) for measured results.
-
-This runbook is for the verified local workstation.
+> **Current stage — 2026-08-10:** package `0.14.0`. **B7.1 remains the current leader at macro AUC `0.5644802945`. B8 is rejected at `0.5300962807`. B9 strict semantic routing is implemented and ready for testing/training.** See [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
 
 ## Environment
 
@@ -30,209 +28,158 @@ cd "$REPO"
 conda activate rsna-knee
 ```
 
-## Pull only between stages
+## Pull/install between stages
 
 ```bash
 git checkout main
 git pull --ff-only origin main
 python -m pip install -e .
+
+python - <<'PY'
+import rsna_knee
+print(rsna_knee.__version__)
+PY
 ```
 
-Do not pull code into an already running training process.
-
-## Verified data gates
-
-These checks are complete for the current local data unless data/DICOM/routing code changes:
+Expected version:
 
 ```text
-studies                 4,407
-gold                       58
-report-only              4,349
-series                  24,371
-train preflight         121/121 selected streams decoded
-local test preflight     14/14 selected streams decoded
-full audit           21,886/21,886 selected series decoded
-DICOM files         732,554/732,556 decoded
-selected series lost         0
+0.14.0
 ```
 
-## Completed experiment record
+## Current measured ladder
 
 ```text
 B0 random                         0.4762536432
 B1 strong SSL                    0.5030284974
-B2 lower encoder LR              0.4993244663
-B3 pathology-aware MIL           0.4944652486
 B4 frozen SSL + classical        0.5137567459
-B4.1 shared policy               0.4847792672
-B4.2 grouped policies            0.4901328905
-B4.3 two-way CV selector         0.4966083942
-B1+B4 fixed rank                 0.5167
 B5 image-report SSL              0.5243650851
 B7-v1 weak supervision           0.5397724412
 B7.1 full coverage               0.5644802945   CURRENT LEADER
 B5+B7.1 fixed rank ensemble      0.5540141184   REJECTED
-B8 spatial anatomy               pending        TRAINING
+B8 spatial anatomy               0.5300962807   REJECTED
+B9 strict semantic routing       pending        ACTIVE
 ```
 
-## Strong SSL checkpoint
+## Why B9
+
+The historical six-stream selector sometimes places a same-class acquisition into the opposite semantic slot when a plane has multiple series but lacks one contrast class.
+
+Full training metadata audit:
 
 ```text
-runs/ssl_strong/ssl_encoder.pt
+historical selected streams   21886
+strict selected streams       21334
+wrong-slot substitutions        552
+wrong-slot fraction             2.52%
+strict semantic mismatches         0
 ```
 
-Coverage:
+Per stream:
 
 ```text
-8 epochs
-8,000 batches
-24,000 study draws
-~5.52 corpus passes
-238,274 active 2.5D examples
+sagittal_fluid       251 removed
+sagittal_structural   28 removed
+coronal_fluid          2 removed
+coronal_structural    34 removed
+axial_fluid            0 removed
+axial_structural     237 removed
 ```
 
-## B5 representation checkpoint
+Provided test metadata:
 
 ```text
-runs/b5_report_ssl/b5_encoder.pt
+historical selected streams 14
+strict selected streams     13
+wrong-slot substitutions     1
 ```
 
-B5 development result:
+B9 uses exact semantics:
 
 ```text
-macro AUC = 0.5243650851
-95% CI   = [0.4728108406, 0.5761619105]
+*_fluid       -> Fluid_Sensitive == True only
+*_structural  -> Fluid_Sensitive == False only
+missing class -> None / masked
 ```
 
-B5 is retained as the report-aligned representation baseline and initialization source for B7.
+## B9 scientific contract
 
-## B6 frozen weak-label artifacts
+Only routing differs from B7.1. These remain unchanged:
 
 ```text
-runs/b6_report_labels_v121/
-├── training_targets.csv
-├── policy.json
-└── audit.json
+B5 initialization
+B6 v1.2.1 weak labels
+KneeMILNet architecture
+16 slices/stream
+batch size 2
+4 epochs
+1560 batches/epoch
+encoder LR 1e-5
+head LR 1e-4
+same augmentation
+TTA [-1,0,1]
+5000 bootstrap replicates
+no gold gradients
+no gold early stopping
 ```
 
-Frozen training scope:
-
-```text
-report-only rows             4349
-active studies               3120
-usable cells                14123
-positive cells               6871
-negative cells               7252
-```
-
-Do not patch the B6 parser from B7/B8 gold outcomes.
-
-## B7-v1 reference
-
-Checkpoint:
-
-```text
-runs/b7_weak_supervision/b7_model.pt
-```
-
-Result:
-
-```text
-macro AUC = 0.5397724412
-```
-
-Its 500-batch epoch cap yielded only about 1.28 nominal corpus passes.
-
-## B7.1 full coverage — retained leader
-
-Checkpoint:
-
-```text
-runs/b7_1_full_coverage/b7_model.pt
-```
-
-Training completed four full passes:
-
-```text
-epochs                 4
-batches/epoch       1560
-study draws/epoch   3120
-active cells/epoch 14123
-positive            6871
-negative            7252
-loss 0.752419 -> 0.612758
-budget limited      false
-```
-
-Gold development result:
-
-```text
-macro AUC = 0.5644802945
-95% CI   = [0.5052432984, 0.6229422178]
-```
-
-Paired B7-v1 -> B7.1:
-
-```text
-median difference = +0.0241102714
-95% paired CI     = [-0.0140197876, +0.0660558004]
-P(B7.1 > B7-v1)   = 0.8694
-```
-
-## Fixed B5+B7.1 rank ensemble — rejected
-
-```text
-ensemble AUC        0.5540141184
-B7.1 AUC            0.5644802945
-P(ensemble > B7.1)  0.3054
-```
-
-Do not search other blend weights, raw averages or target-specific mixtures.
-
-## Current task: B8 spatial-anatomy training
-
-B8 initializes from B7.1 and preserves 2x2 within-slice ConvNeXt spatial tokens:
-
-```text
-B7.1 MRI memory = 96 tokens/study
-B8 MRI memory   = 384 tokens/study
-```
-
-B8 keeps the B6 weak-label policy, target balancing, full 3,120-study epoch coverage, four epochs and learning rates unchanged.
-
-Training command:
+## Test B9 before training
 
 ```bash
-rsna-knee-b8 \
-  --config configs/b8_spatial_anatomy.yaml \
+pytest -q \
+  tests/test_b6_report_labels.py \
+  tests/test_b6_gold_audit.py \
+  tests/test_b7_weak_supervision.py \
+  tests/test_b9_strict_routing.py
+```
+
+Also verify the commands are installed:
+
+```bash
+which rsna-knee-b9
+which rsna-knee-b9-eval
+```
+
+## Train B9-v1
+
+```bash
+rsna-knee-b9 \
+  --config configs/b9_strict_routing.yaml \
   --data-root "$DATA_ROOT" \
-  --b71-checkpoint runs/b7_1_full_coverage/b7_model.pt \
+  --b5-checkpoint runs/b5_report_ssl/b5_encoder.pt \
   --b6-root runs/b6_report_labels_v121 \
-  --out-root runs/b8_spatial_anatomy
+  --out-root runs/b9_strict_routing
 ```
 
 Expected outputs:
 
 ```text
-runs/b8_spatial_anatomy/
-├── b8_model.pt
+runs/b9_strict_routing/
+├── b9_model.pt
 ├── history.json
 ├── policy.json
+├── routing_audit.json
 └── supervision_plan.json
 ```
 
-The checkpoint is saved after every completed epoch.
+The model checkpoint is refreshed after each completed epoch.
 
-## When B8 training finishes
-
-Inspect first:
+## Inspect before gold evaluation
 
 ```bash
-cat runs/b8_spatial_anatomy/history.json
-cat runs/b8_spatial_anatomy/supervision_plan.json
+cat runs/b9_strict_routing/routing_audit.json
+cat runs/b9_strict_routing/history.json
+cat runs/b9_strict_routing/supervision_plan.json
 ```
 
-Expected for every complete full epoch:
+Mandatory routing checks:
+
+```text
+routing_policy             fluid_sensitive_exact_v1
+strict_semantic_mismatches 0
+```
+
+For each complete full epoch, expect approximately the B7.1 supervision contract:
 
 ```text
 batches                         1560
@@ -242,21 +189,30 @@ positive cells                  6871
 negative cells                  7252
 ```
 
-Confirm that the loss is finite and that no epoch was unexpectedly budget-limited.
+If strict routing unexpectedly leaves a weak-training study with no selected MRI stream at all, `supervision_plan.json` will report that explicitly. Do not conceal or patch such filtering after the fact.
 
-Do **not** run the B8 gold evaluation until these artifacts have been inspected.
+## B9 gold evaluation
 
-## B8 gold evaluation — only after artifact inspection
+Only after inspecting the artifacts:
 
 ```bash
-rsna-knee-b8-eval \
-  --config configs/b8_spatial_anatomy.yaml \
-  --data-root "$DATA_ROOT" \
-  --checkpoint runs/b8_spatial_anatomy/b8_model.pt \
-  --out-root runs/b8_spatial_anatomy/gold_eval
-```
+python - <<'PY'
+import yaml
+with open('configs/b9_strict_routing.yaml') as f:
+    c=yaml.safe_load(f)
+c['num_workers']=0
+c['persistent_workers']=False
+with open('/tmp/b9_eval.yaml','w') as f:
+    yaml.safe_dump(c,f,sort_keys=False)
+print('/tmp/b9_eval.yaml')
+PY
 
-If DataLoader shutdown is noisy, a runtime-only config with `num_workers: 0` and `persistent_workers: false` may be used for evaluation without changing the scientific experiment.
+rsna-knee-b9-eval \
+  --config /tmp/b9_eval.yaml \
+  --data-root "$DATA_ROOT" \
+  --checkpoint runs/b9_strict_routing/b9_model.pt \
+  --out-root runs/b9_strict_routing/gold_eval
+```
 
 Primary benchmark:
 
@@ -264,31 +220,32 @@ Primary benchmark:
 B7.1 = 0.5644802945
 ```
 
-Primary statistical comparison: paired B7.1 -> B8 bootstrap with 5,000 study-level replicates.
+Then compare B7.1 -> B9:
 
-## Current files worth preserving
+```bash
+python -m rsna_knee.cli evaluate \
+  --train-csv "$DATA_ROOT/train.csv" \
+  --oof runs/b7_1_full_coverage/gold_eval/gold_predictions.csv \
+  --compare-oof runs/b9_strict_routing/gold_eval/gold_predictions.csv \
+  --n-bootstrap 5000 \
+  --out runs/b9_strict_routing/gold_eval/b71_vs_b9.json
+```
+
+For this orientation, positive `median_difference` favors B9 and `probability_b_better` is `P(B9 > B7.1)`.
+
+## Preserve these artifacts
 
 ```text
-runs/stage1_random/
-runs/ssl_strong/
-runs/stage1_ssl_strong/
-runs/stage1_ssl_b2/
-runs/stage1_ssl_b3/
-runs/b4_frozen_ssl/
 runs/b5_report_ssl/
-runs/b5_frozen_probe/
 runs/b6_report_labels_v121/
 runs/b7_weak_supervision/
 runs/b7_1_full_coverage/
 runs/b8_spatial_anatomy/
+runs/b9_strict_routing/
 ```
 
-Do not delete completed prediction/OOF/evaluation files; they are the experiment audit trail.
-
-## Warnings
-
-PyTorch Transformer nested-tensor warnings are optimization warnings unless accompanied by an actual failure. A DataLoader worker teardown error after the final checkpoint has already been written should be distinguished from an optimization-time failure by checking `history.json` and the saved checkpoint.
+Do not delete completed prediction/evaluation files; they are the experiment audit trail.
 
 ## Interpretation rule
 
-The same 58 gold studies have informed multiple method decisions. Treat the campaign as **model-selection CV**. Do not tune B8 spatial grid size, anatomy-prior strength, target-specific priors, epochs, weak-label weights or ensemble weights post hoc from the first B8 gold result without declaring a new development experiment.
+The 58 gold studies are now a repeated development/model-selection set. Do not tune B9 target-specific routing, restore individual substituted streams, change weak-label weights, select target-specific model winners, or optimize ensemble weights from the first B9 gold result and then call that result independent validation.
