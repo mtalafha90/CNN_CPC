@@ -1,6 +1,6 @@
 # B8 — pathology-aware spatial anatomy learning
 
-> **Status — 2026-08-10:** **IMPLEMENTED / REAL-DATA TRAINING IN PROGRESS.** The B8-v1 recipe was frozen before training and before its first 58-study gold development evaluation. No B8 gold score has been recorded yet.
+> **Status — 2026-08-10:** **REAL-DATA TRAINING COMPLETE / GOLD DEVELOPMENT EVALUATION PENDING.** The B8-v1 recipe was frozen before training and before its first 58-study gold development evaluation. All four predefined full-corpus epochs completed successfully with no budget limiting. No B8 gold score has been recorded yet.
 
 ## Motivation
 
@@ -31,17 +31,11 @@ B8 MRI memory:
 
 The B8 ConvNeXt encoder reuses the B7.1 weights. Instead of applying only global average pooling, B8 takes the final ConvNeXt feature map, adaptive-pools it to a `2x2` grid, applies the same learned ConvNeXt classifier normalization, and emits four spatial tokens per sampled 2.5D slice.
 
-Each token receives:
-
-- the inherited slice-position embedding;
-- the inherited stream embedding;
-- a new learned region-position embedding.
-
-The inherited MRI Transformer then contextualizes the 384-token memory. The inherited 12 pathology queries cross-attend to this spatial MRI memory.
+Each token receives the inherited slice-position embedding, inherited stream embedding, and a new learned region-position embedding. The inherited MRI Transformer contextualizes the 384-token memory and the inherited 12 pathology queries cross-attend to it.
 
 ## Soft anatomy priors
 
-B8 applies a fixed additive attention-logit prior for each pathology query. The prior is deliberately **soft**:
+B8 applies a fixed additive attention-logit prior for each pathology query. The prior is deliberately soft:
 
 - preferred MRI streams have prior weight `1.0`;
 - non-preferred streams retain prior weight `0.75`;
@@ -66,17 +60,15 @@ Predeclared stream preferences:
 | Contusion | fluid-sensitive sagittal/coronal/axial |
 | Fracture | structural sagittal/coronal/axial |
 
-These priors are based on general knee MRI anatomy and sequence sensitivity, not on target-specific B5/B7/B7.1 development AUCs.
+These priors were defined from general knee MRI anatomy and sequence sensitivity, not from target-specific B5/B7/B7.1 development AUCs.
 
 ### Why no fixed in-plane quadrant prior
 
-The current preprocessing does not certify a canonical left/right or anterior/posterior pixel orientation across every selected series. Therefore B8 does **not** hard-code a quadrant as medial, lateral, anterior or posterior. The fixed prior is uniform across the four in-plane regions, while the region embeddings and pathology queries learn spatial preferences from weak supervision.
-
-This avoids injecting a potentially wrong orientation assumption while still preserving spatial information that B7.1 discarded.
+The current preprocessing does not certify a canonical left/right or anterior/posterior pixel orientation across every selected series. Therefore B8 does not hard-code a quadrant as medial, lateral, anterior or posterior. The fixed prior is uniform across the four in-plane regions, while the region embeddings and pathology queries learn spatial preferences from weak supervision.
 
 ## Initialization
 
-B8 must initialize from the completed B7.1 checkpoint:
+B8 initializes from the completed B7.1 checkpoint:
 
 ```text
 runs/b7_1_full_coverage/b7_model.pt
@@ -95,18 +87,7 @@ gold studies in gradient        0
 gold early stopping             0
 ```
 
-All compatible B7.1 parameters are copied into B8:
-
-- ConvNeXt encoder;
-- slice positions;
-- stream embeddings;
-- MRI Transformer;
-- pathology tokens;
-- pathology-context Transformer;
-- cross-attention;
-- target heads.
-
-Only the new region embedding and fixed anatomy-bias buffer are absent from B7.1 and initialized by B8.
+All compatible B7.1 parameters are copied into B8. Only the new region embedding and fixed anatomy-bias buffer are absent from B7.1 and initialized by B8.
 
 ## Frozen weak supervision
 
@@ -128,7 +109,7 @@ The asymmetric global policy remains:
 | uncertain | ignored | 0.00 |
 | unmentioned | ignored | 0.00 |
 
-Target-balance multipliers are recomputed from the same frozen B6 training pool and therefore match the B7.1 supervision mass contract.
+Target-balance multipliers match the frozen B7.1 supervision mass contract.
 
 ## Frozen B8-v1 training recipe
 
@@ -159,36 +140,9 @@ slice prior floor            0.80
 
 No gold labels are used for training loss or early stopping.
 
-## Package / entry points
+## Completed real-data training
 
-Current package:
-
-```text
-0.13.0
-```
-
-Entry points:
-
-```text
-rsna-knee-b8
-rsna-knee-b8-eval
-```
-
-## Install and test
-
-```bash
-cd /media/talafha/Disk_1/CNN_CPC
-git pull
-python -m pip install -e .
-
-pytest -q \
-  tests/test_b6_report_labels.py \
-  tests/test_b6_gold_audit.py \
-  tests/test_b7_weak_supervision.py \
-  tests/test_b8_anatomy_spatial.py
-```
-
-## Train B8-v1 — active run
+Command:
 
 ```bash
 rsna-knee-b8 \
@@ -199,44 +153,42 @@ rsna-knee-b8 \
   --out-root runs/b8_spatial_anatomy
 ```
 
-Outputs:
+Checkpoint:
 
 ```text
-runs/b8_spatial_anatomy/
-├── b8_model.pt
-├── history.json
-├── policy.json
-└── supervision_plan.json
+runs/b8_spatial_anatomy/b8_model.pt
 ```
 
-The checkpoint is saved after every completed epoch.
+Training history:
 
-**Current state:** the real-data training command is running. Documentation must not infer a final epoch count, final loss or B8 AUC until those artifacts are produced.
+| Epoch | Loss | Batches | Study draws | Active cells | Positive | Negative | Seconds | Budget limited |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 1 | `0.6707552306` | 1560 | 3120 | 14123 | 6871 | 7252 | 2239.67 | false |
+| 2 | `0.6445401128` | 1560 | 3120 | 14123 | 6871 | 7252 | 3071.56 | false |
+| 3 | `0.6186956850` | 1560 | 3120 | 14123 | 6871 | 7252 | 3256.41 | false |
+| 4 | `0.5997290100` | 1560 | 3120 | 14123 | 6871 | 7252 | 2724.49 | false |
 
-## Before gold evaluation
-
-When training finishes, inspect:
-
-```bash
-cat runs/b8_spatial_anatomy/history.json
-cat runs/b8_spatial_anatomy/supervision_plan.json
-```
-
-For each complete full epoch, the expected supervision counts are:
+Totals:
 
 ```text
-batches                    1560
-study draws                3120
-active supervision cells  14123
-positive cells             6871
-negative cells             7252
+completed epochs          4
+batches                 6240
+study draws            12480
+nominal corpus passes      4.0
+usable cells/epoch       14123
+positive cells/epoch      6871
+negative cells/epoch      7252
+training seconds        11292.13
+budget limited            false
 ```
 
-Check that losses are finite, the training pool did not change, and no epoch was unexpectedly budget-limited.
+The weak-training loss decreased monotonically from `0.6707552306` to `0.5997290100`. This confirms stable optimization but is not evidence by itself that gold macro AUC improved.
 
-## Gold development evaluation
+The Transformer nested-tensor warning and the PyTorch warning about differing `key_padding_mask`/`attn_mask` dtypes were non-fatal; the frozen B8-v1 run completed all predefined epochs. The mask-dtype warning should be cleaned up in a later implementation revision, not by changing this completed B8-v1 checkpoint before its evaluation.
 
-Only after the frozen B8-v1 training run is complete and its artifacts are inspected:
+## Gold development evaluation — next step
+
+The training artifacts have now been inspected and satisfy the frozen contract. The first B8-v1 gold evaluation may proceed without changing model parameters:
 
 ```bash
 rsna-knee-b8-eval \
@@ -246,7 +198,7 @@ rsna-knee-b8-eval \
   --out-root runs/b8_spatial_anatomy/gold_eval
 ```
 
-Use a runtime-only workers=0 copy of the config if DataLoader worker teardown is noisy; this does not alter the scientific model.
+A runtime-only `num_workers: 0` / `persistent_workers: false` copy of the config may be used if worker teardown is noisy; this does not change the scientific model.
 
 Primary benchmark:
 
@@ -260,4 +212,4 @@ Primary statistical test: paired B7.1 -> B8 study-level bootstrap with 5,000 rep
 
 B8-v1 is evaluated once under this frozen rule. Do not search spatial grid sizes, anatomy-prior strengths, target-specific priors, epochs or blend weights on the 58-study development labels and still call the result B8-v1.
 
-Because B8 was designed after prior development results on the same 58 studies, its gold score will be a further **development estimate**, not independent validation.
+Because B8 was designed after prior development results on the same 58 studies, its gold score will be a further development estimate, not independent validation.
