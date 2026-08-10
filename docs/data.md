@@ -1,6 +1,6 @@
 # Dataset and DICOM handling
 
-> **Snapshot: 2026-08-09.** Data/audit facts below are verified on the downloaded competition release. Experiment scores live in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). B5 is currently running and uses only the 4,349 report-only training studies for representation learning.
+> **Snapshot: 2026-08-10.** Data/audit facts below are verified on the downloaded competition release. Experiment scores live in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). B6 v1.2.1 is the frozen structured weak-label source; B7.1 is the current development leader; B8 spatial-anatomy training is in progress.
 
 ## CSV contract
 
@@ -165,9 +165,9 @@ Checkpoint:
 runs/ssl_strong/ssl_encoder.pt
 ```
 
-## B4 frozen-feature data contract
+## B4/B5 frozen-feature data contract
 
-B4 extracts deterministic features only after representation pretraining. The verified gold cache is:
+B4/B5 extract deterministic features only after representation pretraining. The verified gold cache contract is:
 
 ```text
 study_uids = (58,)
@@ -178,39 +178,105 @@ finite     = true
 
 Mean, standard deviation and maximum are pooled per stream. Presence flags are explicitly available to the classical classifier.
 
-## Report data and OA parsing
+B5 representation training uses the 4,349 report-only studies and excludes all 58 gold studies.
 
-Each report/target cell is represented as `positive`, `negated`, `uncertain`, or `unmentioned`. Report silence receives zero direct report weight by default.
+## B6 structured report data contract
 
-The compartment-aware OA parser produces:
-
-| Target | Positive | Negated | Unmentioned |
-|---|---:|---:|---:|
-| Medial OA | 492 | 339 | 3,576 |
-| Lateral OA | 409 | 387 | 3,611 |
-| PF OA | 695 | 379 | 3,333 |
-
-These remain weak labels rather than gold-equivalent labels.
-
-## B5 report-only representation scope
-
-B5 uses the 4,349 report-only studies for both MRI and report representation learning and excludes all 58 gold studies.
-
-The report semantic space is fitted only on competition reports:
+Each report/target cell is represented as:
 
 ```text
-normalized report
--> word TF-IDF (1-2 grams)
--> TruncatedSVD (<=256 dimensions)
--> L2-normalized semantic embedding
+positive
+negated
+uncertain
+unmentioned
 ```
 
-No external corpus or language model is used. Exact duplicate normalized report hashes are tracked and masked as false negatives in the report contrastive queue.
+Report silence is not a negative.
 
-The B5 text branch is training-only; the downstream artifact is an MRI encoder and final inference remains MRI-only.
+Frozen B6 v1.2.1 report-only training export:
+
+```text
+report-only rows                  4349
+active studies                    3120
+inactive zero-usable studies      1229
+usable cells                     14123
+positive cells                    6871
+negative cells                    7252
+confidence threshold              0.75
+gold rows in training_targets.csv    0
+```
+
+Per-target usable counts:
+
+| Target | Positive | Negative | Usable |
+|---|---:|---:|---:|
+| ACL | 572 | 1,089 | 1,661 |
+| MCL | 271 | 1,089 | 1,360 |
+| Medial Meniscus | 1,126 | 536 | 1,662 |
+| Lateral Meniscus | 448 | 1,182 | 1,630 |
+| Medial OA | 484 | 334 | 818 |
+| Lateral OA | 402 | 382 | 784 |
+| PF OA | 682 | 372 | 1,054 |
+| Effusion | 1,338 | 757 | 2,095 |
+| Synovitis | 399 | 17 | 416 |
+| Baker's | 557 | 476 | 1,033 |
+| Contusion | 389 | 466 | 855 |
+| Fracture | 203 | 552 | 755 |
+
+B6 is frozen after its gold audit. Do not alter parser rules or confidence thresholds from later B7/B8 gold outcomes.
+
+## B7/B7.1 training data contract
+
+B7/B7.1 use only the 3,120 report-only studies with at least one usable B6 cell. In the audited run:
+
+```text
+active studies before MRI filter  3120
+studies without selected MRI         0
+training studies                  3120
+training usable cells            14123
+```
+
+B7-v1 sampled only 1,000 study draws/epoch because of the 500-batch cap.
+
+B7.1 uses:
+
+```text
+batch size          2
+batches/epoch    1560
+study draws/epoch 3120
+epochs              4
+```
+
+so every complete epoch covers the entire active weak-training pool once.
+
+B7.1 development result:
+
+```text
+macro AUC = 0.5644802945
+```
+
+## B8 spatial-token data contract
+
+B8 keeps exactly the same study/series/B6 supervision pool as B7.1. The data change is not a new cohort or new label source; it is the representation retained from each sampled MRI slice.
+
+```text
+B7.1: 1 globally pooled ConvNeXt token/slice
+B8:   2x2 ConvNeXt spatial grid = 4 tokens/slice
+```
+
+For the standard six streams and 16 sampled slices:
+
+```text
+B7.1 memory tokens/study = 96
+B8 memory tokens/study   = 384
+```
+
+No extra MRI studies, external images, external labels or external language resources are introduced by B8.
+
+B8 real-data training is currently in progress. No B8 gold-development result is recorded in this data document.
 
 ## Validation data roles
 
-Gold outer folds are evaluation rows, not representation-training rows. The original neural Stage-1 path also separates inner selection, gold training and weak cross-fit roles. B4/B5 representation pretraining excludes all gold rows entirely.
+The 58 gold studies have supported multiple controlled method decisions. They are excluded from B5 representation training and B6 weak-training export, and they do not enter B7/B7.1/B8 gradients or early stopping.
 
-Because the same 58 gold studies have now been used across multiple controlled model decisions, current experiment tables should be interpreted as model-selection cross-validation rather than an untouched independent test set.
+However, the B6 audit and later model choices have used the same 58 studies for development decisions. Therefore current experiment tables should be interpreted as **model-selection cross-validation/development estimates**, not an untouched independent test set.
