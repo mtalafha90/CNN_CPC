@@ -2,18 +2,18 @@
 
 `CNN_CPC` is a PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The released training surface contains 4,407 studies, 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and 12 study-level targets evaluated with macro ROC AUC.
 
-> **Current snapshot — 2026-08-10:** **B7.1 full-corpus weak supervision remains the retained standalone champion**, macro AUC `0.5644802945`. B8 spatial-anatomy learning (`0.5300962807`), B9 strict semantic routing (`0.5334962669`) and B10 physical-scale normalization (`0.5523982721`) were rejected as global replacements. B11-v1 was stopped before training after its pseudo-label viability gate failed. **B11.1 calibration-aware quantile teacher tails passed its label-free pseudo audit and the frozen B11.1 student is now ready for training.**
+> **Current snapshot — 2026-08-11:** **B7.1 full-corpus weak supervision remains the retained standalone champion**, macro AUC `0.5644802945`. B8 spatial-anatomy (`0.5300962807`), B9 strict semantic routing (`0.5334962669`), B10 physical-scale normalization (`0.5523982721`) and B11.1 calibration-aware teacher tails (`0.5506902702`) were rejected as global replacements. **B12 variable-number-of-series modeling is now implemented and predeclared; its label-free series audit is the active next step.**
 
 Canonical status: [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md).  
-B11.1 protocol: [`docs/B11_1_QUANTILE_TEACHER.md`](docs/B11_1_QUANTILE_TEACHER.md).
+B12 protocol: [`docs/B12_VARIABLE_SERIES.md`](docs/B12_VARIABLE_SERIES.md).
 
 ## Current software state
 
 ```text
-package version       0.18.0
+package version       0.19.0
 current leader        B7.1 full-corpus weak supervision
 leader macro AUC      0.5644802945
-active experiment     B11.1 quantile-teacher student training
+active experiment     B12 variable-number-of-series model
 external pretraining  disabled
 final inference       MRI-only
 ```
@@ -37,7 +37,8 @@ final inference       MRI-only
 | B9 | strict semantic routing | `0.5334962669` | rejected |
 | B10 | B7.1 + physical-scale normalization | `0.5523982721` | rejected globally |
 | B11-v1 | absolute-threshold B7.1 teacher completion | n/a | stopped at pseudo viability gate |
-| **B11.1** | **per-target quantile teacher tails** | pending | **pseudo audit passed; training ready** |
+| B11.1 | per-target quantile teacher tails | `0.5506902702` | rejected globally |
+| **B12** | **variable number of real MRI series** | pending | **implemented / label-free audit pending** |
 
 ## Retained B7.1 benchmark
 
@@ -46,91 +47,59 @@ B7.1 combines B5 competition-only image-report initialization, six historical du
 ```text
 training studies per epoch  3120
 B6 supervised cells        14123
+positive cells              6871
+negative cells              7252
 epochs                         4
 macro AUC             0.5644802945
 ```
 
 The same 58 gold studies have been reused for sequential method development, so all reported gold scores are **development/model-selection estimates**, not pristine independent validation.
 
-## B10 result — physical-scale normalization
+## B11.1 result — close the teacher-pseudo branch
 
-B10 standardized in-plane MRI geometry to approximately `0.3125 mm/pixel` and `160 mm` FOV before the unchanged `224 x 224` model resize. Geometry coverage was `1.0` across all 15,468 selected weak-training series.
-
-```text
-B10 macro AUC        0.5523982721
-95% CI              [0.4935605888, 0.6091548645]
-median(B10-B7.1)    -0.0121030792
-95% paired CI       [-0.0507382525, +0.0250750953]
-P(B10 > B7.1)        0.2706
-```
-
-Decision: reject B10-v1 as a global replacement.
-
-## B11-v1 — stopped by the pre-training gate
-
-The first teacher-student policy used one global rule:
+B11.1 solved the calibration problem seen in B11-v1 by selecting target-wise 5/95% teacher tails. Its pseudo audit passed and training completed four full epochs, but generalization did not improve:
 
 ```text
-teacher mean >= 0.90 OR <= 0.10
-TTA probability range <= 0.05
+B11.1 macro AUC          0.5506902702
+95% CI                  [0.4917424630, 0.6086153876]
+B7.1 macro AUC           0.5644802945
+median(B11.1-B7.1)      -0.0126224565
+95% paired CI           [-0.0487500119, +0.0195120537]
+P(B11.1 > B7.1)          0.2184
 ```
 
-It found 4,794 pseudo-cells and activated 880 additional studies, but only 23 pseudo-cells were positive. Medial Meniscus and Synovitis had zero accepted cells and Lateral OA had only 21, so `viability_passed = false`. **B11-v1 student training must not be run.**
+Decision: reject B11.1 globally and do not construct target-wise B7.1/B11.1 winners from the reused 58-study development surface.
 
-## B11.1 — calibration-aware quantile teacher tails
+## Why B12
 
-The B11-v1 diagnostic showed that TTA predictions were generally stable but absolute teacher probability ranges differ strongly across pathologies. B11.1 therefore selects **relative target-wise tails** using no gold labels.
-
-For each target independently, among B6-unsupervised cells:
+B7.1 compresses each knee into six semantic slots:
 
 ```text
-bottom 5% teacher probabilities + TTA range <= 0.05 -> target 0.10
-top    5% teacher probabilities + TTA range <= 0.05 -> target 0.90
-base pseudo weight                                  -> 0.10
-per-target pseudo mass cap                          -> 15% of B6 mass
+sagittal_fluid
+sagittal_structural
+coronal_fluid
+coronal_structural
+axial_fluid
+axial_structural
 ```
 
-B6 cells are never overwritten.
+A study can contain repeated or additional MRI acquisitions beyond those six winners. B12 tests whether keeping those acquisitions as separate real series improves pathology discrimination.
 
-### Frozen B11.1 pseudo-audit result
+### Single scientific change
 
-```text
-B6 cells                  14123
-pseudo cells                3656
-combined cells              17779
-B6 active studies            3120
-combined active studies      3454
-newly activated studies       334
-pseudo low-tail cells        1864
-pseudo high-tail cells       1792
-viability_passed             true
-```
+B12 returns to the **exact original B7.1 B6 supervision surface**—no B11/B11.1 pseudo-labels.
 
-Every target exceeded 100 pseudo-cells and had more than 50 cells in both tails. Synovitis alone hit the 15% pseudo-mass cap; all other target pseudo weights remained at `0.10`.
+For each B6-active study, B12:
 
-Frozen pseudo CSV SHA-256:
+- retains every repaired series with Sagittal, Coronal or Axial plane;
+- does not choose one fluid and one structural winner per plane;
+- keeps repeated acquisitions as separate series;
+- adds coarse plane/fluid/fat metadata embeddings;
+- uses no learned series-rank/position embedding;
+- dynamically pads only to the largest series count in the current mini-batch;
+- has no architecture-level maximum series count.
 
-```text
-94f914f3548fab17f67ae0bf1906424bac850268c09ce5febede72b2ed7246b6
-```
-
-## B11.1 student contract
-
-The student starts from the **same B5 checkpoint as B7.1**, not from the B7.1 teacher. Historical routing, legacy resizing, architecture, optimizer, augmentation, B6 labels, B6-derived target balancing and the four-epoch schedule are retained. The only scientific change is the frozen B11.1 pseudo supervision.
-
-Each complete epoch must contain:
-
-```text
-studies                     3454
-batches                     1727
-B6 cells                   14123
-pseudo cells                3656
-combined cells             17779
-pseudo low cells            1864
-pseudo high cells           1792
-full_coverage               true
-budget_limited              false
-```
+B5 initialization, legacy resize, B6 supervision, target balancing, optimizer, augmentation, four-epoch schedule and frozen TTA remain B7.1-equivalent.
 
 ## Install / update
 
@@ -145,7 +114,7 @@ python -c "import rsna_knee; print(rsna_knee.__version__)"
 Expected:
 
 ```text
-0.18.0
+0.19.0
 ```
 
 ## Tests
@@ -153,47 +122,74 @@ Expected:
 ```bash
 python -m compileall -q src tests
 pytest -q \
-  tests/test_b7_weak_supervision.py \
-  tests/test_b11_1_quantile_pseudo.py \
-  tests/test_b11_1_student.py
+  tests/test_b12_variable_series.py \
+  tests/test_b7_weak_supervision.py
 ```
 
-## Active next step — train B11.1
-
-Use the already frozen successful pseudo artifacts:
+## Active next step — B12 label-free series audit
 
 ```bash
 export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
 
-rsna-knee-b11-1 \
-  --config configs/b11_1_quantile_teacher.yaml \
+rsna-knee-b12-audit \
+  --config configs/b12_variable_series.yaml \
+  --data-root "$DATA_ROOT" \
+  --b6-root runs/b6_report_labels_v121 \
+  --out-root runs/b12_variable_series/audit
+```
+
+Inspect:
+
+```bash
+cat runs/b12_variable_series/audit/series_audit.json
+cat runs/b12_variable_series/audit/series_policy.json
+```
+
+The predeclared audit must report `viability_passed: true` before training. It also records the exact variable-series mapping SHA-256, number of extra series retained over historical dual routing, fraction of studies gaining extra acquisitions, and the full series-count distribution.
+
+## B12 training — only after audit pass
+
+```bash
+rsna-knee-b12 \
+  --config configs/b12_variable_series.yaml \
   --data-root "$DATA_ROOT" \
   --b5-checkpoint runs/b5_report_ssl/b5_encoder.pt \
   --b6-root runs/b6_report_labels_v121 \
-  --pseudo-root runs/b11_1_quantile_teacher/pseudo \
-  --out-root runs/b11_1_quantile_teacher
+  --series-policy runs/b12_variable_series/audit/series_policy.json \
+  --out-root runs/b12_variable_series
 ```
 
-Do not run the gold evaluator unless all four epochs report `full_coverage: true` and `budget_limited: false`.
+Every full epoch must preserve:
 
-## Frozen B11.1 gold evaluation
+```text
+batches                        1560
+study_draws                    3120
+active_supervision_cells_seen 14123
+positive_cells_seen            6871
+negative_cells_seen            7252
+full_coverage                  true
+full_series_coverage           true
+budget_limited                 false
+```
 
-After four complete epochs:
+Do not run gold evaluation unless all four epochs meet both coverage contracts.
+
+## Frozen B12 gold evaluation
 
 ```bash
-rsna-knee-b11-1-eval \
-  --config configs/b11_1_quantile_teacher.yaml \
+rsna-knee-b12-eval \
+  --config configs/b12_variable_series.yaml \
   --data-root "$DATA_ROOT" \
-  --checkpoint runs/b11_1_quantile_teacher/b11_1_model.pt \
-  --out-root runs/b11_1_quantile_teacher/gold_eval
+  --checkpoint runs/b12_variable_series/b12_model.pt \
+  --out-root runs/b12_variable_series/gold_eval
 ```
 
-Primary benchmark:
+Primary benchmark remains:
 
 ```text
 B7.1 macro AUC = 0.5644802945
 ```
 
-The final development comparison is the same aligned 5,000-replicate paired bootstrap. Do not tune target-specific winners, thresholds, tail fractions, pseudo weights or ensembles from the reused 58-study gold set.
+Use the same aligned 5,000-replicate paired bootstrap. Do not tune target-wise winners, routing variants, series caps, or ensemble weights on the reused 58-study gold set.
 
 Actual hidden-test / leaderboard performance remains unknown until a real competition submission is evaluated.
