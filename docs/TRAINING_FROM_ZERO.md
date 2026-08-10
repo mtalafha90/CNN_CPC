@@ -2,7 +2,7 @@
 
 This is the clean end-to-end guide for setting up `CNN_CPC` on a fresh Linux machine and reproducing the current experiment path.
 
-> **Repository snapshot — 2026-08-10:** package `0.13.0`. B7.1 full-corpus weak supervision is the current best standalone development model at macro AUC `0.5644802945`. The fixed B5+B7.1 rank ensemble is rejected. **B8 spatial-anatomy learning is the current training experiment and has no gold score yet.** Exact results are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
+> **Repository snapshot — 2026-08-10:** package `0.14.0`. **B7.1 is the current best standalone development model at macro AUC `0.5644802945`; B8 is rejected at `0.5300962807`; B9 strict semantic routing is the current predeclared experiment.** Exact results are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
 
 ## Current reproducible ladder
 
@@ -15,19 +15,17 @@ clone/update
 -> inspect CSVs
 -> DICOM preflight + full audit
 -> strong competition-only MRI SSL
--> B0-B4 controlled baselines/ablations
 -> B5 image-report representation learning
 -> B6 frozen structured multilingual report labels
 -> B7-v1 direct weak supervision
 -> B7.1 full-corpus weak supervision [current leader]
 -> fixed B5+B7.1 rank ensemble [rejected]
--> B8 spatial anatomy learning [current training experiment]
--> inspect B8 training artifacts
--> one frozen B8 gold development evaluation
--> paired B7.1 -> B8 bootstrap
+-> B8 spatial anatomy [rejected]
+-> B9 strict semantic routing [current]
+-> inspect B9 routing/training artifacts
+-> one frozen B9 gold development evaluation
+-> paired B7.1 -> B9 bootstrap
 ```
-
-The earlier Stage-2/co-training and historical B4 selector code remain in the repository for reproducibility, but they are not the current active development path.
 
 ## 1. Clone/update
 
@@ -64,10 +62,10 @@ pytest -q
 python -m compileall -q src tests kaggle scripts
 ```
 
-Expected current package version:
+Expected package version:
 
 ```text
-0.13.0
+0.14.0
 ```
 
 ## 3. GPU
@@ -89,13 +87,11 @@ The conservative production path uses one GPU and no `torchrun`.
 
 ## 4. Competition data
 
-After accepting the competition rules, place the data locally and set:
-
 ```bash
 export DATA_ROOT="/path/to/rsna-knee-abnormality-detection"
 ```
 
-Expected metadata files:
+Expected files:
 
 ```text
 train.csv
@@ -105,9 +101,16 @@ test_series.csv
 sample_submission.csv
 ```
 
-Do not commit competition images, reports, credentials or machine-local paths.
+Verified release:
 
-## 5. Inspect and preflight
+```text
+training studies  4407
+gold studies        58
+report-only        4349
+training series   24371
+```
+
+## 5. Inspect/preflight
 
 ```bash
 python -m rsna_knee.cli inspect --data-root "$DATA_ROOT"
@@ -121,86 +124,39 @@ python -m rsna_knee.cli preflight \
   --out runs/preflight_train.json
 ```
 
-Verified release:
+Historical full DICOM audit:
 
 ```text
-studies=4407
-gold=58
-report-only=4349
-series=24371
-```
-
-Full audit reference:
-
-```text
-21,886 selected series checked
-21,886 selected series decoded
+21,886 historically selected series checked
+21,886 decoded
 732,554 / 732,556 candidate DICOM files decoded
 2 partial one-file failures
 0 selected series failed
 ```
 
-## 6. Historical controlled ladder
-
-Reference development scores:
+## 6. Current measured ladder
 
 ```text
 B0 random                         0.4762536432
 B1 strong SSL                    0.5030284974
-B2 lower encoder LR              0.4993244663
-B3 pathology-aware MIL           0.4944652486
 B4 frozen SSL + classical        0.5137567459
-B4.1 shared policy               0.4847792672
-B4.2 grouped policies            0.4901328905
-B4.3 two-way CV selector         0.4966083942
-B1+B4 fixed rank                 0.5167
 B5 image-report SSL              0.5243650851
 B7-v1 direct weak supervision    0.5397724412
-B7.1 full coverage               0.5644802945
+B7.1 full coverage               0.5644802945  [current leader]
 B5+B7.1 fixed rank ensemble      0.5540141184  [rejected]
-B8 spatial anatomy               pending        [training]
+B8 spatial anatomy               0.5300962807  [rejected]
+B9 strict routing                pending       [current]
 ```
 
-Do not reopen B4 selector searches or ensemble-weight searches on the same 58 development labels.
+## 7. Required retained artifacts
 
-## 7. Strong SSL reference
-
-Checkpoint:
-
-```text
-runs/ssl_strong/ssl_encoder.pt
-```
-
-Reference coverage:
-
-```text
-8 epochs
-8,000 batches
-24,000 study draws
-~5.52 corpus passes
-238,274 active 2.5D examples
-```
-
-## 8. B5 reference
-
-Completed representation checkpoint:
+B5 initialization:
 
 ```text
 runs/b5_report_ssl/b5_encoder.pt
 ```
 
-B5 used only the 4,349 report-only competition studies and excluded all 58 gold studies from representation training.
-
-Frozen unchanged B4 probe:
-
-```text
-macro AUC = 0.5243650851
-95% CI   = [0.4728108406, 0.5761619105]
-```
-
-## 9. B6 frozen structured report labels
-
-Expected artifact root:
+B6 frozen weak labels:
 
 ```text
 runs/b6_report_labels_v121/
@@ -209,153 +165,132 @@ runs/b6_report_labels_v121/
 └── audit.json
 ```
 
-Frozen training supervision:
-
-```text
-report-only rows                4349
-active studies                  3120
-usable cells                   14123
-positive cells                  6871
-negative cells                  7252
-```
-
-B6 v1.2.1 is frozen. Do not patch parser behavior from later B7/B8 gold outcomes.
-
-## 10. B7-v1 reference
-
-Checkpoint:
-
-```text
-runs/b7_weak_supervision/b7_model.pt
-```
-
-Result:
-
-```text
-macro AUC = 0.5397724412
-```
-
-B7-v1 used only 500 batches/epoch and therefore about 1.28 nominal corpus passes over four epochs.
-
-## 11. B7.1 full-corpus reference — current leader
-
-Configuration:
-
-```text
-configs/b7_1_full_coverage.yaml
-```
-
-Checkpoint:
+B7.1 benchmark:
 
 ```text
 runs/b7_1_full_coverage/b7_model.pt
+runs/b7_1_full_coverage/gold_eval/gold_predictions.csv
 ```
 
-Training contract:
+Frozen B6 scope:
 
 ```text
-active studies       3120
-usable cells        14123
-batch size              2
-batches/epoch        1560
-study draws/epoch    3120
-epochs                  4
+active studies  3120
+usable cells   14123
+positive        6871
+negative        7252
 ```
 
-Result:
+## 8. Why B9 exists
+
+A label-free audit of `train_series.csv` found that the historical dual-stream selector can populate a missing contrast slot with a same-plane acquisition from the opposite contrast class.
 
 ```text
-macro AUC = 0.5644802945
-95% CI   = [0.5052432984, 0.6229422178]
+historical selected streams  21886
+strict selected streams      21334
+wrong-slot substitutions       552
+wrong-slot fraction            2.52%
+strict semantic mismatches        0
 ```
 
-This is the current benchmark B8 must beat.
+The three-study test metadata contain one analogous false sagittal-fluid assignment.
 
-## 12. Fixed B5+B7.1 rank ensemble — closed
-
-The one predeclared 50:50 percentile-rank blend scored:
+B9 exact rule:
 
 ```text
-0.5540141184
+*_fluid       -> Fluid_Sensitive == True only
+*_structural  -> Fluid_Sensitive == False only
+missing class -> None / presence mask False
 ```
 
-below B7.1. Do not search other weights or target-specific combinations.
+This is the only scientific change versus B7.1.
 
-## 13. B8 install/test
-
-After pulling B8 code:
+## 9. Test B9 implementation
 
 ```bash
-cd "$REPO"
-git pull --ff-only origin main
-python -m pip install -e .
-
 pytest -q \
   tests/test_b6_report_labels.py \
   tests/test_b6_gold_audit.py \
   tests/test_b7_weak_supervision.py \
-  tests/test_b8_anatomy_spatial.py
+  tests/test_b9_strict_routing.py
+
+which rsna-knee-b9
+which rsna-knee-b9-eval
 ```
 
-B8 changes MRI memory from 96 globally pooled slice tokens to 384 coarse spatial tokens while retaining B7.1 initialization and B6 supervision.
-
-## 14. Train B8 — current step
+## 10. Train B9
 
 ```bash
-rsna-knee-b8 \
-  --config configs/b8_spatial_anatomy.yaml \
+rsna-knee-b9 \
+  --config configs/b9_strict_routing.yaml \
   --data-root "$DATA_ROOT" \
-  --b71-checkpoint runs/b7_1_full_coverage/b7_model.pt \
+  --b5-checkpoint runs/b5_report_ssl/b5_encoder.pt \
   --b6-root runs/b6_report_labels_v121 \
-  --out-root runs/b8_spatial_anatomy
+  --out-root runs/b9_strict_routing
 ```
 
 Expected outputs:
 
 ```text
-runs/b8_spatial_anatomy/
-├── b8_model.pt
+runs/b9_strict_routing/
+├── b9_model.pt
 ├── history.json
 ├── policy.json
+├── routing_audit.json
 └── supervision_plan.json
 ```
 
-The checkpoint is refreshed after every completed epoch.
-
-## 15. Inspect B8 before gold evaluation
+## 11. Inspect B9 before gold evaluation
 
 ```bash
-cat runs/b8_spatial_anatomy/history.json
-cat runs/b8_spatial_anatomy/supervision_plan.json
+cat runs/b9_strict_routing/routing_audit.json
+cat runs/b9_strict_routing/history.json
+cat runs/b9_strict_routing/supervision_plan.json
 ```
 
-Verify:
+Mandatory routing condition:
 
 ```text
-4 completed epochs
-1560 batches/epoch unless runtime budget stopped a later epoch
-3120 study draws for every complete epoch
-14123 active supervision cells for every complete full pass
-6871 positive / 7252 negative cells for every complete full pass
-finite monotonic/reasonable loss trajectory
-no unexpected supervision/MRI filtering changes
+strict_semantic_mismatches = 0
+routing_policy = fluid_sensitive_exact_v1
 ```
 
-Do not run the gold evaluation until the training artifacts have been inspected.
+Every complete epoch should retain the B7.1 supervision contract:
 
-## 16. First B8 gold development evaluation
+```text
+batches                1560
+study draws            3120
+active cells          14123
+positive cells         6871
+negative cells         7252
+```
 
-After the frozen run is accepted:
+## 12. B9 gold development evaluation
+
+Use a runtime-only worker-safe config if desired:
 
 ```bash
-rsna-knee-b8-eval \
-  --config configs/b8_spatial_anatomy.yaml \
-  --data-root "$DATA_ROOT" \
-  --checkpoint runs/b8_spatial_anatomy/b8_model.pt \
-  --out-root runs/b8_spatial_anatomy/gold_eval
+python - <<'PY'
+import yaml
+with open('configs/b9_strict_routing.yaml') as f:
+    c=yaml.safe_load(f)
+c['num_workers']=0
+c['persistent_workers']=False
+with open('/tmp/b9_eval.yaml','w') as f:
+    yaml.safe_dump(c,f,sort_keys=False)
+print('/tmp/b9_eval.yaml')
+PY
 ```
 
-A runtime-only `num_workers: 0` copy of the config may be used for evaluation if DataLoader teardown is noisy; this does not alter the model.
+Then:
+
+```bash
+rsna-knee-b9-eval \
+  --config /tmp/b9_eval.yaml \
+  --data-root "$DATA_ROOT" \
+  --checkpoint runs/b9_strict_routing/b9_model.pt \
+  --out-root runs/b9_strict_routing/gold_eval
+```
 
 Primary benchmark:
 
@@ -363,19 +298,19 @@ Primary benchmark:
 B7.1 macro AUC = 0.5644802945
 ```
 
-Primary paired comparison is B7.1 -> B8 using 5,000 study-level bootstrap replicates.
+Paired comparison:
 
-## 17. Reporting discipline
+```bash
+python -m rsna_knee.cli evaluate \
+  --train-csv "$DATA_ROOT/train.csv" \
+  --oof runs/b7_1_full_coverage/gold_eval/gold_predictions.csv \
+  --compare-oof runs/b9_strict_routing/gold_eval/gold_predictions.csv \
+  --n-bootstrap 5000 \
+  --out runs/b9_strict_routing/gold_eval/b71_vs_b9.json
+```
 
-Keep these terms distinct:
+Positive `median_difference` favors B9.
 
-- preflight/audit;
-- training run;
-- gold development score;
-- paired comparison;
-- model-selection CV;
-- leaderboard score.
+## 13. Reporting discipline
 
-Because many method decisions have been informed by the same 58 gold studies, the campaign-level table is model-selection CV. Do not claim it as a pristine independent hidden-test estimate.
-
-Do not tune B8 grid size, anatomy-prior strength, epochs, target-specific priors or ensemble weights from the first B8 gold result and then reuse the same 58 studies as if untouched.
+The 58 gold studies are a repeated development/model-selection set. Do not tune target-specific B9 routing, restore individual substituted streams, change weak-label weights, select per-target winners, or optimize ensemble weights after seeing B9 gold results and then describe the result as independent validation.
