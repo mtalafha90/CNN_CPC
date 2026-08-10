@@ -1,35 +1,10 @@
 # B7.1 — full-corpus weak-supervision coverage
 
-> **Status — 2026-08-10:** **PREDECLARED / TRAINING PENDING.**
+> **Status — 2026-08-10:** **COMPLETE / BEST STANDALONE DEVELOPMENT POINT ESTIMATE.**
 
 ## Motivation
 
-B7-v1 produced the highest standalone development point estimate so far:
-
-```text
-B7-v1 macro AUC = 0.5397724412
-95% CI           = [0.4733481702, 0.6035621405]
-```
-
-versus the previous B5 baseline:
-
-```text
-B5 macro AUC     = 0.5243650851
-exact point delta = +0.0154073561
-```
-
-The paired 5,000-replicate study bootstrap comparing B5 (A) with B7-v1 (B) gave:
-
-```text
-median(B7 - B5) = +0.0155102430
-95% paired CI   = [-0.0607472600, +0.0889531461]
-P(B7 > B5)      = 0.6678
-valid replicates = 5000/5000
-```
-
-Interpretation: B7-v1 has the best standalone point estimate, but the paired evidence is still statistically inconclusive on the 58-study development set.
-
-Before the B7-v1 gold result was inspected, its supervision audit had already exposed a coverage limitation: B7-v1 trained on 3,120 active weakly labelled studies but capped each epoch at 500 batches with batch size 2. That is only 1,000 study draws per epoch and 4,000 draws over four epochs, or about 1.28 nominal corpus passes.
+B7-v1 produced macro AUC `0.5397724412` on the 58-study gold development set, versus B5 `0.5243650851`. Before the B7-v1 gold result was inspected, its supervision audit had already exposed a coverage limitation: B7-v1 trained on 3,120 active weakly labelled studies but capped each epoch at 500 batches with batch size 2, giving only 1,000 study draws per epoch and about 1.28 nominal corpus passes over four epochs.
 
 B7.1 tests that pre-identified limitation directly.
 
@@ -41,76 +16,101 @@ B7.1 changes only:
 b7_max_batches_per_epoch: 500 -> 1560
 ```
 
-With 3,120 active studies and batch size 2, 1,560 batches correspond to one full shuffled pass through the active weak-training pool per epoch. Four epochs therefore provide four nominal full corpus passes.
+With 3,120 active studies and batch size 2, 1,560 batches are one complete shuffled pass through the active weak-training pool. Four epochs therefore provide four nominal full corpus passes.
 
-Everything else remains fixed from B7-v1:
+Everything else remains fixed from B7-v1: B5 encoder initialization, frozen B6 v1.2.1 labels, the global asymmetric soft-target policy, target balancing, six-stream 2.5D ConvNeXt + cross-sequence Transformer + pathology-query architecture, four epochs, learning rates, cosine schedule, augmentation, three-view gold TTA, and 5,000 bootstrap replicates.
 
-- B5 encoder initialization;
-- frozen B6 v1.2.1 labels;
-- no gold labels in gradient or early stopping;
-- positive soft target `0.85`, weight `0.50`;
-- negative soft target `0.05`, weight `1.00`;
-- uncertain and unmentioned cells ignored;
-- same target-balance multipliers computed from the B6 training pool;
-- same six-stream 2.5D ConvNeXt + cross-sequence Transformer + pathology-query architecture;
-- four epochs;
-- encoder LR `1e-5`;
-- head LR `1e-4`;
-- cosine LR schedule;
-- same MRI augmentations;
-- same three-view gold evaluation `[-1,0,1]`;
-- 5,000 bootstrap replicates.
+## Training result
 
-This is intentionally a coverage experiment, not a hyperparameter search.
+Training completed all four predefined epochs with no budget limiting.
 
-## Configuration
+| Epoch | Loss | Batches | Study draws | Active cells | Positive | Negative | Seconds |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | `0.7524191749` | 1560 | 3120 | 14123 | 6871 | 7252 | 1792.09 |
+| 2 | `0.6651707418` | 1560 | 3120 | 14123 | 6871 | 7252 | 1789.91 |
+| 3 | `0.6391165589` | 1560 | 3120 | 14123 | 6871 | 7252 | 1890.68 |
+| 4 | `0.6127582232` | 1560 | 3120 | 14123 | 6871 | 7252 | 1911.79 |
+
+Totals:
 
 ```text
-configs/b7_1_full_coverage.yaml
+active studies       3120
+usable cells        14123
+study draws         12480
+nominal corpus passes 4.0
+budget limited       false
 ```
 
-The config records:
+The loss decreased monotonically and the complete weak-supervision cell set was seen once per epoch.
+
+Checkpoint:
 
 ```text
-b7_experiment_name: B7.1_full_coverage
+runs/b7_1_full_coverage/b7_model.pt
 ```
 
-The internal implementation variant remains `b7_b5_init_b6_asymmetric_weak_v1` because the model and weak-supervision code are unchanged; the experiment identity is carried by the config and output directory.
+## Gold development evaluation
 
-## Train
-
-```bash
-rsna-knee-b7 \
-  --config configs/b7_1_full_coverage.yaml \
-  --data-root "$DATA_ROOT" \
-  --b5-checkpoint runs/b5_report_ssl/b5_encoder.pt \
-  --b6-root runs/b6_report_labels_v121 \
-  --out-root runs/b7_1_full_coverage
-```
-
-Expected training pool from B7-v1 audit:
+B7.1 achieved:
 
 ```text
-active studies = 3120
-usable cells   = 14123
-batch size     = 2
-batches/epoch  = 1560
-study draws/epoch = 3120
-nominal corpus passes over 4 epochs = 4.0
+macro AUC = 0.5644802945
+95% CI   = [0.5052432984, 0.6229422178]
+n         = 58
+bootstrap = 5000/5000 usable
 ```
 
-Do not alter epochs, learning rates, weak-label weights, target multipliers, architecture, or augmentation after the B7-v1 result and still call the run B7.1.
+Per-target AUC:
 
-## Evaluation
+| Target | B7.1 AUC |
+|---|---:|
+| ACL | `0.5159313725` |
+| MCL | `0.4693877551` |
+| Medial Meniscus | `0.5841346154` |
+| Lateral Meniscus | `0.5950310559` |
+| Medial OA | `0.4604651163` |
+| Lateral OA | `0.5764023211` |
+| PF OA | `0.5817245817` |
+| Effusion | `0.6484472050` |
+| Synovitis | `0.6654719235` |
+| Baker's | `0.5452898551` |
+| Contusion | `0.5398110661` |
+| Fracture | `0.5916666667` |
 
-Use a runtime-only workers=0 evaluation config if desired to avoid DataLoader teardown noise; this does not alter the scientific experiment.
+The exact point improvement over B7-v1 is `+0.0247078534`; over B5 it is `+0.0401152095`.
 
-```bash
-rsna-knee-b7-eval \
-  --config /tmp/b7_1_eval.yaml \
-  --data-root "$DATA_ROOT" \
-  --checkpoint runs/b7_1_full_coverage/b7_model.pt \
-  --out-root runs/b7_1_full_coverage/gold_eval
+## Paired comparison: B7-v1 -> B7.1
+
+Using A=B7-v1 and B=B7.1:
+
+```text
+median difference = +0.0241102714
+95% paired CI     = [-0.0140197876, +0.0660558004]
+P(B7.1 > B7-v1)   = 0.8694
+valid replicates   = 5000/5000
 ```
 
-Then compare B7-v1 and B7.1 with the same paired bootstrap machinery. Because the same 58 gold studies have already informed B6 and model-development decisions, B7.1 results are development estimates rather than independent validation.
+Interpretation: full-corpus coverage is favored strongly in the paired bootstrap, but the 95% paired interval still crosses zero.
+
+## Paired comparison: B5 -> B7.1
+
+Using A=B5 and B=B7.1:
+
+```text
+median difference = +0.0399233552
+95% paired CI     = [-0.0301354430, +0.1092349994]
+P(B7.1 > B5)      = 0.8716
+valid replicates   = 5000/5000
+```
+
+Interpretation: B7.1 is now the highest standalone development point estimate. The paired evidence favors B7.1 over B5, but remains statistically inconclusive on only 58 studies.
+
+## Decision
+
+Retain B7.1 as the current main standalone model. Do not tune target-specific weak-label weights, target-specific model winners, or ensemble weights from these 58 labels.
+
+A subsequent fixed ensemble, if tested, must use one global predeclared rule across all 12 targets. Because B5 uses nested logistic-probe probabilities and B7.1 uses neural weak-supervision probabilities, a fixed 50:50 per-target rank average is the preferred calibration-robust ensemble test. No weight search is allowed.
+
+## Validation caveat
+
+The B6 gold audit informed the global B7 supervision policy, and the same 58 gold studies have supported repeated development decisions. Therefore B7.1 is a **development estimate**, not pristine independent validation. Gold labels did not enter B7.1 gradients or early stopping.
