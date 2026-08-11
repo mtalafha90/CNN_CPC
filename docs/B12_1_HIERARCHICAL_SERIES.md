@@ -1,6 +1,6 @@
 # B12.1 — hierarchical learned series-token aggregation
 
-> **Status — 2026-08-11:** IMPLEMENTED / PREDECLARED / **SKIPPED FOR THE COMPETITION WORKFLOW**. Package `0.21.0`.
+> **Status — 2026-08-11:** IMPLEMENTED / PREDECLARED / **SKIPPED FOR THE COMPETITION WORKFLOW**. Package `0.22.0`.
 
 ## Original purpose
 
@@ -41,9 +41,9 @@ TTA [-1,0,1]
 zero gold gradients / zero gold early stopping
 ```
 
-B12.1 is explicitly competition-only and requires the B5 encoder checkpoint. Its trainer rejects external pretrained flags; ImageNet belongs to the separate B13 experiment.
+B12.1 is explicitly competition-only and requires the B5 encoder checkpoint. Its trainer rejects external pretrained flags; ImageNet belongs to the separate B13/B14 experiments.
 
-## Why it is now skipped
+## Why it is skipped
 
 B13 completed before B12.1 and produced a substantially stronger development result:
 
@@ -68,9 +68,7 @@ median(B13-B7.1)   +0.0652260946
 P(B13 > B7.1)       0.9808
 ```
 
-Both paired confidence intervals are above zero on the repeatedly reused 58-study development set.
-
-The competition workflow therefore prioritizes freezing B13-v1 and obtaining an independent Kaggle signal rather than spending another full training/evaluation cycle only to complete this ablation.
+The competition workflow did not spend another full run solely to complete this causal ablation.
 
 ## Scientific consequence of skipping B12.1
 
@@ -81,15 +79,9 @@ B12.1 = hierarchical architecture + B5 initialization
 B13   = hierarchical architecture + ImageNet encoder protocol
 ```
 
-will not be available.
+is unavailable. Therefore the project does not claim that the entire B13 improvement is caused solely by ImageNet initialization.
 
-Therefore the project must **not** claim that the entire B13 improvement is caused solely by ImageNet initialization. Relative to B12, B13 differs in both hierarchical aggregation and encoder protocol.
-
-This limitation is explicit and intentional.
-
-## Reproduction commands — archived, not current next step
-
-B12.1 can still be reproduced later if a scientific ablation is required:
+## Reproduction commands — archived
 
 ```bash
 export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
@@ -101,11 +93,7 @@ rsna-knee-b12-1 \
   --b6-root runs/b6_report_labels_v121 \
   --series-policy runs/b12_variable_series/audit/series_policy.json \
   --out-root runs/b12_1_hierarchical
-```
 
-Frozen evaluation command:
-
-```bash
 rsna-knee-b12-1-eval \
   --config configs/b12_1_hierarchical.yaml \
   --data-root "$DATA_ROOT" \
@@ -113,25 +101,12 @@ rsna-knee-b12-1-eval \
   --out-root runs/b12_1_hierarchical/gold_eval
 ```
 
-These commands are retained for reproducibility, **not as part of the current competition roadmap**.
+These commands remain for reproducibility, not the active roadmap.
 
-## Current successor
+## Current successors
 
-B13 is now the retained development champion. See [`B13_IMAGENET_INIT.md`](B13_IMAGENET_INIT.md).
+B13 remains the retained development champion. See [`B13_IMAGENET_INIT.md`](B13_IMAGENET_INIT.md).
 
-Current competition path:
-
-```text
-B13-v1 RETAIN
-     |
-     v
-freeze model / preprocessing / series policy / TTA
-     |
-     v
-Kaggle test inference and submission
-     |
-     v
-use leaderboard as the next independent signal
-```
+B14 is the active controlled aggregation experiment. It keeps B13's ImageNet encoder protocol but returns to the B12 full `K x 16` slice-token memory. This directly tests whether the hierarchical one-token-per-series compression introduced by B12.1/B13 is limiting macro AUC. See [`B14_IMAGENET_FULL_TOKENS.md`](B14_IMAGENET_FULL_TOKENS.md).
 
 Full updated roadmap: [`ROADMAP_AFTER_B12_1.md`](ROADMAP_AFTER_B12_1.md).
