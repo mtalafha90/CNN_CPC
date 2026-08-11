@@ -2,18 +2,20 @@
 
 `CNN_CPC` is a PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The released training surface contains 4,407 studies, 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and 12 study-level targets evaluated with macro ROC AUC.
 
-> **Current snapshot — 2026-08-11:** **B7.1 full-corpus weak supervision remains the retained standalone champion**, macro AUC `0.5644802945`. B8 spatial-anatomy (`0.5300962807`), B9 strict semantic routing (`0.5334962669`), B10 physical-scale normalization (`0.5523982721`) and B11.1 calibration-aware teacher tails (`0.5506902702`) were rejected as global replacements. **B12 variable-number-of-series modeling has now passed its frozen label-free series audit and is ready for training.**
+> **Current snapshot — 2026-08-11:** **B12 variable-number-of-series modeling has the highest development point estimate so far**, macro AUC `0.5660915179`, but is statistically tied with B7.1 (`0.5644802945`): paired median `(B12-B7.1)=+0.0023747526`, 95% CI `[-0.0472104067,+0.0481427722]`, `P(B12>B7.1)=0.5376`. **B12.1 hierarchical learned series-token aggregation is now implemented and predeclared as the active experiment.**
 
 Canonical status: [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md).  
-B12 protocol: [`docs/B12_VARIABLE_SERIES.md`](docs/B12_VARIABLE_SERIES.md).
+B12 result/protocol: [`docs/B12_VARIABLE_SERIES.md`](docs/B12_VARIABLE_SERIES.md).  
+B12.1 protocol: [`docs/B12_1_HIERARCHICAL_SERIES.md`](docs/B12_1_HIERARCHICAL_SERIES.md).
 
 ## Current software state
 
 ```text
-package version       0.19.0
-current leader        B7.1 full-corpus weak supervision
-leader macro AUC      0.5644802945
-active experiment     B12 variable-number-of-series training
+package version       0.20.0
+retained benchmark    B7.1 full-corpus weak supervision
+benchmark macro AUC   0.5644802945
+highest point estimate B12 variable-series model = 0.5660915179
+active experiment     B12.1 hierarchical learned series tokens
 external pretraining  disabled
 final inference       MRI-only
 ```
@@ -31,74 +33,51 @@ final inference       MRI-only
 | B5 | image-report SSL + unchanged B4 probe | `0.5243650851` | representation baseline |
 | B6 | structured multilingual report labels | n/a | frozen weak-label source |
 | B7-v1 | B5-init pathology-query model + B6 labels | `0.5397724412` | coverage ablation |
-| **B7.1** | **B7 with full 3,120-study epoch coverage** | **`0.5644802945`** | **retained champion** |
+| **B7.1** | **B7 with full 3,120-study epoch coverage** | **`0.5644802945`** | **retained benchmark** |
 | B5+B7.1 rank | fixed 50:50 rank ensemble | `0.5540141184` | rejected |
 | B8 | 2x2 spatial-token anatomy model | `0.5300962807` | rejected |
 | B9 | strict semantic routing | `0.5334962669` | rejected |
 | B10 | B7.1 + physical-scale normalization | `0.5523982721` | rejected globally |
 | B11-v1 | absolute-threshold B7.1 teacher completion | n/a | stopped at pseudo viability gate |
 | B11.1 | per-target quantile teacher tails | `0.5506902702` | rejected globally |
-| **B12** | **variable number of real MRI series** | pending | **audit passed / training ready** |
+| **B12** | **variable number of real MRI series** | **`0.5660915179`** | **retained / statistically tied with B7.1** |
+| **B12.1** | **learned per-series token compression + study Transformer** | pending | **implemented / training ready** |
 
-## Retained B7.1 benchmark
+## B12 result
 
-B7.1 combines B5 competition-only image-report initialization, six historical dual MRI streams, 16 distributed 2.5D positions per stream, a ConvNeXtTiny slice encoder, cross-sequence Transformer memory, 12 pathology queries and frozen B6 v1.2.1 weak labels.
-
-```text
-training studies per epoch  3120
-B6 supervised cells        14123
-positive cells              6871
-negative cells              7252
-epochs                         4
-macro AUC             0.5644802945
-```
-
-The same 58 gold studies have been reused for sequential method development, so all reported gold scores are **development/model-selection estimates**, not pristine independent validation.
-
-## B11.1 result — close the teacher-pseudo branch
+B12 keeps every repaired Sagittal/Coronal/Axial MRI acquisition instead of selecting six fixed semantic slots. Its frozen label-free audit retained 17,475 real series versus 15,468 historical unique selected series, adding 2,007 acquisitions (+12.98%) across 1,099 of 3,120 studies (35.22%).
 
 ```text
-B11.1 macro AUC          0.5506902702
-95% CI                  [0.4917424630, 0.6086153876]
-B7.1 macro AUC           0.5644802945
-median(B11.1-B7.1)      -0.0126224565
-95% paired CI           [-0.0487500119, +0.0195120537]
-P(B11.1 > B7.1)          0.2184
+B12 macro AUC         0.5660915179
+95% CI               [0.5094993761, 0.6244034568]
+B7.1 macro AUC        0.5644802945
+median(B12-B7.1)     +0.0023747526
+95% paired CI        [-0.0472104067,+0.0481427722]
+P(B12 > B7.1)         0.5376
 ```
 
-Decision: reject B11.1 globally and do not construct target-wise B7.1/B11.1 winners from the reused 58-study development surface.
+Decision: retain B12 as the highest point estimate but **do not claim superiority**. Do not build target-wise B7.1/B12 winners from the reused 58-study development set.
 
-## Why B12
-
-B7.1 compresses each knee into six semantic slots. B12 instead keeps **every repaired Sagittal/Coronal/Axial MRI acquisition** as a separate real series and uses plane/fluid/fat categorical embeddings with dynamic mini-batch padding. It returns to the exact original B7.1 B6 supervision surface—no B11/B11.1 pseudo-labels.
-
-### Frozen B12 label-free audit
-
-```text
-studies                                 3120
-eligible recognized-plane series      17475
-historical dual unique series          15468
-extra series retained                   2007
-extra fraction                        12.9752%
-studies with extra series               1099
-fraction studies with extras          35.2244%
-zero-series studies                         0
-historical selected series missing         0
-series/study median                         5
-series/study q90                            8
-series/study q95                            9
-series/study q99                           10
-series/study max                           14
-viability_passed                         true
-```
-
-Frozen mapping SHA-256:
+Frozen B12 series mapping SHA-256:
 
 ```text
 5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376
 ```
 
-The audit passes well above the predeclared minimums of `5%` extra series and `10%` of studies gaining extra acquisitions.
+## Why B12.1
+
+B12 sends all `K x 16` slice tokens directly into one study Transformer. B12.1 keeps the exact same 17,475 real-series surface but introduces one learned attention query per real MRI series:
+
+```text
+16 slice tokens
+    -> learned 8-head per-series attention query
+    -> 1 series token
+K series tokens
+    -> unchanged 2-layer study Transformer
+    -> unchanged pathology-query heads
+```
+
+B12.1 keeps the same B5 initialization, B6 supervision, 3,120 studies, 14,123 cells, augmentation, optimizer, four epochs, TTA, legacy resize, metadata embeddings, random seed offsets and frozen B12 series policy. It has no series-rank/position embedding.
 
 ## Install / update
 
@@ -113,7 +92,7 @@ python -c "import rsna_knee; print(rsna_knee.__version__)"
 Expected:
 
 ```text
-0.19.0
+0.20.0
 ```
 
 ## Tests
@@ -122,60 +101,54 @@ Expected:
 python -m compileall -q src tests
 pytest -q \
   tests/test_b12_variable_series.py \
+  tests/test_b12_1_hierarchical.py \
   tests/test_b7_weak_supervision.py
 ```
 
-## Active next step — train B12
+## Active next step — train B12.1
 
-Use the already frozen successful series policy:
+Reuse the already frozen successful B12 series policy; do not regenerate or alter it.
 
 ```bash
 export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
 
-rsna-knee-b12 \
-  --config configs/b12_variable_series.yaml \
+rsna-knee-b12-1 \
+  --config configs/b12_1_hierarchical.yaml \
   --data-root "$DATA_ROOT" \
   --b5-checkpoint runs/b5_report_ssl/b5_encoder.pt \
   --b6-root runs/b6_report_labels_v121 \
   --series-policy runs/b12_variable_series/audit/series_policy.json \
-  --out-root runs/b12_variable_series
+  --out-root runs/b12_1_hierarchical
 ```
 
 Every full epoch must preserve:
 
 ```text
-batches                        1560
-study_draws                    3120
-active_supervision_cells_seen 14123
-positive_cells_seen            6871
-negative_cells_seen            7252
-series_instances_seen         17475
-expected_series_instances     17475
-full_coverage                  true
-full_series_coverage           true
-budget_limited                 false
+batches                         1560
+study_draws                     3120
+active_supervision_cells_seen  14123
+positive_cells_seen             6871
+negative_cells_seen             7252
+series_instances_seen          17475
+expected_series_instances      17475
+max_series_in_any_batch           14
+full_coverage                   true
+full_series_coverage            true
+budget_limited                  false
 ```
 
-A complete epoch should also encounter the audited maximum of `14` series in at least one mini-batch. If `series_instances_seen < 17475`, do not proceed to gold evaluation; investigate unreadable/missing DICOM series.
+Do not run gold evaluation unless all four epochs satisfy the complete study and series coverage contract.
 
-## Frozen B12 gold evaluation
-
-Only after four complete epochs:
+## Frozen B12.1 gold evaluation
 
 ```bash
-rsna-knee-b12-eval \
-  --config configs/b12_variable_series.yaml \
+rsna-knee-b12-1-eval \
+  --config configs/b12_1_hierarchical.yaml \
   --data-root "$DATA_ROOT" \
-  --checkpoint runs/b12_variable_series/b12_model.pt \
-  --out-root runs/b12_variable_series/gold_eval
+  --checkpoint runs/b12_1_hierarchical/b12_1_model.pt \
+  --out-root runs/b12_1_hierarchical/gold_eval
 ```
 
-Primary benchmark remains:
-
-```text
-B7.1 macro AUC = 0.5644802945
-```
-
-Use the same aligned 5,000-replicate paired bootstrap. Do not tune target-wise winners, routing variants, series caps, or ensemble weights on the reused 58-study gold set.
+The primary paired comparisons are B12.1 versus B12 and B12.1 versus B7.1, each with the same aligned 5,000-replicate bootstrap. Do not tune pooling heads, target-specific winners, series caps, or ensemble weights on the repeatedly reused 58-study gold development surface.
 
 Actual hidden-test / leaderboard performance remains unknown until a real competition submission is evaluated.
