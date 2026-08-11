@@ -2,22 +2,23 @@
 
 `CNN_CPC` is a PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The released training surface contains 4,407 studies, 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and 12 study-level targets evaluated with macro ROC AUC.
 
-> **Current snapshot — 2026-08-11:** **B12 variable-number-of-series modeling has the highest development point estimate so far**, macro AUC `0.5660915179`, but is statistically tied with B7.1 (`0.5644802945`): paired median `(B12-B7.1)=+0.0023747526`, 95% CI `[-0.0472104067,+0.0481427722]`, `P(B12>B7.1)=0.5376`. **B12.1 hierarchical learned series-token aggregation is now implemented and predeclared as the active experiment.**
+> **Current snapshot — 2026-08-11:** **B12 variable-number-of-series modeling has the highest development point estimate so far**, macro AUC `0.5660915179`, but is statistically tied with B7.1 (`0.5644802945`): paired median `(B12-B7.1)=+0.0023747526`, 95% CI `[-0.0472104067,+0.0481427722]`, `P(B12>B7.1)=0.5376`. **B12.1 hierarchical learned series-token aggregation is implemented and predeclared as the active experiment.**
 
 Canonical status: [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md).  
 B12 result/protocol: [`docs/B12_VARIABLE_SERIES.md`](docs/B12_VARIABLE_SERIES.md).  
-B12.1 protocol: [`docs/B12_1_HIERARCHICAL_SERIES.md`](docs/B12_1_HIERARCHICAL_SERIES.md).
+B12.1 protocol: [`docs/B12_1_HIERARCHICAL_SERIES.md`](docs/B12_1_HIERARCHICAL_SERIES.md).  
+Post-B12.1 roadmap: [`docs/ROADMAP_AFTER_B12_1.md`](docs/ROADMAP_AFTER_B12_1.md).
 
 ## Current software state
 
 ```text
-package version       0.20.0
-retained benchmark    B7.1 full-corpus weak supervision
-benchmark macro AUC   0.5644802945
+package version        0.20.0
+retained benchmark     B7.1 full-corpus weak supervision
+benchmark macro AUC    0.5644802945
 highest point estimate B12 variable-series model = 0.5660915179
-active experiment     B12.1 hierarchical learned series tokens
-external pretraining  disabled
-final inference       MRI-only
+active experiment      B12.1 hierarchical learned series tokens
+external pretraining   disabled
+final inference        MRI-only
 ```
 
 ## Experiment ladder
@@ -42,6 +43,9 @@ final inference       MRI-only
 | B11.1 | per-target quantile teacher tails | `0.5506902702` | rejected globally |
 | **B12** | **variable number of real MRI series** | **`0.5660915179`** | **retained / statistically tied with B7.1** |
 | **B12.1** | **learned per-series token compression + study Transformer** | pending | **implemented / training ready** |
+| B12.2 | pathology-conditioned series attention | future | **conditional on B12.1 supporting the all-series branch** |
+| B13 | stronger competition-only MRI SSL | future | planned major representation experiment |
+| B14 | scanner/protocol robustness augmentation | future | optional, only if justified |
 
 ## B12 result
 
@@ -150,5 +154,45 @@ rsna-knee-b12-1-eval \
 ```
 
 The primary paired comparisons are B12.1 versus B12 and B12.1 versus B7.1, each with the same aligned 5,000-replicate bootstrap. Do not tune pooling heads, target-specific winners, series caps, or ensemble weights on the repeatedly reused 58-study gold development surface.
+
+## Planned path after B12.1
+
+The next steps are intentionally limited so repeated use of the 58-study development surface does not turn into uncontrolled architecture search.
+
+```text
+B12.1 hierarchical series aggregation
+   |
+   |-- if the all-series branch remains supported:
+   |      B12.2 pathology-conditioned series attention
+   |
+   |-- if B12.1 is clearly worse:
+   |      skip B12.2
+   |
+   v
+B13 stronger competition-only MRI self-supervised learning
+   |
+   v
+B14 scanner/protocol robustness augmentation
+   |  optional; only if a clear domain-robustness problem remains
+   v
+FINAL MODEL FREEZE
+   |
+   v
+KAGGLE SUBMISSION / independent leaderboard signal
+```
+
+### B12.2 — conditional only
+
+B12.2 would let each pathology query learn which acquired series are relevant, rather than using one generic study representation for every target. It will only be attempted if B12.1 provides evidence that the all-series branch remains worthwhile. No target-specific routing rules will be selected from the 58 gold studies.
+
+### B13 — major remaining representation experiment
+
+B13 is planned as stronger **competition-only MRI self-supervised learning**, with candidate objectives such as same-study cross-sequence contrastive learning, masked slice/token reconstruction, and cross-plane consistency. The best globally retained architecture from the B12 family would then be initialized from B13 instead of B5.
+
+### B14 — optional robustness experiment
+
+B14 is reserved for acquisition/scanner robustness if justified by diagnostics. Candidate perturbations include intensity/contrast variation, resolution/downsampling perturbation, acquisition-quality variation, and metadata dropout. This is not a return to B10-style fixed physical normalization.
+
+After these major experiments, the model should be frozen and submitted. No target-wise winner selection, threshold tuning, series-count tuning, or ensemble-weight optimization should be performed on the reused 58-study development set.
 
 Actual hidden-test / leaderboard performance remains unknown until a real competition submission is evaluated.
