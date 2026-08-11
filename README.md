@@ -2,20 +2,22 @@
 
 `CNN_CPC` is a PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The released training surface contains 4,407 studies, 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and 12 study-level targets evaluated with macro ROC AUC.
 
-> **Current snapshot — 2026-08-11:** **B13 remains the development champion**, macro AUC `0.6293565948`, 95% CI `[0.5789896351,0.6775867717]`. **B14 is completed and rejected globally:** macro AUC `0.6197914249`, 95% CI `[0.5706800512,0.6693542716]`; paired median `B14-B13=-0.0093726931`, 95% CI `[-0.0469823411,+0.0250137870]`, `P(B14>B13)=0.2924`. B14 fit the B6 weak labels more strongly but did not improve global macro AUC. The next representation hypothesis is **B15: ImageNet -> competition knee-MRI self-supervised adaptation -> B13 hierarchy**.
+> **Current snapshot — 2026-08-11:** **B13 remains the development champion**, macro AUC `0.6293565948`, 95% CI `[0.5789896351,0.6775867717]`. **B14 is completed and rejected globally:** macro AUC `0.6197914249`, 95% CI `[0.5706800512,0.6693542716]`; paired median `B14-B13=-0.0093726931`, 95% CI `[-0.0469823411,+0.0250137870]`, `P(B14>B13)=0.2924`. B14 fit the B6 weak labels more strongly but did not improve global macro AUC. Before B15 training, package `0.22.1` adds two corrected diagnostics: an exact B13 2.5D slice-exposure audit and a leakage-safe report-group weak holdout.
 
 Canonical status: [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md).  
 B13 result/protocol: [`docs/B13_IMAGENET_INIT.md`](docs/B13_IMAGENET_INIT.md).  
-B14 completed result: [`docs/B14_IMAGENET_FULL_TOKENS.md`](docs/B14_IMAGENET_FULL_TOKENS.md).
+B14 completed result: [`docs/B14_IMAGENET_FULL_TOKENS.md`](docs/B14_IMAGENET_FULL_TOKENS.md).  
+AUC-improvement diagnostics: [`docs/RAISING_AUC.md`](docs/RAISING_AUC.md).
 
 ## Current software state
 
 ```text
-package version          0.22.0
+package version          0.22.1
 previous benchmark       B7.1 = 0.5644802945
 previous best            B12  = 0.5660915179
 development champion     B13  = 0.6293565948
 completed B14            0.6197914249 / rejected globally
+pre-B15 diagnostics      exact slice exposure + frozen weak holdout
 next hypothesis          B15 ImageNet -> knee-MRI SSL -> B13 hierarchy
 final inference           MRI-only
 ```
@@ -118,22 +120,56 @@ Fracture           0.6208333333
 
 Do not use target-level differences to construct a B13/B14 hybrid.
 
+## Corrected pre-B15 diagnostics
+
+### 1. Exact B13 slice exposure
+
+The old `16 / number_of_slices` proxy was incorrect because B13 feeds 16 **2.5D triplets**, not 16 isolated slices. The corrected audit reconstructs the exact non-gold 3,120-study / 17,475-series B13 surface, verifies its frozen SHA, uses orientation-aware DICOM geometry, and computes the actual unique frames touched by training gap/jitter and evaluation TTA.
+
+```bash
+export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
+
+rsna-knee-slice-audit \
+  --config configs/b13_imagenet_init.yaml \
+  --data-root "$DATA_ROOT" \
+  --b6-root runs/b6_report_labels_v121 \
+  --series-policy runs/b12_variable_series/audit/series_policy.json \
+  --out runs/slice_audit_b13
+```
+
+### 2. Freeze the weak holdout before new training
+
+A 20% B6 holdout is roughly 624 studies, not 3,120, and B6 cells are sparse. Its uncertainty must therefore be measured from the actual holdout bootstrap rather than assumed from `1/sqrt(n)` scaling. The split is report-group safe and is frozen before any candidate/control training.
+
+```bash
+rsna-knee-weak-holdout \
+  --config configs/b13_imagenet_init.yaml \
+  --data-root "$DATA_ROOT" \
+  --b6-root runs/b6_report_labels_v121 \
+  --holdout-fraction 0.20 \
+  --seed 2026 \
+  --out-root runs/weak_holdout_v1
+```
+
+**Do not retrospectively score existing B13/B14 checkpoints on this weak holdout as validation.** They were trained on the full 3,120-study B6 surface. Any future weak-holdout comparison requires a new matched B13 control and candidate trained with all holdout UIDs excluded.
+
 ## Current direction
 
 ```text
 B13 RETAIN
 B14 REJECT globally
 no B14 epoch 5
-no slice-count / LR / normalization sweep on gold
 no target-wise B13/B14 mixture
 
-next high-upside hypothesis:
+run corrected slice audit
+freeze weak holdout
+       |
+       v
+B15 hypothesis:
 ImageNet ConvNeXt
       -> knee-MRI self-supervised adaptation
       -> B13 hierarchical aggregation
       -> frozen B6 downstream recipe
 ```
 
-For B15, the 58 fully labelled gold studies must be excluded from SSL optimization and gold labels must remain absent from gradients, early stopping and checkpoint selection.
-
-The 58 labelled studies have been repeatedly reused, so all local AUCs remain development/model-selection estimates rather than independent validation. A real Kaggle hidden-test/leaderboard result remains the next genuinely independent signal.
+For B15, the 58 fully labelled gold studies must be excluded from SSL optimization and gold labels must remain absent from gradients, early stopping and checkpoint selection. The reused 58-study surface remains development confirmation only. A real Kaggle hidden-test/leaderboard result remains the next genuinely independent signal.
