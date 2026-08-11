@@ -30,6 +30,8 @@ runtime_reserve_minutes: 10
 
 # Preserve B13/B12 series and preprocessing controls.
 b12_use_physical_scale: false
+# Retained only for config parity with B13; B14 does not instantiate series pooling.
+b12_1_series_pool_heads: 8
 
 # Loader/runtime, unchanged from B13.
 num_workers: null
