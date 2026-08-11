@@ -107,10 +107,12 @@ rsna-knee-b12-eval \
   --out-root runs/b12_variable_series/gold_eval
 ```
 
-## Successor experiment
+## Successor experiments
 
 B12.1 keeps the exact B12 series surface but compresses each 16-slice real series to one learned attention-pooled series token before the study Transformer. See [`B12_1_HIERARCHICAL_SERIES.md`](B12_1_HIERARCHICAL_SERIES.md).
 
-B12.1 is the final mandatory architecture experiment in this branch. A further B12.2 experiment is **conditional**: it will only be run if B12.1 remains competitive with or improves on B12 and therefore provides evidence that the all-series architecture branch is still worth refining. If B12.1 is clearly worse, skip B12.2 and move directly to B13 stronger competition-only MRI self-supervised learning.
+B13 is now a separate ImageNet encoder-protocol experiment built on the B12.1 hierarchy, with its own trainer/evaluator/checkpoint identity. See [`B13_IMAGENET_INIT.md`](B13_IMAGENET_INIT.md).
 
-Full post-B12.1 plan: [`ROADMAP_AFTER_B12_1.md`](ROADMAP_AFTER_B12_1.md).
+A further B12.2 pathology-conditioned series-attention experiment remains conditional. The stronger competition-only SSL experiment has been renumbered to B14, and optional scanner/protocol robustness to B15.
+
+Full roadmap: [`ROADMAP_AFTER_B12_1.md`](ROADMAP_AFTER_B12_1.md).
