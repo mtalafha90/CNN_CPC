@@ -1,7 +1,7 @@
 # Experiment status
 
 **Snapshot:** 2026-08-11  
-**Package:** `0.22.1`  
+**Package:** `0.23.0`  
 **Gold development set:** 58 fully labelled studies  
 **Primary metric:** macro ROC AUC across 12 targets
 
@@ -10,13 +10,12 @@ The 58-study surface has supported repeated sequential development decisions and
 ## Current headline
 
 - **Development champion remains B13**, macro AUC `0.6293565948`, 95% CI `[0.5789896351,0.6775867717]`.
-- **B14 is completed and rejected globally**, macro AUC `0.6197914249`, 95% CI `[0.5706800512,0.6693542716]`.
-- Raw macro difference: `B14-B13 = -0.0095651699`.
-- Paired B14-vs-B13 median difference: `-0.0093726931`, 95% CI `[-0.0469823411,+0.0250137870]`, `P(B14>B13)=0.2924`.
-- The paired CI crosses zero, so B14 and B13 are statistically unresolved on the reused 58-study surface; model selection nevertheless retains B13 because B14 has the lower point estimate, low probability of superiority, higher token-memory cost and no global advantage.
-- B14 final B6 loss was `0.5822778610` versus B13 `0.6132239342`; stronger fitting of weak supervision did not improve macro AUC.
-- **Pre-B15 gate:** run the corrected exact B13 slice-exposure audit and freeze a report-group-safe B6 weak holdout before any B15/control training.
-- Reserved next representation hypothesis: **B15 = ImageNet -> competition knee-MRI self-supervised adaptation -> B13 hierarchy**.
+- **B14 is completed and rejected globally**, macro AUC `0.6197914249`, paired median `B14-B13=-0.0093726931`, 95% CI `[-0.0469823411,+0.0250137870]`, `P(B14>B13)=0.2924`.
+- B14 final B6 loss was `0.5822778610` versus B13 `0.6132239342`; stronger weak-label fitting did not improve global macro AUC.
+- **Full B13 slice exposure audit completed:** `17,475/17,475` readable series, median evaluation exposure `100%`, complete evaluation exposure `95.9%`, median and p95 maximum skipped run both zero. **Slice-count undersampling is rejected as a primary bottleneck.**
+- **Weak holdout v1 is superseded before model training:** it had 624 studies and zero report leakage but Synovitis `70 positive / 1 negative`.
+- **Weak holdout v2 is the new pre-B15 validation contract:** deterministic report-group-safe multilabel/class stratification, minimum four examples per class on both sides where globally feasible, and strict all-12-target study bootstrap.
+- Reserved representation hypothesis: **B15 = ImageNet -> competition knee-MRI self-supervised adaptation -> B13 hierarchy**.
 
 ## Experiment ladder
 
@@ -64,7 +63,7 @@ uncertain/unmentioned -> ignored
 minimum confidence -> 0.75
 ```
 
-B6 audit quality values include sensitivity `0.975`, specificity `0.606`, positive precision `0.690`, balanced accuracy `0.790`, and coverage `0.361`. These establish noisy/incomplete supervision but **do not establish a numerical downstream macro-AUC ceiling**.
+B6 audit quality values include sensitivity `0.975`, specificity `0.606`, positive precision `0.690`, balanced accuracy `0.790`, and coverage `0.361`. These establish noisy/incomplete supervision but do **not** establish a numerical downstream macro-AUC ceiling.
 
 ## Frozen all-series surface
 
@@ -80,23 +79,18 @@ series SHA-256
 
 ## B13 retained result
 
-B13 uses torchvision ConvNeXt-Tiny `IMAGENET1K_V1` plus standard ImageNet mean/std normalization and hierarchical one-token-per-series aggregation.
-
 ```text
 B13 macro AUC      0.6293565948
 95% CI            [0.5789896351,0.6775867717]
+
+training loss
+0.7450505349
+0.6865059846
+0.6524747430
+0.6132239342
 ```
 
-Training loss:
-
-```text
-epoch 1  0.7450505349
-epoch 2  0.6865059846
-epoch 3  0.6524747430
-epoch 4  0.6132239342
-```
-
-Per-target B13 AUCs, descriptive only:
+Per-target B13 AUCs are descriptive only:
 
 ```text
 ACL                0.4742647059
@@ -115,65 +109,88 @@ Fracture           0.5888888889
 
 ## B14 completed result
 
-B14 preserved B13's ImageNet protocol but removed one-token-per-series compression and retained every `K x 16` slice token through the study Transformer.
-
 ```text
-epoch 1 loss  0.7346330162
-epoch 2 loss  0.6606430862
-epoch 3 loss  0.6074723502
-epoch 4 loss  0.5822778610
-
+B14 final loss     0.5822778610
 B14 macro AUC      0.6197914249
 95% CI            [0.5706800512,0.6693542716]
-n                  58
-bootstrap          5000/5000 usable
-
-raw macro delta         -0.0095651699
-median_difference       -0.0093726931
-95% paired CI           [-0.0469823411,+0.0250137870]
-probability_b_better     0.2924
-valid replicates         5000
+raw B14-B13       -0.0095651699
+median difference -0.0093726931
+95% paired CI     [-0.0469823411,+0.0250137870]
+P(B14 > B13)       0.2924
 ```
 
-Per-target B14 AUCs, descriptive only:
+The paired CI crosses zero. B14 and B13 are statistically unresolved on the reused gold surface, but model selection retains B13 because B14 has the lower point estimate, low probability of superiority, higher compute cost and no global advantage. No target-level B13/B14 hybrid is permitted.
+
+## Completed B13 slice-exposure audit
+
+The corrected audit used the actual B13 2.5D sampler on the exact frozen non-gold series surface.
 
 ```text
-ACL                0.5122549020
-MCL                0.4693877551
-Medial Meniscus    0.6454326923
-Lateral Meniscus   0.6881987578
-Medial OA          0.5116279070
-Lateral OA         0.5783365571
-PF OA              0.5997425997
-Effusion           0.8347826087
-Synovitis          0.7419354839
-Baker's            0.6884057971
-Contusion          0.5465587045
-Fracture           0.6208333333
+series audited/readable  17475 / 17475
+slices/series median     30
+slices/series p95        50
+slices/series max        320
+
+eval unique fraction     median 100.0% (p25 100.0%)
+eval max skipped run     median 0.0 slices (p95 0.0)
+training expected/view   median 87.0%
+complete eval exposure   95.9%
+eval run >=2 slices      3.9%
+eval run >=3 slices      3.8%
+skipped-run length       median 0.0 mm (p95 0.0 mm)
+
+Axial      n=4455   eval=100.0% max-run=0.0 train/view=85.2%
+Coronal    n=5815   eval=100.0% max-run=0.0 train/view=87.0%
+Sagittal   n=7205   eval=100.0% max-run=0.0 train/view=87.0%
 ```
 
-No target-level B13/B14 hybrid is permitted.
+Decision:
 
-## Corrected pre-B15 diagnostics
-
-### Exact B13 slice exposure
-
-The old `16 / n_slices` proxy is retired. B13 actually uses 16 2.5D triplets, training gap choices `[1,2]`, center jitter `+/-2`, and evaluation TTA offsets `[-1,0,1]`.
-
-`rsna-knee-slice-audit` now reconstructs the exact non-gold B13 surface, verifies the frozen 17,475-series SHA, uses orientation-projected DICOM geometry, and reports actual unique frame exposure, maximum unsampled runs, expected random-training-view exposure and the legal training-exposure envelope.
-
-```bash
-rsna-knee-slice-audit \
-  --config configs/b13_imagenet_init.yaml \
-  --data-root "$DATA_ROOT" \
-  --b6-root runs/b6_report_labels_v121 \
-  --series-policy runs/b12_variable_series/audit/series_policy.json \
-  --out runs/slice_audit_b13
+```text
+slice-count undersampling as primary B13 bottleneck -> REJECT
 ```
 
-### Frozen weak holdout
+Canonical record: `docs/B13_SLICE_EXPOSURE_AUDIT.md`.
 
-`rsna-knee-weak-holdout` freezes a report-group-safe split before new model training. A requested 20% split is roughly 624 studies, not 3,120, and B6 is sparse, so uncertainty is measured by empirical bootstrap on the actual holdout rather than assumed from a study-count scaling formula.
+## Weak holdout validation contract
+
+### v1 — superseded before model training
+
+```text
+active studies             3120
+train studies              2496
+holdout studies             624
+train report groups        2430
+holdout report groups       609
+report-group overlap          0
+holdout usable cells       2697
+holdout positive cells     1257
+holdout negative cells     1440
+Synovitis                  70 positive / 1 negative
+manifest SHA-256
+fdbc02f88e5a4eff31783b4242890e943609d5c783bd54aca38af8a89e7e0968
+```
+
+No B15 or matched B13-control model was trained on v1. It is superseded because the one Synovitis negative makes its 12-target macro bootstrap unnecessarily unstable.
+
+### v2 — freeze before training
+
+Package `0.23.0` makes `rsna-knee-weak-holdout` produce `weak_b6_holdout_v2` by default.
+
+Frozen split policy:
+
+```text
+holdout fraction        0.20
+seed                    2026
+report grouping         mandatory
+minimum class count     4 per side where globally feasible
+candidate splits        4096
+split objective         balance all 24 target/class counts + holdout size
+uses gold labels        false
+uses model predictions  false
+```
+
+Freeze v2 with:
 
 ```bash
 rsna-knee-weak-holdout \
@@ -182,36 +199,48 @@ rsna-knee-weak-holdout \
   --b6-root runs/b6_report_labels_v121 \
   --holdout-fraction 0.20 \
   --seed 2026 \
-  --out-root runs/weak_holdout_v1
+  --min-class-count 4 \
+  --search-candidates 4096 \
+  --out-root runs/weak_holdout_v2
 ```
 
-Existing B13/B14 checkpoints were trained on all 3,120 active B6 studies and therefore cannot be retrospectively scored on this holdout and called validation.
+Once successfully frozen, the v2 manifest SHA is part of the experiment contract and must not be regenerated based on model performance.
 
-For a valid future comparison:
+Weak-surface scoring is strict:
 
 ```text
-same frozen weak-train partition
-    |-- B13-control: ImageNet -> B13 hierarchy
-    `-- B15:        ImageNet -> MRI SSL -> B13 hierarchy
-
-paired weak holdout -> biased teacher-agreement ranking
-58 gold             -> one development confirmation only
-Kaggle hidden       -> independent signal
+study bootstrap
+-> compute all 12 AUCs
+-> discard replicate if any target AUC is undefined
+-> accepted replicate macro = mean of exactly 12 AUCs
 ```
+
+Existing B13/B14 checkpoints were trained on all 3,120 active B6 studies and cannot be retrospectively scored on v2 and called validation.
+
+Canonical record: `docs/WEAK_HOLDOUT_V2.md`.
 
 ## Current decision / next stage
 
 ```text
 B13 RETAIN / development champion
 B14 REJECT globally
-run corrected diagnostics
-freeze weak holdout before B15/control training
-no B14 epoch extension
-no B13/B14 target-wise hybrid
-no ensemble-weight search on gold
-
-B15 reserved hypothesis:
-ImageNet -> competition knee-MRI SSL -> B13 hierarchy
+slice-count hypothesis REJECT
+weak holdout v1 SUPERSEDED
+       |
+       v
+freeze weak holdout v2 before model training
+       |
+       +--> matched B13-control on v2 weak-train
+       `--> B15 candidate on same downstream weak-train
+                     |
+                     v
+          paired strict all-12-target weak bootstrap
+                     |
+                     v
+          one reused-gold development confirmation
+                     |
+                     v
+              Kaggle hidden signal
 ```
 
-For B15, all 58 gold studies must be excluded from SSL optimization. Gold labels remain forbidden from gradients, early stopping and checkpoint selection. Actual hidden-test / leaderboard performance remains unknown until a real competition submission is evaluated.
+For B15, all 58 gold studies must remain excluded from SSL optimization. Gold labels remain forbidden from gradients, early stopping and checkpoint selection. Actual hidden-test / leaderboard performance remains unknown until a real competition submission is evaluated.
