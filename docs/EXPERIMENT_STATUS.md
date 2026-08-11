@@ -75,7 +75,7 @@ historical dual unique 15468
 extra series            2007
 max series / study        14
 series SHA-256
-5c4bb1c52294e45f9e83274c5c07d198dc54811b7c8439bd7bcd376
+5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376
 ```
 
 ## B13 retained result
