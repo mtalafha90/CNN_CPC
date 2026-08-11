@@ -1,6 +1,6 @@
 # B12 — variable-number-of-series MRI model
 
-> **Status — 2026-08-11:** **COMPLETED / RETAINED AS STATISTICALLY TIED WITH B7.1.** B12 has the highest development point estimate so far, macro AUC `0.5660915179`, but the paired comparison with B7.1 is unresolved.
+> **Status — 2026-08-11:** **COMPLETED / RETAINED HISTORICAL REFERENCE.** B12 macro AUC is `0.5660915179`; it was statistically tied with B7.1 and has since been surpassed by B13.
 
 ## Scientific change
 
@@ -66,7 +66,7 @@ median(B12-B7.1)     +0.0023747526
 P(B12 > B7.1)         0.5376
 ```
 
-Decision: **retain B12 as the highest point estimate and as a viable all-series direction, but do not claim superiority over B7.1.** Do not create target-wise B7.1/B12 winners from the reused 58-study development set.
+Decision at the time: retain B12 as a viable all-series direction but do not claim superiority over B7.1.
 
 Per-target B12 AUCs:
 
@@ -85,7 +85,7 @@ Contusion          0.5317139001
 Fracture           0.6152777778
 ```
 
-These target-level values are descriptive only. They must not be used to construct a target-wise B7.1/B12 hybrid.
+These target-level values are descriptive only. They must not be used to construct target-wise hybrids.
 
 ## Reproduction
 
@@ -109,10 +109,12 @@ rsna-knee-b12-eval \
 
 ## Successor experiments
 
-B12.1 keeps the exact B12 series surface but compresses each 16-slice real series to one learned attention-pooled series token before the study Transformer. See [`B12_1_HIERARCHICAL_SERIES.md`](B12_1_HIERARCHICAL_SERIES.md).
+B12.1 introduced one learned token per real series with B5 initialization; it remains implemented but was skipped for the competition workflow.
 
-B13 is now a separate ImageNet encoder-protocol experiment built on the B12.1 hierarchy, with its own trainer/evaluator/checkpoint identity. See [`B13_IMAGENET_INIT.md`](B13_IMAGENET_INIT.md).
+B13 combined that hierarchical aggregation with the ImageNet ConvNeXt protocol and reached macro AUC `0.6293565948`, becoming the retained development champion. See [`B13_IMAGENET_INIT.md`](B13_IMAGENET_INIT.md).
 
-A further B12.2 pathology-conditioned series-attention experiment remains conditional. The stronger competition-only SSL experiment has been renumbered to B14, and optional scanner/protocol robustness to B15.
+B14 now returns to the **B12 full `K x 16` slice-token architecture** while retaining B13's ImageNet encoder protocol. This makes B14 a controlled test of whether B13's one-token-per-series compression is discarding useful slice-level information. See [`B14_IMAGENET_FULL_TOKENS.md`](B14_IMAGENET_FULL_TOKENS.md).
+
+Stronger in-domain SSL, if later justified, is now reserved for B15 rather than B14.
 
 Full roadmap: [`ROADMAP_AFTER_B12_1.md`](ROADMAP_AFTER_B12_1.md).
