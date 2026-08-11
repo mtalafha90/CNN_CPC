@@ -103,10 +103,12 @@ rsna-knee-b12-1-eval \
 
 These commands remain for reproducibility, not the active roadmap.
 
-## Current successors
+## Successor results
 
 B13 remains the retained development champion. See [`B13_IMAGENET_INIT.md`](B13_IMAGENET_INIT.md).
 
-B14 is the active controlled aggregation experiment. It keeps B13's ImageNet encoder protocol but returns to the B12 full `K x 16` slice-token memory. This directly tests whether the hierarchical one-token-per-series compression introduced by B12.1/B13 is limiting macro AUC. See [`B14_IMAGENET_FULL_TOKENS.md`](B14_IMAGENET_FULL_TOKENS.md).
+B14 tested the full `K x 16` slice-token memory with the same B13 ImageNet encoder protocol and completed at macro AUC `0.6197914249`, below B13's `0.6293565948`. The paired B14-B13 median was `-0.0093726931`, 95% CI `[-0.0469823411,+0.0250137870]`, with `P(B14>B13)=0.2924`. B14 is therefore rejected globally and B13 remains retained. See [`B14_IMAGENET_FULL_TOKENS.md`](B14_IMAGENET_FULL_TOKENS.md).
+
+The next major representation hypothesis is B15: ImageNet -> competition knee-MRI self-supervised adaptation -> B13 hierarchical aggregation.
 
 Full updated roadmap: [`ROADMAP_AFTER_B12_1.md`](ROADMAP_AFTER_B12_1.md).
