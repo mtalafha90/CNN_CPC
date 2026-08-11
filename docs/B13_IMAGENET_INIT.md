@@ -149,31 +149,47 @@ valid replicates        5000
 
 Both paired confidence intervals are entirely above zero.
 
-## Retained decision
+## Controlled successor result — B14
 
-**B13 remains the development champion.** B12.1 is still skipped, so the project does not claim that the full B13 gain is caused solely by ImageNet initialization.
-
-Development has now been reopened for one specific controlled hypothesis: B13's one-token-per-series compression may discard focal slice-level information.
-
-## Active successor — B14
-
-B14 keeps B13's encoder protocol and every training/evaluation control but changes aggregation:
+B14 tested the hypothesis that B13's one-token-per-series compression discarded useful focal slice-level information. B14 retained the full `K x 16` slice-token memory while keeping B13's ImageNet protocol and training recipe.
 
 ```text
-B13
-16 slice tokens / real series -> one learned series token
-K series tokens -> study Transformer -> pathology queries
-
-B14
-K real series x 16 slice tokens -> study Transformer -> pathology queries
+B14 macro AUC       0.6197914249
+95% CI             [0.5706800512,0.6693542716]
+raw B14-B13        -0.0095651699
+paired median      -0.0093726931
+95% paired CI      [-0.0469823411,+0.0250137870]
+P(B14 > B13)        0.2924
 ```
 
-B14 uses the already tested B12 full-token architecture, not a new target-specific architecture.
+The paired CI crosses zero, but B14 has the lower global point estimate, lower probability of superiority, higher token-memory cost and slower training. B14 is therefore rejected globally and B13 remains the retained development champion.
+
+B14 also achieved a lower final B6 training loss (`0.5822778610`) than B13 (`0.6132239342`) without improving macro AUC. This is evidence against simply increasing downstream capacity or fitting the weak labels harder.
 
 See [`B14_IMAGENET_FULL_TOKENS.md`](B14_IMAGENET_FULL_TOKENS.md).
 
-The primary comparison is frozen as B14 versus B13 with the aligned 5,000-replicate paired bootstrap. Do not tune slice counts, epochs, LR, normalization or B13/B14 target-wise mixtures from that result.
+## Retained decision
+
+```text
+B13 RETAIN / DEVELOPMENT CHAMPION
+B14 REJECT GLOBALLY
+```
+
+B12.1 is still skipped, so the project does not claim that the full B13 gain is caused solely by ImageNet initialization.
+
+## Next representation hypothesis
+
+The next major controlled hypothesis is B15:
+
+```text
+ImageNet ConvNeXt-Tiny
+        -> competition knee-MRI self-supervised adaptation
+        -> B13 hierarchical aggregation
+        -> frozen B6 downstream recipe
+```
+
+All 58 gold studies must be excluded from B15 SSL optimization. No gold labels may enter gradients, early stopping or checkpoint selection.
 
 ## Interpretation policy
 
-The 58 fully labelled studies have been reused throughout sequential development. B13's `0.6294` and any future B14 score are development/model-selection estimates, not independent validation and not leaderboard results.
+The 58 fully labelled studies have been reused throughout sequential development. B13's `0.6294` and B14's `0.6198` are development/model-selection estimates, not independent validation and not leaderboard results. A Kaggle hidden-test/leaderboard result remains the next genuinely independent performance signal.
