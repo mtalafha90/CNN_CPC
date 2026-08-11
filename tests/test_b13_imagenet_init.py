@@ -14,6 +14,7 @@ from rsna_knee.b12_1_training import _require_b12_1_contract  # noqa: E402
 from rsna_knee.b13_training import (  # noqa: E402
     B13_EXPERIMENT,
     B13_INITIALIZATION,
+    B13_INPUT_NORMALIZATION,
     B13_SERIES_SIGNATURE,
     _require_b13_contract,
     train_b13,
@@ -41,7 +42,7 @@ def test_b13_config_cannot_masquerade_as_b12_1():
         _require_b12_1_contract(_load(B13))
 
 
-def test_b13_changes_only_initialization_and_administrative_identity_vs_b12_1():
+def test_b13_changes_only_encoder_protocol_and_administrative_identity_vs_b12_1():
     b13, b12_1 = _load(B13), _load(B12_1)
     permitted = {
         "pretrained",
@@ -55,7 +56,7 @@ def test_b13_changes_only_initialization_and_administrative_identity_vs_b12_1():
         if b13.get(key) != b12_1.get(key)
     }
     assert differing <= permitted, (
-        "B13 changes more than initialization/admin identity: "
+        "B13 config changes more than encoder protocol/admin identity: "
         f"{sorted(differing - permitted)}"
     )
 
@@ -64,9 +65,12 @@ def test_b13_trainer_has_no_b5_checkpoint_argument():
     assert "b5_checkpoint" not in inspect.signature(train_b13).parameters
 
 
-def test_b13_freezes_initialization_metadata():
+def test_b13_freezes_encoder_protocol_metadata():
     assert B13_INITIALIZATION == "torchvision:convnext_tiny:IMAGENET1K_V1"
+    assert B13_INPUT_NORMALIZATION == "imagenet_mean_std"
     assert B13_SERIES_SIGNATURE == "5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376"
+    spec = b12_1_model_spec(_load(B13), normalize_input=True)
+    assert spec["normalize_input"] is True
 
 
 def test_b13_rejects_second_variable_encoder_lr_change():
