@@ -10,4 +10,4 @@ __all__ = [
     "DUAL_STREAMS",
     "N_STREAMS",
 ]
-__version__ = "0.21.0"
+__version__ = "0.22.0"
