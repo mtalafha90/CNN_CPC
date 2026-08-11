@@ -2,11 +2,11 @@
 
 `CNN_CPC` is a PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The released training surface contains 4,407 studies, 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and 12 study-level targets evaluated with macro ROC AUC.
 
-> **Current snapshot — 2026-08-11:** **B13 remains the development champion**, macro AUC `0.6293565948`, 95% CI `[0.5789896351,0.6775867717]`. Development has been reopened for one controlled high-upside experiment: **B14 keeps B13's ImageNet ConvNeXt protocol but removes the one-token-per-series compression and retains every `K x 16` slice token through the study Transformer.** B14 is implemented, predeclared and training ready.
+> **Current snapshot — 2026-08-11:** **B13 remains the development champion**, macro AUC `0.6293565948`, 95% CI `[0.5789896351,0.6775867717]`. **B14 is completed and rejected globally:** macro AUC `0.6197914249`, 95% CI `[0.5706800512,0.6693542716]`; paired median `B14-B13=-0.0093726931`, 95% CI `[-0.0469823411,+0.0250137870]`, `P(B14>B13)=0.2924`. B14 fit the B6 weak labels more strongly but did not improve global macro AUC. The next representation hypothesis is **B15: ImageNet -> competition knee-MRI self-supervised adaptation -> B13 hierarchy**.
 
 Canonical status: [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md).  
 B13 result/protocol: [`docs/B13_IMAGENET_INIT.md`](docs/B13_IMAGENET_INIT.md).  
-B14 frozen protocol: [`docs/B14_IMAGENET_FULL_TOKENS.md`](docs/B14_IMAGENET_FULL_TOKENS.md).
+B14 completed result: [`docs/B14_IMAGENET_FULL_TOKENS.md`](docs/B14_IMAGENET_FULL_TOKENS.md).
 
 ## Current software state
 
@@ -15,8 +15,8 @@ package version          0.22.0
 previous benchmark       B7.1 = 0.5644802945
 previous best            B12  = 0.5660915179
 development champion     B13  = 0.6293565948
-active experiment        B14 ImageNet + full K x 16 slice-token memory
-primary B14 comparison   B14 vs B13, aligned 5000-replicate bootstrap
+completed B14            0.6197914249 / rejected globally
+next hypothesis          B15 ImageNet -> knee-MRI SSL -> B13 hierarchy
 final inference           MRI-only
 ```
 
@@ -43,7 +43,8 @@ final inference           MRI-only
 | **B12** | **all real MRI series with full slice-token memory + B5 init** | **`0.5660915179`** | retained / tied with B7.1 |
 | B12.1 | hierarchical one-token-per-series + B5 init | not run | implemented / skipped |
 | **B13** | **hierarchical one-token-per-series + ImageNet ConvNeXt protocol** | **`0.6293565948`** | **RETAINED / DEVELOPMENT CHAMPION** |
-| **B14** | **full `K x 16` slice-token memory + same ImageNet protocol as B13** | pending | **IMPLEMENTED / ACTIVE** |
+| **B14** | **full `K x 16` slice-token memory + same ImageNet protocol as B13** | **`0.6197914249`** | **COMPLETED / REJECTED GLOBALLY** |
+| **B15** | **ImageNet -> knee-MRI SSL -> B13 hierarchy** | not run | next representation hypothesis |
 
 ## B13 retained result
 
@@ -62,101 +63,77 @@ median delta       +0.0652260946
 P(B13 > B7.1)       0.9808
 ```
 
-The 58 labelled studies have been repeatedly reused, so these remain development/model-selection estimates rather than independent validation.
+## B14 completed result
 
-## Why B14
+B14 removed B13's one-token-per-series compression and retained every `K x 16` slice token through the study Transformer while keeping the same ImageNet encoder protocol and frozen training recipe.
 
-B13 performs pathology-specific cross-attention only **after** each real MRI acquisition has been compressed to one learned token:
-
-```text
-B13
-16 slice tokens -> 1 generic series token
-K series tokens -> study Transformer -> pathology queries
-```
-
-B14 removes that compression:
+Training completed cleanly:
 
 ```text
-B14
-K real series x 16 slice tokens
-    -> study Transformer
-    -> pathology-query cross-attention
+epoch 1 loss  0.7346330162
+epoch 2 loss  0.6606430862
+epoch 3 loss  0.6074723502
+epoch 4 loss  0.5822778610
 ```
 
-This is the already-proven B12 full-token architecture combined with B13's stronger ImageNet encoder protocol. Everything else is frozen to B13.
-
-## Frozen B14 controls
+Gold development result:
 
 ```text
-same torchvision ConvNeXt-Tiny IMAGENET1K_V1
-same ImageNet mean/std normalization
-same 3120 training studies
-same 14123 B6 cells: 6871 positive / 7252 negative
-same 17475-series mapping
-same series SHA-256
-5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376
-same 16 sampled positions / series
-same 224x224 resize
-same metadata embeddings
-same batch size 2
-same encoder LR 1e-5 / head LR 1e-4
-same augmentation
-same 4 epochs
-same TTA [-1,0,1]
-same 5000 bootstrap replicates
-zero gold gradients / zero gold early stopping
+B14 macro AUC      0.6197914249
+95% CI            [0.5706800512,0.6693542716]
+
+raw B14-B13       -0.0095651699
+paired median     -0.0093726931
+95% paired CI     [-0.0469823411,+0.0250137870]
+P(B14 > B13)       0.2924
 ```
 
-## Install / test
+The paired CI crosses zero, so B13 and B14 are not statistically resolved on the reused 58-study development surface. Nevertheless, B14 has the lower point estimate, lower probability of superiority, greater memory cost, and slower training. **B13 remains the retained global model.**
 
-```bash
-cd /media/talafha/Disk_1/CNN_CPC
-git pull --ff-only origin main
-conda activate rsna-knee
-python -m pip install -e .
-python -c "import rsna_knee; print(rsna_knee.__version__)"
+The training-loss contrast is important:
+
+```text
+B13 final B6 loss   0.6132239342
+B14 final B6 loss   0.5822778610
 ```
 
-Expected: `0.22.0`.
+B14 fit the weak B6 supervision better but generalized worse by the primary macro-AUC point estimate. This argues against simply increasing downstream capacity or fitting the weak labels harder.
 
-```bash
-python -m compileall -q src tests
-pytest -q \
-  tests/test_b13_imagenet_init.py \
-  tests/test_b14_full_slice_tokens.py \
-  tests/test_b12_variable_series.py
+## B14 per-target result — descriptive only
+
+```text
+ACL                0.5122549020
+MCL                0.4693877551
+Medial Meniscus    0.6454326923
+Lateral Meniscus   0.6881987578
+Medial OA          0.5116279070
+Lateral OA         0.5783365571
+PF OA              0.5997425997
+Effusion           0.8347826087
+Synovitis          0.7419354839
+Baker's            0.6884057971
+Contusion          0.5465587045
+Fracture           0.6208333333
 ```
 
-## Train B14
+Do not use target-level differences to construct a B13/B14 hybrid.
 
-```bash
-export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
+## Current direction
 
-rsna-knee-b14 \
-  --config configs/b14_imagenet_full_tokens.yaml \
-  --data-root "$DATA_ROOT" \
-  --b6-root runs/b6_report_labels_v121 \
-  --series-policy runs/b12_variable_series/audit/series_policy.json \
-  --out-root runs/b14_imagenet_full_tokens
+```text
+B13 RETAIN
+B14 REJECT globally
+no B14 epoch 5
+no slice-count / LR / normalization sweep on gold
+no target-wise B13/B14 mixture
+
+next high-upside hypothesis:
+ImageNet ConvNeXt
+      -> knee-MRI self-supervised adaptation
+      -> B13 hierarchical aggregation
+      -> frozen B6 downstream recipe
 ```
 
-Every full epoch must retain `1560` batches, `3120` study draws, `14123` active cells, `17475` series, `max K=14`, `full_coverage=true`, `full_series_coverage=true`, and `budget_limited=false`.
+For B15, the 58 fully labelled gold studies must be excluded from SSL optimization and gold labels must remain absent from gradients, early stopping and checkpoint selection.
 
-## Evaluate and compare
-
-```bash
-rsna-knee-b14-eval \
-  --config configs/b14_imagenet_full_tokens.yaml \
-  --data-root "$DATA_ROOT" \
-  --checkpoint runs/b14_imagenet_full_tokens/b14_model.pt \
-  --out-root runs/b14_imagenet_full_tokens/gold_eval
-
-python -m rsna_knee.cli evaluate \
-  --train-csv "$DATA_ROOT/train.csv" \
-  --oof runs/b13_imagenet/gold_eval/gold_predictions.csv \
-  --compare-oof runs/b14_imagenet_full_tokens/gold_eval/gold_predictions.csv \
-  --n-bootstrap 5000 \
-  --out runs/b14_imagenet_full_tokens/gold_eval/b13_vs_b14.json
-```
-
-No target-wise B13/B14 mixtures, epoch extensions, slice-count tuning or ensemble-weight search are allowed from the 58-study B14 result.
+The 58 labelled studies have been repeatedly reused, so all local AUCs remain development/model-selection estimates rather than independent validation. A real Kaggle hidden-test/leaderboard result remains the next genuinely independent signal.
