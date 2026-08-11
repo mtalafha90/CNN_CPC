@@ -1,8 +1,8 @@
 # Competition execution policy
 
-`docs/competition.md` is the preserved competition-description document. This file describes the conservative execution policy enforced by the current code and experiment workflow.
+This file records the execution and model-development policy enforced by the repository.
 
-> **Snapshot: 2026-08-10.** Package `0.14.0`. B7.1 is the current best standalone development model at `0.5644802945`; B8 is rejected at `0.5300962807`; B9 strict semantic routing is the active predeclared experiment. Current scores are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
+> **Snapshot — 2026-08-11.** Package `0.21.0`. B7.1 remains the retained benchmark at `0.5644802945`; B12 has the highest development point estimate at `0.5660915179` but is statistically tied with B7.1. B12.1 is the competition-only hierarchical series-token experiment. B13 is the clean standalone ImageNet encoder-protocol experiment.
 
 ## Conservative defaults
 
@@ -14,44 +14,49 @@ pretrained: false
 allow_external_pretrained: false
 ```
 
-Additional defaults:
+These defaults keep ordinary experiments on the competition-data-only path. External pretrained weights must be explicitly enabled by an experiment-specific config.
 
-- no DDP / no `torchrun` in the production path;
-- CPU multiprocessing only for DICOM/data work;
-- Internet-independent final inference;
-- output exactly `submission.csv`;
-- competition-data checkpoint provenance checked;
-- final inference MRI-only.
+## Verified external-data / pretrained-model rule
 
-## External-pretraining policy
+The official competition rules supplied by the repository owner were reviewed on 2026-08-11. The Competition-Specific Rules section **External Data and Tools** permits data other than Competition Data when it is publicly available/equally accessible at no cost or satisfies the stated reasonableness criteria. The same section states that external data and models are acceptable unless specifically prohibited by the Host.
 
-> **Update — 2026-08-11.** ImageNet-pretrained weights are **permitted**, on the
-> repository owner's reading of the competition rules. The rules text is not
-> stored in this repository and was not independently verified by the code
-> author, so this is recorded as an owner decision rather than a checked fact.
-> To revert, delete `configs/b13_imagenet_init.yaml`; nothing on the
-> competition-data-only path depends on it.
->
-> The conservative defaults above are unchanged, so every existing experiment
-> (B0-B12.1) stays competition-data-only and reproducible. External weights are
-> opt-in per config and require **both** `allow_external_pretrained: true` and
-> `pretrained: true`; setting only the latter raises rather than quietly loading
-> external weights.
->
-> First experiment on this path: **B13**, see `docs/B13_IMAGENET_INIT.md`.
+No competition-specific prohibition on publicly available pretrained models was present in the supplied rules. Therefore a standard publicly accessible torchvision ImageNet checkpoint is permitted under the supplied rules, subject to the remaining competition obligations on accessibility, licensing, reproducibility and winner documentation.
 
-The conservative path uses only competition data:
+B13 is the first experiment that opts in:
 
-- strong SSL: competition MRI only;
-- B5 MRI/text alignment: competition MRI + competition reports only;
-- B6: competition reports only;
-- B7/B7.1/B8/B9: competition MRI + frozen B6 competition-report supervision;
-- no ImageNet weights;
-- no external clinical language model.
+```yaml
+allow_external_pretrained: true
+pretrained: true
+```
+
+The existing B0-B12.1 paths remain competition-data-only and reproducible.
+
+## B12.1 / B13 separation
+
+B12.1 is explicitly competition-only:
+
+```text
+trainer       rsna-knee-b12-1
+initialization B5 competition-only SSL
+external_pretrained false
+```
+
+Its trainer rejects `pretrained: true` or `allow_external_pretrained: true`.
+
+B13 is explicitly external-pretrained:
+
+```text
+trainer       rsna-knee-b13
+initialization torchvision ConvNeXt-Tiny IMAGENET1K_V1
+normalization standard ImageNet mean/std
+external_pretrained true
+```
+
+There is no B5 checkpoint argument in B13.
 
 ## Frozen report-supervision policy
 
-B6 v1.2.1 is frozen after its gold audit.
+B6 v1.2.1 is frozen:
 
 ```text
 confidence threshold        0.75
@@ -61,118 +66,52 @@ uncertain/unmentioned       ignored
 gold rows in weak export    0
 ```
 
-B7/B7.1/B8/B9 do not use gold labels in gradients or early stopping.
-
-Because the B6 gold audit informed the global weak-label policy, later 58-study scores are development/model-selection estimates.
+Later experiments use no gold labels in gradients or early stopping. Because the B6 gold audit informed the global weak-label policy and the same 58 studies have been reused for model development, later scores are development/model-selection estimates.
 
 ## Gold-development policy
 
 Do not:
 
 - tune ensemble weights on the 58 gold labels;
-- select target-specific post-hoc winners;
-- reopen B4 selector searches;
-- retune B6 parser rules/weak-label weights from later gold results;
-- tune B8 spatial priors after its negative result;
-- tune B9 target-specific routing or selectively restore substituted streams after seeing B9 gold outcomes;
+- select target-specific model winners;
+- retune B6 parser rules or weak-label weights from later gold outcomes;
+- tune B12/B12.1 series caps or pooling heads from gold;
+- tune B13 ImageNet variants, normalization, learning rate or epoch count from the same 58-study result;
 - call a development result a leaderboard result.
 
-## Closed branches
+## Frozen B12/B12.1/B13 series surface
 
 ```text
-B4 selector redesign
-B5/B7.1 blend-weight search
-raw-vs-rank blend search
-target-specific model mixtures
-post-audit B6 parser tuning from gold
-B8 spatial-grid/anatomy-prior tuning from its gold result
+active training studies      3120
+B6 supervised cells         14123
+positive / negative       6871 / 7252
+eligible real MRI series    17475
+series mapping SHA-256
+5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376
 ```
 
-## B9 execution policy
-
-B9 is motivated by a label-free acquisition-metadata inconsistency.
-
-Historical routing audit:
-
-```text
-selected training streams       21886
-wrong semantic slots              552
-wrong-slot fraction               2.52%
-strict selected streams         21334
-strict semantic mismatches          0
-```
-
-B9 exact routing:
-
-```text
-*_fluid       -> Fluid_Sensitive == True only
-*_structural  -> Fluid_Sensitive == False only
-missing class -> None / presence mask False
-```
-
-Everything else remains B7.1-equivalent:
-
-```text
-B5 encoder initialization
-B6 v1.2.1 supervision
-KneeMILNet global-token architecture
-4 epochs
-1560 batches/epoch
-same optimizer/augmentation
-TTA [-1,0,1]
-5000 bootstrap replicates
-```
-
-Before gold evaluation, inspect:
-
-```text
-runs/b9_strict_routing/routing_audit.json
-runs/b9_strict_routing/history.json
-runs/b9_strict_routing/supervision_plan.json
-```
-
-The routing audit must certify `strict_semantic_mismatches = 0`.
+B13 must use the same series policy and refuses mapping drift.
 
 ## TTA policy
 
-Neural validation/submission TTA contracts are stored explicitly. B7.1/B9 use the predeclared center offsets `[-1,0,1]` for development evaluation. Diagnostic center-only evaluation is not permission to retune TTA after reading gold labels.
-
-## DICOM quality policy
-
-Historical audit:
+B12, B12.1 and B13 development evaluation use the frozen center offsets:
 
 ```text
-21,886 / 21,886 historically selected series decoded
-732,554 / 732,556 candidate files decoded
-2 partial one-file failures
-0 selected series lost
+[-1, 0, 1]
 ```
 
-B9 changes routing selection, not DICOM decoding. Missing semantic streams are legitimate and must remain masked rather than fabricated.
+Diagnostic center-only evaluation is not permission to retune TTA after reading gold labels.
 
-## Submission schema
+## Submission and winner obligations
 
-The final competition file must contain exactly:
-
-```text
-StudyInstanceUID + 12 target columns
-```
-
-with the expected study set/order and finite probabilities in `[0,1]`.
-
-Default output:
-
-```text
-/kaggle/working/submission.csv
-```
+Final competition inference must preserve the competition submission schema and all applicable documentation/reproducibility requirements. If an external pretrained model is part of a final winning solution, record its exact source/version and ensure the full final software/model pipeline can be reproduced as required by the competition rules.
 
 ## Reporting vocabulary
 
 Use these terms accurately:
 
-- **preflight** — technical data-path/DICOM gate;
-- **audit** — full data-quality/routing/supervision inventory;
+- **audit** — data/routing/supervision inventory;
 - **training run** — optimization result;
-- **gold development result** — 58-study development score;
-- **model-selection CV** — repeated use of those 58 studies for method decisions;
+- **gold development result** — score on the reused 58-study development surface;
+- **paired bootstrap** — aligned resampling comparison between model prediction files;
 - **leaderboard result** — actual competition submission score.
