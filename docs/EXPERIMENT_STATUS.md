@@ -1,11 +1,11 @@
 # Experiment status
 
 **Snapshot:** 2026-08-11  
-**Package:** `0.22.0`  
+**Package:** `0.22.1`  
 **Gold development set:** 58 fully labelled studies  
 **Primary metric:** macro ROC AUC across 12 targets
 
-The 58-study surface has supported repeated sequential development decisions and is therefore a development/model-selection set rather than pristine independent validation.
+The 58-study surface has supported repeated sequential development decisions and is therefore a development/model-selection set rather than independent validation.
 
 ## Current headline
 
@@ -13,9 +13,10 @@ The 58-study surface has supported repeated sequential development decisions and
 - **B14 is completed and rejected globally**, macro AUC `0.6197914249`, 95% CI `[0.5706800512,0.6693542716]`.
 - Raw macro difference: `B14-B13 = -0.0095651699`.
 - Paired B14-vs-B13 median difference: `-0.0093726931`, 95% CI `[-0.0469823411,+0.0250137870]`, `P(B14>B13)=0.2924`.
-- The paired CI crosses zero, so B14 and B13 are statistically unresolved on the reused 58-study surface, but B14 has the lower point estimate, lower probability of superiority, greater token-memory cost, and slower training. **Retain B13; reject B14 globally.**
-- B14 reached a substantially lower final B6 training loss (`0.5822778610`) than B13 (`0.6132239342`) without improving macro AUC, indicating that stronger fitting of the weak labels is not by itself the path to a better model.
-- Next major representation hypothesis: **B15 = ImageNet -> competition knee-MRI self-supervised adaptation -> B13 hierarchical aggregation**, with all 58 gold studies excluded from SSL optimization.
+- The paired CI crosses zero, so B14 and B13 are statistically unresolved on the reused 58-study surface; model selection nevertheless retains B13 because B14 has the lower point estimate, low probability of superiority, higher token-memory cost and no global advantage.
+- B14 final B6 loss was `0.5822778610` versus B13 `0.6132239342`; stronger fitting of weak supervision did not improve macro AUC.
+- **Pre-B15 gate:** run the corrected exact B13 slice-exposure audit and freeze a report-group-safe B6 weak holdout before any B15/control training.
+- Reserved next representation hypothesis: **B15 = ImageNet -> competition knee-MRI self-supervised adaptation -> B13 hierarchy**.
 
 ## Experiment ladder
 
@@ -41,7 +42,7 @@ The 58-study surface has supported repeated sequential development decisions and
 | B12.1 | one learned token per series + B5 init | not run | implemented / skipped |
 | **B13** | **one learned token per series + ImageNet ConvNeXt protocol** | **`0.6293565948`** | **RETAINED / DEVELOPMENT CHAMPION** |
 | **B14** | **full `K x 16` slice-token memory + same ImageNet protocol** | **`0.6197914249`** | **COMPLETED / REJECTED GLOBALLY** |
-| **B15** | **ImageNet -> knee-MRI SSL -> B13 hierarchy** | not run | next representation hypothesis |
+| **B15** | **ImageNet -> knee-MRI SSL -> B13 hierarchy** | not run | reserved next representation hypothesis |
 
 ## Frozen B6 supervision surface
 
@@ -63,6 +64,8 @@ uncertain/unmentioned -> ignored
 minimum confidence -> 0.75
 ```
 
+B6 audit quality values include sensitivity `0.975`, specificity `0.606`, positive precision `0.690`, balanced accuracy `0.790`, and coverage `0.361`. These establish noisy/incomplete supervision but **do not establish a numerical downstream macro-AUC ceiling**.
+
 ## Frozen all-series surface
 
 ```text
@@ -72,7 +75,7 @@ historical dual unique 15468
 extra series            2007
 max series / study        14
 series SHA-256
-5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376
+5c4bb1c52294e45f9e83274c5c07d198dc54811b7c8439bd7bcd376
 ```
 
 ## B13 retained result
@@ -114,35 +117,22 @@ Fracture           0.5888888889
 
 B14 preserved B13's ImageNet protocol but removed one-token-per-series compression and retained every `K x 16` slice token through the study Transformer.
 
-### Training integrity
-
-All four epochs completed the frozen full-coverage contract:
-
 ```text
 epoch 1 loss  0.7346330162
 epoch 2 loss  0.6606430862
 epoch 3 loss  0.6074723502
 epoch 4 loss  0.5822778610
 
-batches                         1560 each epoch
-study_draws                     3120 each epoch
-active_supervision_cells_seen  14123 each epoch
-positive_cells_seen             6871 each epoch
-negative_cells_seen             7252 each epoch
-series_instances_seen          17475 each epoch
-max_series_in_any_batch           14
-full_coverage                   true
-full_series_coverage            true
-budget_limited                  false
-```
-
-### Frozen gold result
-
-```text
 B14 macro AUC      0.6197914249
 95% CI            [0.5706800512,0.6693542716]
 n                  58
 bootstrap          5000/5000 usable
+
+raw macro delta         -0.0095651699
+median_difference       -0.0093726931
+95% paired CI           [-0.0469823411,+0.0250137870]
+probability_b_better     0.2924
+valid replicates         5000
 ```
 
 Per-target B14 AUCs, descriptive only:
@@ -162,50 +152,66 @@ Contusion          0.5465587045
 Fracture           0.6208333333
 ```
 
-### Paired B14 versus B13
+No target-level B13/B14 hybrid is permitted.
 
-```text
-raw macro delta         -0.0095651699
-median_difference       -0.0093726931
-95% paired CI           [-0.0469823411,+0.0250137870]
-probability_b_better     0.2924
-valid replicates         5000
+## Corrected pre-B15 diagnostics
+
+### Exact B13 slice exposure
+
+The old `16 / n_slices` proxy is retired. B13 actually uses 16 2.5D triplets, training gap choices `[1,2]`, center jitter `+/-2`, and evaluation TTA offsets `[-1,0,1]`.
+
+`rsna-knee-slice-audit` now reconstructs the exact non-gold B13 surface, verifies the frozen 17,475-series SHA, uses orientation-projected DICOM geometry, and reports actual unique frame exposure, maximum unsampled runs, expected random-training-view exposure and the legal training-exposure envelope.
+
+```bash
+rsna-knee-slice-audit \
+  --config configs/b13_imagenet_init.yaml \
+  --data-root "$DATA_ROOT" \
+  --b6-root runs/b6_report_labels_v121 \
+  --series-policy runs/b12_variable_series/audit/series_policy.json \
+  --out runs/slice_audit_b13
 ```
 
-The paired CI crosses zero. Therefore do not claim B14 is statistically worse in a strict hypothesis-testing sense. The model-selection decision is nevertheless to retain B13 because B14 has a lower global point estimate, low bootstrap probability of superiority, higher computational cost, and no global performance advantage.
+### Frozen weak holdout
 
-### Descriptive target deltas B14-B13
+`rsna-knee-weak-holdout` freezes a report-group-safe split before new model training. A requested 20% split is roughly 624 studies, not 3,120, and B6 is sparse, so uncertainty is measured by empirical bootstrap on the actual holdout rather than assumed from a study-count scaling formula.
 
-```text
-ACL               +0.0379901961
-MCL               -0.0861678005
-Medial Meniscus   +0.0360576923
-Lateral Meniscus  +0.0086956522
-Medial OA         -0.1162790698
-Lateral OA        -0.0406189555
-PF OA             -0.0180180180
-Effusion          +0.0670807453
-Synovitis         +0.0310633214
-Baker's           -0.0597826087
-Contusion         -0.0067476383
-Fracture          +0.0319444444
+```bash
+rsna-knee-weak-holdout \
+  --config configs/b13_imagenet_init.yaml \
+  --data-root "$DATA_ROOT" \
+  --b6-root runs/b6_report_labels_v121 \
+  --holdout-fraction 0.20 \
+  --seed 2026 \
+  --out-root runs/weak_holdout_v1
 ```
 
-These target-level differences must not be used to create target-specific B13/B14 hybrids.
+Existing B13/B14 checkpoints were trained on all 3,120 active B6 studies and therefore cannot be retrospectively scored on this holdout and called validation.
+
+For a valid future comparison:
+
+```text
+same frozen weak-train partition
+    |-- B13-control: ImageNet -> B13 hierarchy
+    `-- B15:        ImageNet -> MRI SSL -> B13 hierarchy
+
+paired weak holdout -> biased teacher-agreement ranking
+58 gold             -> one development confirmation only
+Kaggle hidden       -> independent signal
+```
 
 ## Current decision / next stage
 
 ```text
 B13 RETAIN / development champion
 B14 REJECT globally
+run corrected diagnostics
+freeze weak holdout before B15/control training
 no B14 epoch extension
 no B13/B14 target-wise hybrid
 no ensemble-weight search on gold
 
-next major hypothesis:
-B15 = ImageNet -> competition knee-MRI SSL -> B13 hierarchy
+B15 reserved hypothesis:
+ImageNet -> competition knee-MRI SSL -> B13 hierarchy
 ```
 
-For B15, the 58 gold studies must be excluded from SSL optimization. Gold labels remain forbidden from gradients, early stopping and checkpoint selection.
-
-Actual hidden-test / leaderboard performance remains unknown until a real competition submission is evaluated.
+For B15, all 58 gold studies must be excluded from SSL optimization. Gold labels remain forbidden from gradients, early stopping and checkpoint selection. Actual hidden-test / leaderboard performance remains unknown until a real competition submission is evaluated.
