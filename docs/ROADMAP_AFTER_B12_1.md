@@ -1,6 +1,6 @@
 # Roadmap after B12.1
 
-> **Status — 2026-08-11:** DEVELOPMENT REOPENED FOR ONE CONTROLLED HIGH-UPSIDE EXPERIMENT. B13 remains the retained development champion. **B14 ImageNet full slice-token aggregation is now active.**
+> **Status — 2026-08-11:** B14 is completed and rejected globally. B13 remains the retained development champion. The next major representation hypothesis is **B15: ImageNet -> competition knee-MRI self-supervised adaptation -> B13 hierarchical aggregation**.
 
 ## Current reference state
 
@@ -8,6 +8,7 @@
 B7.1 macro AUC        0.5644802945
 B12 macro AUC         0.5660915179
 B13 macro AUC         0.6293565948   retained development champion
+B14 macro AUC         0.6197914249   completed / rejected globally
 
 B13 vs B12
 median difference      +0.0638674720
@@ -19,19 +20,23 @@ median difference      +0.0652260946
 95% paired CI          [+0.0039768779,+0.1266069220]
 P(B13 > B7.1)           0.9808
 
-B14                    implemented / active / pending
+B14 vs B13
+raw macro difference    -0.0095651699
+median difference       -0.0093726931
+95% paired CI           [-0.0469823411,+0.0250137870]
+P(B14 > B13)             0.2924
 ```
 
 ## Governing rules
 
 1. The 58 fully labelled studies are a development/model-selection surface, not pristine independent validation.
 2. Primary model selection remains global macro ROC AUC across 12 targets.
-3. Paired 5,000-replicate aligned bootstrap remains required for B14 versus B13.
+3. Paired 5,000-replicate aligned bootstrap remains required for controlled local comparisons.
 4. Do not construct target-specific winners from per-target AUCs.
-5. Do not tune slice counts, series caps, thresholds, pooling heads, ImageNet variants, normalization, LR, epoch count or ensemble weights from the B14 gold result.
+5. Do not tune slice counts, series caps, thresholds, pooling heads, ImageNet variants, normalization, LR, epoch count or ensemble weights from the reused gold surface.
 6. No gold labels enter gradients, early stopping or checkpoint selection.
-7. B14 must complete the exact four-epoch study/series coverage contract before gold evaluation.
-8. After B14, prefer an independent Kaggle signal unless there is a strong new global hypothesis.
+7. Any B15 SSL stage must exclude all 58 gold studies from SSL optimization.
+8. The independent Kaggle hidden-test/leaderboard remains more valuable than repeated local tuning.
 
 ## Completed B13
 
@@ -46,11 +51,13 @@ K series tokens -> study Transformer -> pathology queries
 
 Frozen gold macro AUC: `0.6293565948`, 95% CI `[0.5789896351,0.6775867717]`.
 
-## Active B14 — full slice-token memory
+B13 remains the retained global model.
 
-### Hypothesis
+## Completed B14 — full slice-token memory
 
-B13's one-token-per-series compression may discard focal slice-level information before pathology-specific attention can use it.
+### Hypothesis tested
+
+B13's one-token-per-series compression might discard focal slice-level information before pathology-specific attention can use it.
 
 ### Single change versus B13
 
@@ -64,75 +71,120 @@ NO per-series compression
 K x 16 slice tokens -> study Transformer -> pathology queries
 ```
 
-B14 reuses the already tested B12 full-token architecture but uses B13's ImageNet encoder protocol.
+### Training result
 
-### Frozen B14 controls
+B14 completed all four frozen epochs with exact study/series coverage.
 
 ```text
-same ImageNet ConvNeXt-Tiny weights
-same ImageNet normalization
-same 3120 studies
-same 14123 supervised cells
-same 6871 positive / 7252 negative cells
-same 17475 real MRI series
-same series SHA-256
-5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376
-same 16 positions / series
-same 224x224 resize
-same metadata embeddings
-same seed and loader seed offsets
-same batch size 2
-same optimizer / LR / weight decay
-same augmentation
-same four epochs
+epoch 1 loss  0.7346330162
+epoch 2 loss  0.6606430862
+epoch 3 loss  0.6074723502
+epoch 4 loss  0.5822778610
+```
+
+B14 final loss was lower than B13 (`0.5822778610` vs `0.6132239342`), but this stronger fit to B6 supervision did not improve the primary metric.
+
+### Gold result
+
+```text
+B14 macro AUC      0.6197914249
+95% CI            [0.5706800512,0.6693542716]
+```
+
+Paired against B13:
+
+```text
+raw B14-B13        -0.0095651699
+median difference  -0.0093726931
+95% paired CI      [-0.0469823411,+0.0250137870]
+P(B14 > B13)        0.2924
+```
+
+### B14 decision
+
+The paired CI crosses zero, so the two models are statistically unresolved on the 58-study development surface. However, B14 has a lower global point estimate, only `0.2924` probability of superiority, higher token-memory cost and slower training.
+
+```text
+B14 -> REJECT GLOBALLY
+B13 -> RETAIN
+```
+
+Do not run B14 epoch 5 and do not construct target-wise B13/B14 mixtures.
+
+## Next major hypothesis — B15
+
+### Motivation
+
+B14 shows that increasing downstream token memory/capacity is not sufficient. The strongest remaining representation hypothesis is to adapt the successful ImageNet encoder to knee MRI before weakly supervised downstream training.
+
+### Intended structure
+
+```text
+ImageNet ConvNeXt-Tiny
+        |
+        v
+competition knee-MRI self-supervised adaptation
+        |
+        v
+B13 one-token-per-series hierarchical architecture
+        |
+        v
+frozen B6 weak-supervision training recipe
+```
+
+### Required safeguards
+
+Before B15 implementation/training, freeze the SSL objective and data policy. At minimum:
+
+```text
+58 gold studies excluded from SSL optimization
+no gold labels in SSL
+no B6 labels in SSL
+no report labels in SSL unless explicitly declared as a different experiment
+no gold-based SSL checkpoint selection
+no gold-based SSL hyperparameter sweep
+same B13 downstream architecture unless separately predeclared
+same B6 downstream supervision surface
+same 17475-series downstream mapping
+same 4 downstream epochs
 same TTA [-1,0,1]
-same 5000 bootstrap replicates
 ```
 
-### Primary decision
-
-The primary result is the paired global comparison `B14-B13`.
+Candidate competition-only MRI SSL families to consider before freezing B15:
 
 ```text
-clearly better -> B14 becomes retained champion
-tied           -> retain both globally; do not target-wise mix
-clearly worse  -> reject B14 and retain B13
+same-study / cross-sequence contrastive learning
+masked slice/token reconstruction
+cross-plane consistency
+teacher-student self-distillation
 ```
 
-## After B14
+Only one B15 protocol should be selected and frozen before gold evaluation.
 
-Do not automatically run another local experiment. First decide whether the B14 result materially changes the model direction.
+## Later candidates
 
-If another major representation experiment is justified, the next candidate is **B15: ImageNet -> competition-MRI self-supervised adaptation -> frozen downstream recipe**. That experiment must be specified before touching gold and must exclude the 58 gold labels from SSL optimization.
+A larger foundation-encoder change can be reserved for **B16** if B15 is unsuccessful and development budget still justifies it.
 
-A larger foundation-encoder change can be reserved for a later **B16** only if the development budget still justifies it. Scanner/protocol robustness becomes **B17** and remains optional/diagnostic.
+Scanner/protocol robustness becomes **B17** and remains optional/diagnostic.
 
 ## Independent competition signal
 
-After B14 decision:
+The preferred competition path remains:
 
 ```text
-retain one global model
+retain B13 now
       |
-      v
-freeze architecture / preprocessing / series policy / TTA
+      +--> independent test inference / Kaggle submission
       |
-      v
-competition test inference
-      |
-      v
-submission.csv
-      |
-      v
-Kaggle leaderboard
+      +--> B15 only as one controlled major representation experiment
 ```
 
-The hidden test/leaderboard remains the next genuinely independent performance signal.
+A leaderboard result is the next genuinely independent signal and should not be turned into a high-frequency tuning loop.
 
 ## Experiments explicitly not allowed from B14 gold
 
 ```text
-8-epoch extension chosen because of B14 score
+B14 epoch extension
 slice-count sweep
 B13/B14 per-target winner mixture
 B13/B14 ensemble-weight search
@@ -142,4 +194,4 @@ series-count cap selected on gold
 threshold tuning
 ```
 
-The goal is a higher macro AUC through interpretable global representation changes, not uncontrolled optimization to 58 repeatedly reused cases.
+The goal remains a higher macro AUC through interpretable global representation improvements, not uncontrolled optimization to 58 repeatedly reused cases.
