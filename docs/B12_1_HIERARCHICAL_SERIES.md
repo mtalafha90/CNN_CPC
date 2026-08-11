@@ -1,34 +1,22 @@
 # B12.1 — hierarchical learned series-token aggregation
 
-> **Status — 2026-08-11:** IMPLEMENTED / PREDECLARED / TRAINING READY. Package `0.21.0`.
+> **Status — 2026-08-11:** IMPLEMENTED / PREDECLARED / **SKIPPED FOR THE COMPETITION WORKFLOW**. Package `0.21.0`.
 
-## Motivation
+## Original purpose
 
-B12 retained all 17,475 eligible training MRI series and achieved the highest development point estimate so far:
-
-```text
-B12 macro AUC         0.5660915179
-95% CI               [0.5094993761, 0.6244034568]
-B7.1 macro AUC        0.5644802945
-median(B12-B7.1)     +0.0023747526
-95% paired CI        [-0.0472104067,+0.0481427722]
-P(B12 > B7.1)         0.5376
-```
-
-B12 is retained as statistically tied with B7.1, not declared superior.
-
-## Single scientific change versus B12
+B12.1 was designed as the clean hierarchical control between B12 and B13:
 
 ```text
-B12:
+B12
 K real series x 16 slice tokens -> study Transformer -> pathology queries
 
-B12.1:
+B12.1
 16 slice tokens -> learned 8-head per-series attention pool -> 1 series token
 K series tokens -> same 2-layer study Transformer -> same pathology queries
+encoder initialization -> B5 competition-only SSL
 ```
 
-There is no series-rank/position embedding.
+Its exact implementation remains in the repository and is reproducible.
 
 ## Frozen controls
 
@@ -53,35 +41,55 @@ TTA [-1,0,1]
 zero gold gradients / zero gold early stopping
 ```
 
-B12.1 is explicitly competition-only. Its trainer rejects external pretrained flags; ImageNet belongs to the separate B13 experiment.
+B12.1 is explicitly competition-only and requires the B5 encoder checkpoint. Its trainer rejects external pretrained flags; ImageNet belongs to the separate B13 experiment.
 
-## Install / tests
+## Why it is now skipped
 
-```bash
-cd /media/talafha/Disk_1/CNN_CPC
-git pull --ff-only origin main
-conda activate rsna-knee
-python -m pip install -e .
-python -c "import rsna_knee; print(rsna_knee.__version__)"
-```
-
-Expected:
+B13 completed before B12.1 and produced a substantially stronger development result:
 
 ```text
-0.21.0
+B13 macro AUC      0.6293565948
+95% CI            [0.5789896351,0.6775867717]
 ```
 
-Run:
+Paired versus B12:
 
-```bash
-python -m compileall -q src tests
-pytest -q \
-  tests/test_b12_variable_series.py \
-  tests/test_b12_1_hierarchical.py \
-  tests/test_b7_weak_supervision.py
+```text
+median(B13-B12)    +0.0638674720
+95% paired CI      [+0.0127183837,+0.1144643292]
+P(B13 > B12)        0.9920
 ```
 
-## Train B12.1
+Paired versus B7.1:
+
+```text
+median(B13-B7.1)   +0.0652260946
+95% paired CI      [+0.0039768779,+0.1266069220]
+P(B13 > B7.1)       0.9808
+```
+
+Both paired confidence intervals are above zero on the repeatedly reused 58-study development set.
+
+The competition workflow therefore prioritizes freezing B13-v1 and obtaining an independent Kaggle signal rather than spending another full training/evaluation cycle only to complete this ablation.
+
+## Scientific consequence of skipping B12.1
+
+The clean comparison:
+
+```text
+B12.1 = hierarchical architecture + B5 initialization
+B13   = hierarchical architecture + ImageNet encoder protocol
+```
+
+will not be available.
+
+Therefore the project must **not** claim that the entire B13 improvement is caused solely by ImageNet initialization. Relative to B12, B13 differs in both hierarchical aggregation and encoder protocol.
+
+This limitation is explicit and intentional.
+
+## Reproduction commands — archived, not current next step
+
+B12.1 can still be reproduced later if a scientific ablation is required:
 
 ```bash
 export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
@@ -95,23 +103,7 @@ rsna-knee-b12-1 \
   --out-root runs/b12_1_hierarchical
 ```
 
-Every complete epoch must report:
-
-```text
-batches                         1560
-study_draws                     3120
-active_supervision_cells_seen  14123
-positive_cells_seen             6871
-negative_cells_seen             7252
-series_instances_seen          17475
-expected_series_instances      17475
-max_series_in_any_batch           14
-full_coverage                   true
-full_series_coverage            true
-budget_limited                  false
-```
-
-## Frozen gold evaluation
+Frozen evaluation command:
 
 ```bash
 rsna-knee-b12-1-eval \
@@ -121,29 +113,25 @@ rsna-knee-b12-1-eval \
   --out-root runs/b12_1_hierarchical/gold_eval
 ```
 
-Primary comparisons remain B12.1 versus B12 and B7.1 with aligned 5,000-replicate bootstrap.
+These commands are retained for reproducibility, **not as part of the current competition roadmap**.
 
-## Relation to B13
+## Current successor
 
-B13 is now a separate first-class experiment, not a mode of the B12.1 trainer:
+B13 is now the retained development champion. See [`B13_IMAGENET_INIT.md`](B13_IMAGENET_INIT.md).
+
+Current competition path:
 
 ```text
-B12.1
-trainer      rsna-knee-b12-1
-encoder      B5 competition-only SSL
-checkpoint   runs/b12_1_hierarchical/b12_1_model.pt
-
-B13
-trainer      rsna-knee-b13
-encoder      torchvision ConvNeXt-Tiny IMAGENET1K_V1
-normalization standard ImageNet mean/std
-checkpoint   runs/b13_imagenet/b13_model.pt
+B13-v1 RETAIN
+     |
+     v
+freeze model / preprocessing / series policy / TTA
+     |
+     v
+Kaggle test inference and submission
+     |
+     v
+use leaderboard as the next independent signal
 ```
 
-B13 keeps this exact hierarchical architecture and training surface. See [`B13_IMAGENET_INIT.md`](B13_IMAGENET_INIT.md).
-
-## Later roadmap
-
-B12.2 remains conditional pathology-conditioned series attention. The previously planned stronger competition-only SSL experiment has been renumbered to **B14**, and optional scanner/protocol robustness to **B15**, so B13 has one unambiguous meaning.
-
-Full roadmap: [`ROADMAP_AFTER_B12_1.md`](ROADMAP_AFTER_B12_1.md).
+Full updated roadmap: [`ROADMAP_AFTER_B12_1.md`](ROADMAP_AFTER_B12_1.md).
