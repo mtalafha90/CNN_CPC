@@ -1,13 +1,13 @@
 # Roadmap after B12.1
 
-> **Status — 2026-08-11:** UPDATED AFTER B13 COMPLETION. B13 is the retained development champion. B12.1 is skipped for the competition path, and the immediate next stage is B13-v1 freeze plus Kaggle submission. Additional local experiments are deferred until an independent competition signal or a clear technical diagnostic justifies reopening development.
+> **Status — 2026-08-11:** DEVELOPMENT REOPENED FOR ONE CONTROLLED HIGH-UPSIDE EXPERIMENT. B13 remains the retained development champion. **B14 ImageNet full slice-token aggregation is now active.**
 
 ## Current reference state
 
 ```text
 B7.1 macro AUC        0.5644802945
 B12 macro AUC         0.5660915179
-B13 macro AUC         0.6293565948   new development champion
+B13 macro AUC         0.6293565948   retained development champion
 
 B13 vs B12
 median difference      +0.0638674720
@@ -19,182 +19,127 @@ median difference      +0.0652260946
 95% paired CI          [+0.0039768779,+0.1266069220]
 P(B13 > B7.1)           0.9808
 
-B12.1                 implemented / skipped for competition path
+B14                    implemented / active / pending
 ```
-
-Both B13 paired confidence intervals are above zero on the repeatedly reused 58-study development surface.
 
 ## Governing rules
 
-1. The 58 fully labelled studies are a **development/model-selection surface**, not pristine independent validation.
+1. The 58 fully labelled studies are a development/model-selection surface, not pristine independent validation.
 2. Primary model selection remains global macro ROC AUC across 12 targets.
-3. Paired 5,000-replicate bootstrap comparisons remain required for interpretation.
+3. Paired 5,000-replicate aligned bootstrap remains required for B14 versus B13.
 4. Do not construct target-specific winners from per-target AUCs.
-5. Do not tune thresholds, series caps, routing rules, pooling heads, pseudo-label rules, ImageNet variants, normalization variants, epoch counts or ensemble weights on the 58-study surface.
-6. Do not choose checkpoints from gold performance.
-7. Experiment-specific frozen controls must remain auditable.
-8. Prefer an independent competition signal over further sequential local tuning.
+5. Do not tune slice counts, series caps, thresholds, pooling heads, ImageNet variants, normalization, LR, epoch count or ensemble weights from the B14 gold result.
+6. No gold labels enter gradients, early stopping or checkpoint selection.
+7. B14 must complete the exact four-epoch study/series coverage contract before gold evaluation.
+8. After B14, prefer an independent Kaggle signal unless there is a strong new global hypothesis.
 
 ## Completed B13
 
-B13 uses the hierarchical learned series-token architecture with:
+B13 combines:
 
 ```text
 torchvision ConvNeXt-Tiny IMAGENET1K_V1
-+ standard ImageNet mean/std normalization
+standard ImageNet mean/std normalization
+16 slice tokens / series -> one learned series token
+K series tokens -> study Transformer -> pathology queries
 ```
 
-Frozen training surface:
+Frozen gold macro AUC: `0.6293565948`, 95% CI `[0.5789896351,0.6775867717]`.
+
+## Active B14 — full slice-token memory
+
+### Hypothesis
+
+B13's one-token-per-series compression may discard focal slice-level information before pathology-specific attention can use it.
+
+### Single change versus B13
 
 ```text
-training studies        3120
-supervised cells       14123
-positive cells          6871
-negative cells          7252
-real MRI series        17475
-series SHA-256
+B13
+16 slices / series -> 1 generic learned series token
+K tokens -> study Transformer -> pathology queries
+
+B14
+NO per-series compression
+K x 16 slice tokens -> study Transformer -> pathology queries
+```
+
+B14 reuses the already tested B12 full-token architecture but uses B13's ImageNet encoder protocol.
+
+### Frozen B14 controls
+
+```text
+same ImageNet ConvNeXt-Tiny weights
+same ImageNet normalization
+same 3120 studies
+same 14123 supervised cells
+same 6871 positive / 7252 negative cells
+same 17475 real MRI series
+same series SHA-256
 5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376
+same 16 positions / series
+same 224x224 resize
+same metadata embeddings
+same seed and loader seed offsets
+same batch size 2
+same optimizer / LR / weight decay
+same augmentation
+same four epochs
+same TTA [-1,0,1]
+same 5000 bootstrap replicates
 ```
 
-All four epochs completed with exact full study and series coverage. Frozen gold macro AUC is `0.6293565948`, 95% CI `[0.5789896351,0.6775867717]`.
+### Primary decision
 
-## B12.1 decision — skip for competition workflow
-
-B12.1 remains implemented and reproducible, but it will not be trained solely to complete the clean causal ablation.
-
-This means the project cannot isolate:
+The primary result is the paired global comparison `B14-B13`.
 
 ```text
-hierarchical architecture + B5 initialization
-versus
-hierarchical architecture + ImageNet protocol
+clearly better -> B14 becomes retained champion
+tied           -> retain both globally; do not target-wise mix
+clearly worse  -> reject B14 and retain B13
 ```
 
-Therefore do not claim that ImageNet alone caused the entire B13 gain.
+## After B14
 
-Skipping B12.1 is an explicit tradeoff: preserving development budget and avoiding another sequential decision on the same 58 gold cases is considered more valuable for the competition than completing the ablation.
+Do not automatically run another local experiment. First decide whether the B14 result materially changes the model direction.
 
-## Immediate stage — freeze B13-v1
+If another major representation experiment is justified, the next candidate is **B15: ImageNet -> competition-MRI self-supervised adaptation -> frozen downstream recipe**. That experiment must be specified before touching gold and must exclude the 58 gold labels from SSL optimization.
 
-Freeze:
+A larger foundation-encoder change can be reserved for a later **B16** only if the development budget still justifies it. Scanner/protocol robustness becomes **B17** and remains optional/diagnostic.
 
-```text
-architecture
-ImageNet encoder protocol
-input normalization
-B12 all-series mapping
-B6 supervision-derived trained checkpoint
-224x224 preprocessing
-16 2.5D positions per series
-metadata embeddings
-TTA [-1,0,1]
-checkpoint runs/b13_imagenet/b13_model.pt
-```
+## Independent competition signal
 
-Do not retrain B13-v1 for extra epochs and do not select an alternative checkpoint from the gold set.
-
-## Next stage — Kaggle submission
-
-The next high-value task is:
+After B14 decision:
 
 ```text
-freeze B13-v1
+retain one global model
       |
       v
-run competition test inference
+freeze architecture / preprocessing / series policy / TTA
       |
       v
-validate submission schema and probabilities
+competition test inference
       |
       v
-create submission.csv
+submission.csv
       |
       v
-submit to Kaggle
-      |
-      v
-use leaderboard as the next independent signal
+Kaggle leaderboard
 ```
 
-The leaderboard result should be treated as more informative than another local variant on the repeatedly reused development set.
+The hidden test/leaderboard remains the next genuinely independent performance signal.
 
-## Deferred experiments
-
-### B12.2 — pathology-conditioned series attention
-
-**Deferred.** Do not run before the first B13 competition submission.
-
-If reopened later, it must remain one global learned architecture rather than target-wise routing chosen from gold results.
-
-### B14 — stronger competition-only MRI SSL
-
-**Deferred.** The previously planned stronger in-domain representation experiment remains available only if an independent competition result suggests representation quality is still limiting.
-
-Candidate family, to be frozen before any future evaluation:
+## Experiments explicitly not allowed from B14 gold
 
 ```text
-same-study cross-sequence contrastive learning
-masked slice/token reconstruction
-cross-plane consistency
+8-epoch extension chosen because of B14 score
+slice-count sweep
+B13/B14 per-target winner mixture
+B13/B14 ensemble-weight search
+learning-rate sweep
+ImageNet normalization/version sweep
+series-count cap selected on gold
+threshold tuning
 ```
 
-### B15 — scanner/protocol robustness
-
-**Deferred / optional.** Only reopen if diagnostics or independent competition evidence indicate acquisition/domain robustness is a real limitation.
-
-Candidate perturbations:
-
-```text
-intensity and contrast variation
-resolution/downsampling perturbation
-acquisition-quality degradation
-metadata dropout
-```
-
-## Decision after leaderboard result
-
-After the first valid B13 submission:
-
-- If leaderboard performance supports B13, keep the model frozen and prioritize reproducibility/final inference packaging.
-- If leaderboard performance is unexpectedly weak, inspect technical/data-domain diagnostics first before opening a new model experiment.
-- Reopen B14/B15 only with a clear hypothesis grounded in an independent signal.
-- Do not use the leaderboard to create uncontrolled per-target or high-frequency tuning loops.
-
-## Experiments explicitly not planned now
-
-```text
-B12.1 purely for completeness
-blind extra B13 epochs
-B13 learning-rate sweep
-ImageNet weight/version sweep
-normalization sweep
-target-wise B7.1/B12/B13 mixtures
-B10 target-wise physical-normalization hybrids
-B11/B11.1 pseudo-label threshold variants
-series-count caps selected on gold
-pooling-head sweeps selected on gold
-ensemble-weight searches selected on gold
-```
-
-## Compact current roadmap
-
-```text
-B13 RETAINED
-     |
-     v
-FREEZE B13-v1
-     |
-     v
-KAGGLE TEST INFERENCE
-     |
-     v
-SUBMISSION / LEADERBOARD
-     |
-     +---- supported -> keep frozen / finalize
-     |
-     +---- unexpected weakness -> diagnose first
-                                  |
-                                  +-> B14/B15 only if justified
-```
-
-The purpose of this roadmap is to stop local optimization at a statistically resolved development improvement and obtain the next independent competition signal.
+The goal is a higher macro AUC through interpretable global representation changes, not uncontrolled optimization to 58 repeatedly reused cases.
