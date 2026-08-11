@@ -94,11 +94,12 @@ class HierarchicalSeriesKneeMILNet(nn.Module):
         if d % pool_heads != 0:
             raise ValueError("series_pool_heads must divide encoder feature dimension")
 
+        # Construct every parameter shared with B12 in the same order as B12 so
+        # the identical seed yields identical shared random initialization.
         self.slice_position = nn.Parameter(torch.randn(self.n_slices, d) * 0.02)
         self.plane_embedding = nn.Embedding(4, d, padding_idx=0)
         self.fluid_embedding = nn.Embedding(3, d, padding_idx=0)
         self.fat_embedding = nn.Embedding(3, d, padding_idx=0)
-        self.series_pool = LearnedSeriesPool(d, pool_heads, float(dropout))
 
         study_layer = nn.TransformerEncoderLayer(
             d_model=d,
@@ -141,6 +142,10 @@ class HierarchicalSeriesKneeMILNet(nn.Module):
         self.target_weight = nn.Parameter(torch.empty(N_TARGETS, d))
         self.target_bias = nn.Parameter(torch.zeros(N_TARGETS))
         nn.init.xavier_uniform_(self.target_weight)
+
+        # New B12.1 parameters are deliberately created only after all B12-shared
+        # parameters, preventing the added module from shifting their RNG draws.
+        self.series_pool = LearnedSeriesPool(d, pool_heads, float(dropout))
 
     def _encode_chunk(self, chunk: torch.Tensor) -> torch.Tensor:
         if self.gradient_checkpointing and self.training and torch.is_grad_enabled():
