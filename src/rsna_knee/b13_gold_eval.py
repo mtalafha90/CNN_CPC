@@ -1,4 +1,4 @@
-"""Development-only frozen gold evaluation for B13 ImageNet initialization."""
+"""Development-only frozen gold evaluation for B13 ImageNet encoder protocol."""
 from __future__ import annotations
 
 import argparse
@@ -20,6 +20,7 @@ from .b12_1_gold_eval import predict_b12_1
 from .b13_training import (
     B13_EXPERIMENT,
     B13_INITIALIZATION,
+    B13_INPUT_NORMALIZATION,
     B13_VARIANT,
     load_b13_checkpoint,
 )
@@ -53,6 +54,8 @@ def evaluate_b13_gold(
         raise ValueError("B13 gold evaluation requires 17,475 loaded series in every epoch")
     if checkpoint_payload.get("initialization") != B13_INITIALIZATION:
         raise ValueError("B13 checkpoint initialization metadata mismatch")
+    if checkpoint_payload.get("input_normalization") != B13_INPUT_NORMALIZATION:
+        raise ValueError("B13 checkpoint normalization metadata mismatch")
     if checkpoint_payload.get("external_pretrained") is not True:
         raise ValueError("B13 checkpoint does not certify ImageNet pretraining")
 
@@ -125,16 +128,17 @@ def evaluate_b13_gold(
             },
             "aggregation": "same B12.1 hierarchical learned series-token aggregation",
             "initialization": B13_INITIALIZATION,
+            "input_normalization": B13_INPUT_NORMALIZATION,
             "external_pretrained": True,
             "preprocessing": (
-                "same B12.1 MRI sampling/legacy resize with ImageNet normalization inside "
-                "the pretrained ConvNeXt encoder"
+                "same MRI sampling and legacy 224x224 resize as B12.1; ImageNet mean/std "
+                "normalization inside the pretrained encoder"
             ),
             "gold_labels_used_in_b13_gradient": False,
             "gold_labels_used_for_b13_early_stopping": False,
             "single_scientific_change_vs_b12_1": (
-                "ConvNeXt-Tiny encoder initialization changed from B5 competition-only SSL "
-                "to torchvision ImageNet-1K IMAGENET1K_V1"
+                "encoder initialization protocol changed from B5 competition-only SSL to "
+                "torchvision ImageNet-1K V1 weights with standard ImageNet normalization"
             ),
             "metadata_repair": metadata_stats,
             "interpretation": (
