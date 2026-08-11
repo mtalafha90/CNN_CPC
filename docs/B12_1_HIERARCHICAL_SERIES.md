@@ -67,6 +67,8 @@ zero gold early stopping
 
 B12.1 reuses the already frozen B12 `series_policy.json`; no new series audit or selection is allowed.
 
+All B12-shared trainable modules are constructed in the same order before the new series-pooling module is created. With the same seed, this preserves the shared random initialization and prevents the added pooling block from shifting unrelated parameter initialization.
+
 ## Install / tests
 
 ```bash
@@ -157,3 +159,69 @@ python -m rsna_knee.cli evaluate \
 ```
 
 Interpret `probability_b_better` as the probability that B12.1 is better than the first (`--oof`) model. Do not tune pooling heads, target-specific winners, series caps, or ensemble weights from the 58-study development result.
+
+## Decision after B12.1
+
+B12.1 is a decision point, not the beginning of an open-ended sequence of B12 variants.
+
+### If B12.1 is clearly worse than B12
+
+Close the architecture branch and **skip B12.2**. Move directly to B13 stronger competition-only MRI self-supervised learning. A worse B12.1 result would indicate that explicit hierarchical compression did not improve the all-series representation enough to justify another local aggregation variant.
+
+### If B12.1 is competitive with or better than B12
+
+Allow one final architecture experiment, **B12.2 pathology-conditioned series attention**. B12.2 would ask each pathology query to learn which real acquisitions are relevant rather than forcing every pathology to rely on the same generic study memory.
+
+This must remain a single global architecture. Do not derive target-specific routing rules from the per-target B12/B12.1 AUCs.
+
+## Planned experiments after the B12 branch
+
+### B13 — stronger competition-only MRI SSL
+
+B13 is the main remaining representation experiment and should be pursued regardless of whether B12.2 is run. Candidate objectives include:
+
+```text
+same-study cross-sequence contrastive learning
+masked slice/token reconstruction
+cross-plane consistency
+```
+
+The globally retained architecture from the B12 family would then be initialized from B13 rather than B5.
+
+### B14 — optional scanner/protocol robustness
+
+B14 is optional and should only be run if diagnostics indicate a remaining acquisition/domain robustness problem. Candidate perturbations include:
+
+```text
+intensity / contrast variation
+resolution / downsampling perturbation
+acquisition-quality variation
+metadata dropout
+```
+
+Do not return to target-specific tuning or B10-style fixed physical-normalization selection on the reused gold set.
+
+## Final stage
+
+After B13 and optional B14, freeze one global pipeline and create the competition submission. The leaderboard should provide the next independent performance signal.
+
+```text
+B12.1
+  |
+  |-- supported -> B12.2
+  |-- clearly worse -> skip B12.2
+  |
+  v
+B13 stronger competition-only MRI SSL
+  |
+  v
+B14 robustness [optional]
+  |
+  v
+FINAL MODEL FREEZE
+  |
+  v
+KAGGLE SUBMISSION
+```
+
+Full roadmap: [`ROADMAP_AFTER_B12_1.md`](ROADMAP_AFTER_B12_1.md).
