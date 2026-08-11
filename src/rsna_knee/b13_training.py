@@ -1,11 +1,13 @@
-"""B13 training: B12.1 hierarchical architecture with ImageNet encoder initialization.
+"""B13 training: B12.1 hierarchical architecture with an ImageNet encoder protocol.
 
-Single scientific change versus B12.1:
-    B5 competition-only encoder initialization -> torchvision ImageNet-1K ConvNeXt-Tiny.
+Single controlled intervention versus B12.1:
+    B5 competition-only encoder protocol -> torchvision ConvNeXt-Tiny
+    ImageNet-1K IMAGENET1K_V1 protocol (weights + standard ImageNet normalization).
 
 The B12 all-series surface, B6 supervision, hierarchical aggregation, optimizer,
 augmentation, four-epoch schedule, TTA policy and development evaluation contract
-remain frozen.
+remain frozen. Non-encoder trainable parameters are constructed before ImageNet
+weights are loaded so their seeded initialization follows the B12.1 path.
 """
 from __future__ import annotations
 
@@ -45,12 +47,14 @@ from .b12_1_hierarchical import b12_1_model_spec, build_b12_1_model
 from .budget import RuntimeBudget
 from .constants import TARGETS
 from .data import backfill_series_metadata, load_series_csv, load_train_csv
+from .model import ConvNeXtSliceEncoder
 from .policy import validate_competition_config
 from .runtime import autocast, make_scaler, resolve_runtime
 
 B13_VARIANT = "b13_imagenet_init_b6_hierarchical_series_token_v1"
 B13_EXPERIMENT = "B13_imagenet_encoder_init"
 B13_INITIALIZATION = "torchvision:convnext_tiny:IMAGENET1K_V1"
+B13_INPUT_NORMALIZATION = "imagenet_mean_std"
 B13_SERIES_SIGNATURE = "5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376"
 
 
@@ -61,7 +65,7 @@ def _require_close(config: dict, key: str, expected: float) -> None:
 
 
 def _require_b13_contract(config: dict) -> None:
-    """Freeze B13 as a one-variable initialization experiment versus B12.1."""
+    """Freeze B13 as the ImageNet encoder-protocol experiment versus B12.1."""
     _require_frozen_policy(config)
     if str(config.get("b13_experiment_name", B13_EXPERIMENT)) != B13_EXPERIMENT:
         raise ValueError(f"B13 experiment name must remain {B13_EXPERIMENT!r}")
@@ -129,6 +133,21 @@ def _require_b13_contract(config: dict) -> None:
         raise ValueError("B13-v1 freezes b7_eval_tta_offsets=[-1,0,1]")
 
 
+def _load_imagenet_encoder_state(model) -> None:
+    """Load ImageNet weights after shared B12.1 parameters are initialized.
+
+    Constructing the full hierarchical model first keeps the seeded non-encoder
+    parameter initialization independent of the external pretrained-weight load.
+    """
+    pretrained = ConvNeXtSliceEncoder(
+        3,
+        pretrained_weights=True,
+        normalize_input=True,
+    )
+    model.encoder.load_state_dict(pretrained.state_dict(), strict=True)
+    del pretrained
+
+
 def _checkpoint_payload(
     *,
     model,
@@ -148,6 +167,7 @@ def _checkpoint_payload(
         "experiment": B13_EXPERIMENT,
         "source": "external_imagenet",
         "initialization": B13_INITIALIZATION,
+        "input_normalization": B13_INPUT_NORMALIZATION,
         "external_pretrained": True,
         "model_state": model.state_dict(),
         "encoder": model.encoder.state_dict(),
@@ -163,8 +183,8 @@ def _checkpoint_payload(
         "b6_version": b6_audit.get("b6_version"),
         "series_policy": series_policy,
         "single_scientific_change_vs_b12_1": (
-            "ConvNeXt-Tiny slice encoder initialization changed from the B5 competition-only "
-            "SSL checkpoint to torchvision ImageNet-1K IMAGENET1K_V1 weights"
+            "encoder initialization protocol changed from B5 competition-only SSL to "
+            "torchvision ConvNeXt-Tiny ImageNet-1K V1 weights with standard ImageNet normalization"
         ),
         "supervision_policy": {
             "b6_min_confidence": B7_MIN_CONFIDENCE,
@@ -195,12 +215,11 @@ def train_b13(
     _require_b13_contract(config)
 
     seed = int(config.get("seed", 2026))
-    # Same seed/loader offsets as B12/B12.1 so initialization source is the
-    # intended independent variable.
     seed_everything(seed + 12_000_000)
     runtime = resolve_runtime(config)
     print(runtime.describe())
     print(f"[B13] initialization={B13_INITIALIZATION}")
+    print(f"[B13] input_normalization={B13_INPUT_NORMALIZATION}")
     budget = RuntimeBudget(
         max_hours=float(config.get("runtime_budget_hours", 8.5)),
         reserve_minutes=float(config.get("runtime_reserve_minutes", 10.0)),
@@ -269,10 +288,14 @@ def train_b13(
         **runtime.loader_kwargs(seed=seed + 12_100_000),
     )
 
-    # ImageNet is the only initialization source in B13. There is deliberately
-    # no B5 checkpoint argument in this trainer.
+    # Build the complete B12.1 architecture first, using the same seeded random
+    # construction path for all non-encoder parameters. Then replace only the
+    # encoder state with ImageNet weights. normalize_input=True is the standard
+    # preprocessing expected by the external pretrained encoder.
     spec = b12_1_model_spec(config, normalize_input=True)
-    model = build_b12_1_model(spec, pretrained_weights=True).to(runtime.device)
+    model = build_b12_1_model(spec, pretrained_weights=False)
+    _load_imagenet_encoder_state(model)
+    model = model.to(runtime.device)
 
     encoder_lr = float(config.get("b7_encoder_lr", 1e-5))
     head_lr = float(config.get("b7_head_lr", 1e-4))
@@ -303,18 +326,20 @@ def train_b13(
         "variant": B13_VARIANT,
         "status": "B13-v1 recipe frozen before first gold evaluation",
         "single_scientific_change_vs_b12_1": (
-            "B5 competition-only encoder initialization -> torchvision ConvNeXt-Tiny ImageNet-1K V1"
+            "B5 competition-only encoder protocol -> torchvision ConvNeXt-Tiny ImageNet-1K V1 "
+            "weights with standard ImageNet normalization"
         ),
         "student_initialization": B13_INITIALIZATION,
         "student_initialization_variant": "external_imagenet",
+        "input_normalization": B13_INPUT_NORMALIZATION,
         "external_pretrained": True,
         "b6_root": str(Path(b6_root).resolve()),
         "b6_version": b6_audit.get("b6_version"),
         "b6_policy": b6_policy,
         "series_policy": series_policy,
         "preprocessing": (
-            "historical B7.1/B12/B12.1 legacy resize plus ImageNet channel normalization "
-            "inside the pretrained ConvNeXt encoder"
+            "same MRI sampling and legacy 224x224 resize as B12.1; ImageNet mean/std normalization "
+            "is applied inside the pretrained ConvNeXt encoder"
         ),
         "gold_labels_in_training_loss": False,
         "gold_labels_for_early_stopping": False,
@@ -353,9 +378,7 @@ def train_b13(
             optimizer.zero_grad(set_to_none=True)
             with autocast(runtime):
                 logits = model(volumes, present, series_meta)
-                loss = target_balanced_weak_bce(
-                    logits, target, weight, target_multiplier_t
-                )
+                loss = target_balanced_weak_bce(logits, target, weight, target_multiplier_t)
             scaler.scale(loss).backward()
             if clip > 0:
                 scaler.unscale_(optimizer)
@@ -418,9 +441,7 @@ def train_b13(
             ),
             checkpoint_path,
         )
-        (outdir / "history.json").write_text(
-            json.dumps(history, indent=2), encoding="utf-8"
-        )
+        (outdir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
         if budget_exhausted:
             break
 
@@ -450,6 +471,8 @@ def load_b13_checkpoint(
         raise ValueError(f"not a {B13_VARIANT} checkpoint")
     if payload.get("initialization") != B13_INITIALIZATION:
         raise ValueError("B13 checkpoint does not certify the frozen ImageNet initialization")
+    if payload.get("input_normalization") != B13_INPUT_NORMALIZATION:
+        raise ValueError("B13 checkpoint does not certify the frozen ImageNet normalization")
     if payload.get("external_pretrained") is not True:
         raise ValueError("B13 checkpoint does not certify external ImageNet pretraining")
     if int(payload.get("gold_studies_used_in_gradient", -1)) != 0:
@@ -458,8 +481,6 @@ def load_b13_checkpoint(
     state = payload.get("model_state")
     if not isinstance(spec, dict) or not isinstance(state, dict):
         raise ValueError("B13 checkpoint missing model_spec/model_state")
-    # Do not redownload ImageNet weights for evaluation; instantiate the same
-    # architecture and restore the complete trained state.
     model = build_b12_1_model(spec, pretrained_weights=False)
     model.load_state_dict(state, strict=True)
     return model.to(device), payload
