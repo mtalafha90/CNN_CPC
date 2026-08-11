@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import pytest
 import torch
+import yaml
 
 from rsna_knee.b12_1_hierarchical import (
     B12_1_AGGREGATION,
@@ -84,3 +87,45 @@ def test_b12_1_contract_rejects_extra_epochs():
                 "b12_use_physical_scale": False,
             }
         )
+
+
+def test_b12_1_checked_in_config_matches_frozen_b12_controls():
+    path = Path(__file__).resolve().parents[1] / "configs" / "b12_1_hierarchical.yaml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    expected = {
+        "b12_1_experiment_name": B12_1_EXPERIMENT,
+        "b12_1_series_pool_heads": 8,
+        "b12_use_physical_scale": False,
+        "b7_n_slices": 16,
+        "b7_image_size": 224,
+        "b7_triplet_gap": 1,
+        "b7_batch_size": 2,
+        "b7_encoder_batch_size": 24,
+        "b7_gradient_checkpointing": True,
+        "b7_dropout": 0.25,
+        "b7_transformer_layers": 2,
+        "b7_transformer_heads": 8,
+        "b7_transformer_ff_mult": 2.0,
+        "b7_pathology_layers": 1,
+        "b7_epochs": 4,
+        "b7_max_batches_per_epoch": 1560,
+        "b7_encoder_lr": 0.00001,
+        "b7_head_lr": 0.0001,
+        "b7_min_lr": 0.000001,
+        "b7_weight_decay": 0.0001,
+        "b7_grad_clip": 1.0,
+        "b7_noise_std": 0.02,
+        "b7_slice_dropout": 0.08,
+        "b7_train_gap_choices": [1, 2],
+        "b7_center_jitter": 2,
+        "b7_rotation_deg": 5.0,
+        "b7_translate_frac": 0.03,
+        "b7_scale_jitter": 0.05,
+        "b7_gamma_jitter": 0.12,
+        "b7_bias_field_strength": 0.08,
+        "b7_eval_tta_offsets": [-1, 0, 1],
+        "b7_eval_batch_size": 2,
+        "b7_n_bootstrap": 5000,
+    }
+    for key, value in expected.items():
+        assert config[key] == value, f"frozen B12.1 control drifted: {key}"
