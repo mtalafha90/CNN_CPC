@@ -113,8 +113,8 @@ B12.1 introduced one learned token per real series with B5 initialization; it re
 
 B13 combined that hierarchical aggregation with the ImageNet ConvNeXt protocol and reached macro AUC `0.6293565948`, becoming the retained development champion. See [`B13_IMAGENET_INIT.md`](B13_IMAGENET_INIT.md).
 
-B14 now returns to the **B12 full `K x 16` slice-token architecture** while retaining B13's ImageNet encoder protocol. This makes B14 a controlled test of whether B13's one-token-per-series compression is discarding useful slice-level information. See [`B14_IMAGENET_FULL_TOKENS.md`](B14_IMAGENET_FULL_TOKENS.md).
+B14 returned to the B12 full `K x 16` slice-token architecture while retaining B13's ImageNet encoder protocol. It completed at macro AUC `0.6197914249`, 95% CI `[0.5706800512,0.6693542716]`. The paired B14-B13 median difference was `-0.0093726931`, 95% CI `[-0.0469823411,+0.0250137870]`, with `P(B14>B13)=0.2924`. B14 is rejected globally; B13 remains the development champion. See [`B14_IMAGENET_FULL_TOKENS.md`](B14_IMAGENET_FULL_TOKENS.md).
 
-Stronger in-domain SSL, if later justified, is now reserved for B15 rather than B14.
+The next major representation hypothesis is B15: ImageNet -> competition knee-MRI self-supervised adaptation -> B13 hierarchy.
 
 Full roadmap: [`ROADMAP_AFTER_B12_1.md`](ROADMAP_AFTER_B12_1.md).
