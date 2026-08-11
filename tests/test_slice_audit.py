@@ -1,5 +1,4 @@
-"""Tests for the label-free slice-coverage audit."""
-
+"""Tests for the exact B13 slice-exposure audit."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,12 +11,21 @@ from rsna_knee.slice_audit import (
     audit_slice_coverage,
     count_series_slices,
     format_summary,
+    sampling_exposure,
     summarise_coverage,
 )
 
 
-def _write_series(directory: Path, n: int, thickness: float = 3.0, spacing: float = 4.0):
-    """Write `n` header-only DICOM instances with real geometry."""
+def _write_series(
+    directory: Path,
+    n: int,
+    *,
+    thickness: float = 3.0,
+    spacing: float = 4.0,
+    orientation=(0, 1, 0, 0, 0, -1),
+    position_axis: int = 0,
+):
+    """Write header-valid single-frame MR DICOM instances with real geometry."""
     import pydicom
     from pydicom.dataset import Dataset, FileMetaDataset
     from pydicom.uid import ExplicitVRLittleEndian, generate_uid
@@ -34,8 +42,10 @@ def _write_series(directory: Path, n: int, thickness: float = 3.0, spacing: floa
         ds.SeriesInstanceUID = series_uid
         ds.Modality = "MR"
         ds.SliceThickness = thickness
-        ds.ImagePositionPatient = [0.0, 0.0, float(index) * spacing]
-        ds.ImageOrientationPatient = [0, 1, 0, 0, 0, -1]
+        position = [0.0, 0.0, 0.0]
+        position[position_axis] = float(index) * spacing
+        ds.ImagePositionPatient = position
+        ds.ImageOrientationPatient = list(orientation)
         ds.InstanceNumber = index + 1
         ds.Rows = ds.Columns = 4
         ds.BitsAllocated = ds.BitsStored = 16
@@ -53,11 +63,18 @@ def test_counts_slices_in_a_series(tmp_path: Path):
     assert info["n_slices"] == 37
 
 
-def test_derives_spacing_from_positions_when_tag_absent(tmp_path: Path):
-    """SpacingBetweenSlices is often missing; positions still give the answer."""
-    _write_series(tmp_path / "s", n=10, spacing=4.5)
+def test_spacing_uses_orientation_projected_position_not_ipp_z(tmp_path: Path):
+    """Sagittal-like geometry varies in X while Z can remain constant."""
+    _write_series(
+        tmp_path / "s",
+        n=10,
+        spacing=4.5,
+        orientation=(0, 1, 0, 0, 0, -1),  # normal points along X
+        position_axis=0,
+    )
     info = count_series_slices(tmp_path / "s")
     assert info["spacing"] == pytest.approx(4.5, abs=1e-6)
+    assert info["spacing_source"] == "orientation_projected_IPP"
 
 
 def test_missing_directory_is_not_an_error():
@@ -78,6 +95,7 @@ def test_multiframe_instance_counts_all_frames(tmp_path: Path):
     ds.file_meta.MediaStorageSOPInstanceUID = generate_uid()
     ds.SOPInstanceUID = ds.file_meta.MediaStorageSOPInstanceUID
     ds.NumberOfFrames = 28
+    ds.SpacingBetweenSlices = 3.5
     ds.Rows = ds.Columns = 4
     ds.BitsAllocated = ds.BitsStored = 16
     ds.HighBit = 15
@@ -87,84 +105,86 @@ def test_multiframe_instance_counts_all_frames(tmp_path: Path):
     ds.PixelData = np.zeros((28, 4, 4), dtype=np.uint16).tobytes()
     pydicom.dcmwrite(directory / "a.dcm", ds, enforce_file_format=True)
 
-    assert count_series_slices(directory)["n_slices"] == 28
+    info = count_series_slices(directory)
+    assert info["n_slices"] == 28
+    assert info["spacing"] == pytest.approx(3.5)
 
 
-# --- Summary arithmetic ----------------------------------------------------
+# --- Exact B13 sampling ----------------------------------------------------
 
 
-def _frame(counts, spacing=4.0, plane="Sagittal"):
-    return pd.DataFrame(
-        {
-            "StudyInstanceUID": [f"s{i}" for i in range(len(counts))],
-            "SeriesInstanceUID": [f"x{i}" for i in range(len(counts))],
-            "plane": [plane] * len(counts),
-            "found": [True] * len(counts),
-            "n_slices": counts,
-            "slice_thickness": [3.0] * len(counts),
-            "spacing": [spacing] * len(counts),
-        }
-    )
+def test_40_slice_series_is_fully_exposed_by_eval_tta_union():
+    """The old 16/40=40% proxy badly understated the real 2.5D TTA exposure."""
+    exposure = sampling_exposure(40)
+    assert exposure["center_positions_per_view"] == 16
+    assert exposure["triplet_references_per_view"] == 48
+    assert exposure["eval_unique_slices"] == 40
+    assert exposure["eval_fraction_seen"] == pytest.approx(1.0)
+    assert exposure["eval_max_unsampled_run_slices"] == 0
 
 
-def test_full_coverage_when_series_are_shorter_than_the_budget():
-    summary = summarise_coverage(_frame([8, 10, 12]), n_sampled=16)
-    assert summary["series_undersampled_fraction"] == 0.0
-    assert summary["fraction_of_slices_seen"]["median"] == 1.0
-    assert summary["sampling_stride_slices"]["median"] == 1.0
-    assert "NOT limiting" in format_summary(summary)
+def test_long_series_can_still_have_real_multi_slice_gaps():
+    exposure = sampling_exposure(120)
+    assert exposure["eval_fraction_seen"] < 0.70
+    assert exposure["eval_max_unsampled_run_slices"] >= 3
 
 
-def test_undersampling_is_detected_and_quantified():
-    """40-slice series sampled at 16 positions skip roughly 3 of every 5 slices."""
-    summary = summarise_coverage(_frame([40] * 10), n_sampled=16)
+def test_training_expected_exposure_accounts_for_triplets_gap_and_jitter():
+    exposure = sampling_exposure(40)
+    # One random training view sees substantially more than the 16 center slices,
+    # but unlike the evaluation TTA union it does not necessarily see everything.
+    assert exposure["train_expected_fraction_per_view"] > 0.70
+    assert exposure["train_expected_fraction_per_view"] < 1.0
+    assert exposure["train_possible_fraction"] == pytest.approx(1.0)
 
-    assert summary["series_undersampled_fraction"] == 1.0
-    assert summary["fraction_of_slices_seen"]["median"] == pytest.approx(0.4)
-    assert summary["sampling_stride_slices"]["median"] == pytest.approx(2.5)
-    assert summary["gap_between_sampled_positions_mm"]["median"] == pytest.approx(10.0)
+
+def _frame(n_frames):
+    rows = []
+    for i, n in enumerate(n_frames):
+        exposure = sampling_exposure(int(n))
+        rows.append(
+            {
+                "StudyInstanceUID": f"s{i}",
+                "SeriesInstanceUID": f"x{i}",
+                "plane": "Sagittal",
+                "found": True,
+                "n_slices": int(n),
+                "slice_thickness": 3.0,
+                "spacing": 4.0,
+                **exposure,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
-def test_severe_undersampling_flags_the_focal_lesion_risk():
-    summary = summarise_coverage(_frame([48] * 5), n_sampled=16)
+def test_summary_reports_actual_eval_exposure_not_center_fraction():
+    summary = summarise_coverage(_frame([40] * 5))
+    assert summary["eval_fraction_seen"]["median"] == pytest.approx(1.0)
+    assert summary["series_with_complete_eval_exposure_fraction"] == pytest.approx(1.0)
+    assert "not supported" in format_summary(summary)
+
+
+def test_summary_flags_material_long_series_gaps_without_target_tuning():
+    summary = summarise_coverage(_frame([120] * 5))
     text = format_summary(summary)
-    assert "focal targets" in text
-    assert "ACL" in text
+    assert summary["series_with_eval_unsampled_run_ge_3_fraction"] == pytest.approx(1.0)
+    assert "plausible global bottleneck" in text
+    assert "target-wise" in text
 
 
-def test_mild_undersampling_is_reported_as_mild():
-    summary = summarise_coverage(_frame([24] * 5), n_sampled=16)
-    assert "Mild skipping" in format_summary(summary)
+def test_unreadable_series_are_excluded_from_summary():
+    frame = _frame([40, 40])
+    missing = frame.iloc[[0]].copy()
+    missing["found"] = False
+    missing["n_slices"] = 0
+    combined = pd.concat([missing, frame.iloc[[1]]], ignore_index=True)
+    summary = summarise_coverage(combined)
+    assert summary["n_series_audited"] == 2
+    assert summary["n_series_readable"] == 1
 
 
-def test_summary_reports_per_plane_breakdown():
-    frame = pd.concat([_frame([40] * 3, plane="Sagittal"), _frame([20] * 2, plane="Axial")])
-    summary = summarise_coverage(frame, n_sampled=16)
-    assert summary["by_plane"]["Sagittal"]["median_slices"] == 40
-    assert summary["by_plane"]["Axial"]["n_series"] == 2
-
-
-def test_unreadable_series_are_excluded_not_counted_as_zero_slices():
-    """A missing series must not drag the median slice count towards zero."""
-    frame = _frame([40, 40, 40])
-    frame.loc[0, "n_slices"] = 0
-    frame.loc[0, "found"] = False
-
-    summary = summarise_coverage(frame, n_sampled=16)
-
-    assert summary["n_series_audited"] == 3
-    assert summary["n_series_readable"] == 2
-    assert summary["slices_per_series"]["median"] == 40
-
-
-def test_empty_audit_is_reported_not_crashed():
-    summary = summarise_coverage(_frame([]).astype({"n_slices": float}), n_sampled=16)
-    assert summary["n_series_readable"] == 0
-    assert "no readable series" in format_summary(summary)
-
-
-def test_end_to_end_audit_over_a_small_tree(tmp_path: Path):
-    for study, n in (("study0", 40), ("study1", 12)):
+def test_end_to_end_audit_over_small_tree(tmp_path: Path):
+    for study, n in (("study0", 40), ("study1", 120)):
         _write_series(tmp_path / "train_series" / study / "ser", n=n)
     series = pd.DataFrame(
         {
@@ -174,8 +194,13 @@ def test_end_to_end_audit_over_a_small_tree(tmp_path: Path):
         }
     )
 
-    frame, summary = audit_slice_coverage(series, tmp_path, split="train", n_sampled=16, workers=1)
-
-    assert set(frame["n_slices"]) == {40, 12}
+    frame, summary = audit_slice_coverage(
+        series,
+        tmp_path,
+        split="train",
+        workers=1,
+    )
+    assert set(frame["n_slices"]) == {40, 120}
     assert summary["n_series_readable"] == 2
-    assert summary["series_undersampled_fraction"] == pytest.approx(0.5)
+    assert summary["eval_fraction_seen"]["min"] < 1.0
+    assert summary["eval_fraction_seen"]["max"] == pytest.approx(1.0)
