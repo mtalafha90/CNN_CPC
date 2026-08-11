@@ -1,82 +1,136 @@
 # Roadmap after B12.1
 
-> **Status — 2026-08-11:** UPDATED DEVELOPMENT ROADMAP. B13 is now the standalone ImageNet encoder-protocol experiment. The previously planned stronger competition-only SSL experiment moves to B14; optional scanner/protocol robustness moves to B15.
+> **Status — 2026-08-11:** UPDATED AFTER B13 COMPLETION. B13 is the retained development champion. B12.1 is skipped for the competition path, and the immediate next stage is B13-v1 freeze plus Kaggle submission. Additional local experiments are deferred until an independent competition signal or a clear technical diagnostic justifies reopening development.
 
 ## Current reference state
 
 ```text
-B7.1 macro AUC        0.5644802945   retained benchmark
-B12 macro AUC         0.5660915179   highest point estimate
-B12 vs B7.1 paired    median +0.0023747526
-95% paired CI         [-0.0472104067,+0.0481427722]
-P(B12 > B7.1)         0.5376
-B12.1                 implemented / pending
-B13                   implemented / training ready
+B7.1 macro AUC        0.5644802945
+B12 macro AUC         0.5660915179
+B13 macro AUC         0.6293565948   new development champion
+
+B13 vs B12
+median difference      +0.0638674720
+95% paired CI          [+0.0127183837,+0.1144643292]
+P(B13 > B12)            0.9920
+
+B13 vs B7.1
+median difference      +0.0652260946
+95% paired CI          [+0.0039768779,+0.1266069220]
+P(B13 > B7.1)           0.9808
+
+B12.1                 implemented / skipped for competition path
 ```
+
+Both B13 paired confidence intervals are above zero on the repeatedly reused 58-study development surface.
 
 ## Governing rules
 
-1. The 58 fully labelled studies are a development/model-selection surface, not pristine independent validation.
+1. The 58 fully labelled studies are a **development/model-selection surface**, not pristine independent validation.
 2. Primary model selection remains global macro ROC AUC across 12 targets.
-3. Paired 5,000-replicate bootstrap comparisons remain required.
+3. Paired 5,000-replicate bootstrap comparisons remain required for interpretation.
 4. Do not construct target-specific winners from per-target AUCs.
-5. Do not tune thresholds, series caps, routing rules, pooling heads, pseudo-label rules, normalization variants or ensemble weights on the 58-study surface.
-6. Do not choose checkpoints or epoch counts from gold performance.
+5. Do not tune thresholds, series caps, routing rules, pooling heads, pseudo-label rules, ImageNet variants, normalization variants, epoch counts or ensemble weights on the 58-study surface.
+6. Do not choose checkpoints from gold performance.
 7. Experiment-specific frozen controls must remain auditable.
-8. Keep the remaining number of major development experiments small.
+8. Prefer an independent competition signal over further sequential local tuning.
 
-## Stage 1 — B12.1 hierarchical aggregation
+## Completed B13
 
-B12.1 tests:
-
-```text
-16 slice tokens / real MRI series
-        -> learned 8-head series attention pool
-        -> 1 token / real series
-K real-series tokens
-        -> study Transformer
-        -> pathology queries
-```
-
-It uses the exact frozen B12 series surface and B5 competition-only encoder initialization.
-
-## Stage 2 — B13 ImageNet encoder protocol
-
-B13 reuses the exact B12.1 hierarchy but replaces the encoder protocol:
+B13 uses the hierarchical learned series-token architecture with:
 
 ```text
-B12.1
-B5 competition-only SSL encoder
-
-B13
 torchvision ConvNeXt-Tiny IMAGENET1K_V1
 + standard ImageNet mean/std normalization
 ```
 
-B13 has separate trainer/evaluator/checkpoint identities. It keeps the same 3,120 studies, 14,123 supervised cells, 17,475-series mapping, optimizer, LR, augmentation, four epochs and TTA.
-
-The primary comparison is B13 versus B12.1 once both prediction files exist. B13 may be trained before B12.1 finishes; interpretation waits for the paired comparison.
-
-## Stage 3 — conditional B12.2
-
-B12.2 remains optional. Run it only if B12.1/B13 results still support further all-series architectural refinement.
-
-Scientific question:
+Frozen training surface:
 
 ```text
-all real MRI series
-      -> series representations
-      -> pathology-conditioned series attention
-      -> pathology queries
+training studies        3120
+supervised cells       14123
+positive cells          6871
+negative cells          7252
+real MRI series        17475
+series SHA-256
+5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376
 ```
 
-This must remain one global learned architecture, not hand-coded target-specific routing chosen from gold results.
+All four epochs completed with exact full study and series coverage. Frozen gold macro AUC is `0.6293565948`, 95% CI `[0.5789896351,0.6775867717]`.
 
-## Stage 4 — B14 stronger competition-only MRI SSL
+## B12.1 decision — skip for competition workflow
 
-The previously planned stronger in-domain representation experiment is now **B14** so B13 remains unambiguous.
+B12.1 remains implemented and reproducible, but it will not be trained solely to complete the clean causal ablation.
 
-Candidate objective family, to be frozen before evaluation:
+This means the project cannot isolate:
+
+```text
+hierarchical architecture + B5 initialization
+versus
+hierarchical architecture + ImageNet protocol
+```
+
+Therefore do not claim that ImageNet alone caused the entire B13 gain.
+
+Skipping B12.1 is an explicit tradeoff: preserving development budget and avoiding another sequential decision on the same 58 gold cases is considered more valuable for the competition than completing the ablation.
+
+## Immediate stage — freeze B13-v1
+
+Freeze:
+
+```text
+architecture
+ImageNet encoder protocol
+input normalization
+B12 all-series mapping
+B6 supervision-derived trained checkpoint
+224x224 preprocessing
+16 2.5D positions per series
+metadata embeddings
+TTA [-1,0,1]
+checkpoint runs/b13_imagenet/b13_model.pt
+```
+
+Do not retrain B13-v1 for extra epochs and do not select an alternative checkpoint from the gold set.
+
+## Next stage — Kaggle submission
+
+The next high-value task is:
+
+```text
+freeze B13-v1
+      |
+      v
+run competition test inference
+      |
+      v
+validate submission schema and probabilities
+      |
+      v
+create submission.csv
+      |
+      v
+submit to Kaggle
+      |
+      v
+use leaderboard as the next independent signal
+```
+
+The leaderboard result should be treated as more informative than another local variant on the repeatedly reused development set.
+
+## Deferred experiments
+
+### B12.2 — pathology-conditioned series attention
+
+**Deferred.** Do not run before the first B13 competition submission.
+
+If reopened later, it must remain one global learned architecture rather than target-wise routing chosen from gold results.
+
+### B14 — stronger competition-only MRI SSL
+
+**Deferred.** The previously planned stronger in-domain representation experiment remains available only if an independent competition result suggests representation quality is still limiting.
+
+Candidate family, to be frozen before any future evaluation:
 
 ```text
 same-study cross-sequence contrastive learning
@@ -84,11 +138,11 @@ masked slice/token reconstruction
 cross-plane consistency
 ```
 
-B14 remains competition-only and must use zero gold labels in SSL optimization.
+### B15 — scanner/protocol robustness
 
-## Stage 5 — B15 scanner/protocol robustness, optional
+**Deferred / optional.** Only reopen if diagnostics or independent competition evidence indicate acquisition/domain robustness is a real limitation.
 
-Only run B15 if diagnostics indicate a remaining acquisition/domain robustness problem. Candidate perturbations:
+Candidate perturbations:
 
 ```text
 intensity and contrast variation
@@ -97,51 +151,24 @@ acquisition-quality degradation
 metadata dropout
 ```
 
-Do not reintroduce target-wise B10 physical-normalization hybrids selected on gold.
+## Decision after leaderboard result
 
-## Stage 6 — final model freeze
+After the first valid B13 submission:
 
-Once the major experiment ladder is complete:
+- If leaderboard performance supports B13, keep the model frozen and prioritize reproducibility/final inference packaging.
+- If leaderboard performance is unexpectedly weak, inspect technical/data-domain diagnostics first before opening a new model experiment.
+- Reopen B14/B15 only with a clear hypothesis grounded in an independent signal.
+- Do not use the leaderboard to create uncontrolled per-target or high-frequency tuning loops.
 
-1. select one global retained model using the predeclared development metric and paired comparisons;
-2. freeze architecture;
-3. freeze preprocessing and encoder protocol;
-4. freeze series policy;
-5. freeze TTA/inference policy;
-6. freeze checkpoint-selection rule;
-7. generate competition test predictions;
-8. create the Kaggle submission.
-
-## Compact decision tree
+## Experiments explicitly not planned now
 
 ```text
-B12.1 hierarchical aggregation
-       |
-       +-----------------------------+
-       |                             |
-       v                             v
-B13 ImageNet protocol         B12.2 [conditional]
-       |                             |
-       +-------------+---------------+
-                     v
-          B14 stronger in-domain SSL
-                     |
-                     v
-          B15 robustness [optional]
-                     |
-                     v
-              FINAL MODEL FREEZE
-                     |
-                     v
-              KAGGLE SUBMISSION
-```
-
-## Experiments explicitly not planned
-
-```text
-blind extra epochs
-target-wise B7.1/B12/B12.1/B13 winner mixtures
-ImageNet-weight or normalization sweeps selected on gold
+B12.1 purely for completeness
+blind extra B13 epochs
+B13 learning-rate sweep
+ImageNet weight/version sweep
+normalization sweep
+target-wise B7.1/B12/B13 mixtures
 B10 target-wise physical-normalization hybrids
 B11/B11.1 pseudo-label threshold variants
 series-count caps selected on gold
@@ -149,4 +176,25 @@ pooling-head sweeps selected on gold
 ensemble-weight searches selected on gold
 ```
 
-The purpose of this roadmap is to finish with a small number of interpretable, globally controlled experiments and then obtain an independent competition signal.
+## Compact current roadmap
+
+```text
+B13 RETAINED
+     |
+     v
+FREEZE B13-v1
+     |
+     v
+KAGGLE TEST INFERENCE
+     |
+     v
+SUBMISSION / LEADERBOARD
+     |
+     +---- supported -> keep frozen / finalize
+     |
+     +---- unexpected weakness -> diagnose first
+                                  |
+                                  +-> B14/B15 only if justified
+```
+
+The purpose of this roadmap is to stop local optimization at a statistically resolved development improvement and obtain the next independent competition signal.
