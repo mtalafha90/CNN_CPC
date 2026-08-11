@@ -1,6 +1,6 @@
 # B13 — ImageNet encoder initialization protocol
 
-> **Status — 2026-08-11:** **COMPLETED / RETAINED / NEW DEVELOPMENT CHAMPION.** Package `0.21.0`.
+> **Status — 2026-08-11:** **COMPLETED / RETAINED / DEVELOPMENT CHAMPION.** Package `0.22.0`.
 
 ## Scientific question
 
@@ -27,8 +27,6 @@ pretrained: true
 ```
 
 ## Experiment identity
-
-B13 is a separate first-class experiment:
 
 ```text
 trainer     rsna-knee-b13
@@ -72,40 +70,13 @@ zero gold gradients
 zero gold early stopping
 ```
 
-The B13 contract rejects accidental changes to optimizer, architecture, epoch count, augmentation, series mapping, TTA or bootstrap settings.
-
-## Shared initialization control
-
-To keep non-encoder random initialization controlled, B13 constructs the complete hierarchical architecture from the frozen seed before replacing only the encoder state with torchvision ImageNet weights. This prevents pretrained-weight construction from shifting RNG draws used by the study Transformer, pathology tokens, target heads or learned series-pooling module.
-
 ## Completed training
 
-B13 completed all four frozen epochs with exact full study and series coverage:
-
 ```text
-epoch 1
-loss                0.7450505349
-epoch seconds       2529.2077
-encoder LR          8.6819805e-06
-head LR             8.5501786e-05
-
-epoch 2
-loss                0.6865059846
-epoch seconds       2658.0064
-encoder LR          5.5e-06
-head LR             5.05e-05
-
-epoch 3
-loss                0.6524747430
-epoch seconds       2903.9735
-encoder LR          2.3180195e-06
-head LR             1.5498214e-05
-
-epoch 4
-loss                0.6132239342
-epoch seconds       2135.4708
-encoder LR          1e-06
-head LR             1e-06
+epoch 1 loss  0.7450505349
+epoch 2 loss  0.6865059846
+epoch 3 loss  0.6524747430
+epoch 4 loss  0.6132239342
 ```
 
 Every epoch certified:
@@ -156,20 +127,9 @@ Contusion          0.5533063428
 Fracture           0.5888888889
 ```
 
-All 12 target AUCs are defined. Target-level results are descriptive only and are not permission to build target-wise hybrids.
-
-Outputs:
-
-```text
-runs/b13_imagenet/gold_eval/gold_predictions.csv
-runs/b13_imagenet/gold_eval/eval.json
-```
+Target-level results are descriptive only and are not permission to build target-wise hybrids.
 
 ## Paired comparison versus B12
-
-Baseline B12 macro AUC: `0.5660915179`.
-
-Aligned 5,000-replicate paired bootstrap, sign convention `B13-B12`:
 
 ```text
 median_difference      +0.0638674720
@@ -178,19 +138,7 @@ probability_b_better    0.9920
 valid replicates        5000
 ```
 
-The paired confidence interval is entirely above zero.
-
-Output:
-
-```text
-runs/b13_imagenet/gold_eval/b12_vs_b13.json
-```
-
 ## Paired comparison versus B7.1
-
-Baseline B7.1 macro AUC: `0.5644802945`.
-
-Aligned 5,000-replicate paired bootstrap, sign convention `B13-B7.1`:
 
 ```text
 median_difference      +0.0652260946
@@ -199,48 +147,33 @@ probability_b_better    0.9808
 valid replicates        5000
 ```
 
-The paired confidence interval is also entirely above zero.
+Both paired confidence intervals are entirely above zero.
 
-Output:
+## Retained decision
 
-```text
-runs/b13_imagenet/gold_eval/b71_vs_b13.json
-```
+**B13 remains the development champion.** B12.1 is still skipped, so the project does not claim that the full B13 gain is caused solely by ImageNet initialization.
 
-## Decision
+Development has now been reopened for one specific controlled hypothesis: B13's one-token-per-series compression may discard focal slice-level information.
 
-**B13 is retained as the new development champion.** It is the first model in the current ladder with paired confidence intervals entirely above zero versus both B12 and B7.1.
+## Active successor — B14
 
-For the competition path:
+B14 keeps B13's encoder protocol and every training/evaluation control but changes aggregation:
 
 ```text
-B13-v1 RETAIN
-B12.1 SKIP
-B12.2 DEFER
-no target-wise hybrids
-no ImageNet/normalization/LR/epoch sweeps on gold
-freeze B13-v1
-prepare Kaggle submission
+B13
+16 slice tokens / real series -> one learned series token
+K series tokens -> study Transformer -> pathology queries
+
+B14
+K real series x 16 slice tokens -> study Transformer -> pathology queries
 ```
 
-## Important causal limitation
+B14 uses the already tested B12 full-token architecture, not a new target-specific architecture.
 
-B12.1 was implemented but not trained/evaluated. Therefore the clean parent comparison:
+See [`B14_IMAGENET_FULL_TOKENS.md`](B14_IMAGENET_FULL_TOKENS.md).
 
-```text
-B12.1 hierarchical + B5 init
-versus
-B13 hierarchical + ImageNet protocol
-```
-
-is unavailable.
-
-Accordingly, the project does **not** claim that the full B13 gain is caused solely by ImageNet initialization. Relative to B12, B13 changes both hierarchical aggregation and encoder protocol. Relative to B7.1, additional representation differences exist.
-
-Skipping B12.1 is an explicit competition-workflow decision to preserve development budget and reduce further sequential reuse of the same 58 labelled studies.
+The primary comparison is frozen as B14 versus B13 with the aligned 5,000-replicate paired bootstrap. Do not tune slice counts, epochs, LR, normalization or B13/B14 target-wise mixtures from that result.
 
 ## Interpretation policy
 
-The 58 fully labelled studies have been reused throughout sequential development. Therefore B13's `0.6294` remains a development/model-selection estimate, not independent validation and not a leaderboard result.
-
-The next high-value signal should come from actual competition test inference/submission. Further local experiments should be reopened only if independent leaderboard evidence or a clear technical diagnostic justifies them.
+The 58 fully labelled studies have been reused throughout sequential development. B13's `0.6294` and any future B14 score are development/model-selection estimates, not independent validation and not leaderboard results.
