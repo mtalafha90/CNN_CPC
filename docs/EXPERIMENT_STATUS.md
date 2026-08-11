@@ -9,12 +9,13 @@ The 58-study surface has supported repeated sequential development decisions and
 
 ## Current headline
 
-- **Development champion:** **B13**, macro AUC `0.6293565948`, 95% CI `[0.5789896351,0.6775867717]`.
-- Versus B12: median `+0.0638674720`, 95% paired CI `[+0.0127183837,+0.1144643292]`, `P(B13>B12)=0.9920`.
-- Versus B7.1: median `+0.0652260946`, 95% paired CI `[+0.0039768779,+0.1266069220]`, `P(B13>B7.1)=0.9808`.
-- **Active experiment: B14 ImageNet full slice-token aggregation.**
-- B14 preserves B13's ImageNet encoder protocol and all training/evaluation controls but removes the learned one-token-per-series compression.
-- Primary B14 comparison is predeclared as B14 versus B13 with the same aligned 5,000-replicate bootstrap.
+- **Development champion remains B13**, macro AUC `0.6293565948`, 95% CI `[0.5789896351,0.6775867717]`.
+- **B14 is completed and rejected globally**, macro AUC `0.6197914249`, 95% CI `[0.5706800512,0.6693542716]`.
+- Raw macro difference: `B14-B13 = -0.0095651699`.
+- Paired B14-vs-B13 median difference: `-0.0093726931`, 95% CI `[-0.0469823411,+0.0250137870]`, `P(B14>B13)=0.2924`.
+- The paired CI crosses zero, so B14 and B13 are statistically unresolved on the reused 58-study surface, but B14 has the lower point estimate, lower probability of superiority, greater token-memory cost, and slower training. **Retain B13; reject B14 globally.**
+- B14 reached a substantially lower final B6 training loss (`0.5822778610`) than B13 (`0.6132239342`) without improving macro AUC, indicating that stronger fitting of the weak labels is not by itself the path to a better model.
+- Next major representation hypothesis: **B15 = ImageNet -> competition knee-MRI self-supervised adaptation -> B13 hierarchical aggregation**, with all 58 gold studies excluded from SSL optimization.
 
 ## Experiment ladder
 
@@ -39,7 +40,8 @@ The 58-study surface has supported repeated sequential development decisions and
 | **B12** | **all real MRI series + full slice-token memory + B5 init** | **`0.5660915179`** | retained / tied with B7.1 |
 | B12.1 | one learned token per series + B5 init | not run | implemented / skipped |
 | **B13** | **one learned token per series + ImageNet ConvNeXt protocol** | **`0.6293565948`** | **RETAINED / DEVELOPMENT CHAMPION** |
-| **B14** | **full `K x 16` slice-token memory + same ImageNet protocol** | pending | **IMPLEMENTED / ACTIVE** |
+| **B14** | **full `K x 16` slice-token memory + same ImageNet protocol** | **`0.6197914249`** | **COMPLETED / REJECTED GLOBALLY** |
+| **B15** | **ImageNet -> knee-MRI SSL -> B13 hierarchy** | not run | next representation hypothesis |
 
 ## Frozen B6 supervision surface
 
@@ -77,20 +79,18 @@ series SHA-256
 
 B13 uses torchvision ConvNeXt-Tiny `IMAGENET1K_V1` plus standard ImageNet mean/std normalization and hierarchical one-token-per-series aggregation.
 
-Training completed four exact full-coverage epochs:
-
-```text
-epoch 1 loss  0.7450505349
-epoch 2 loss  0.6865059846
-epoch 3 loss  0.6524747430
-epoch 4 loss  0.6132239342
-```
-
-Frozen gold result:
-
 ```text
 B13 macro AUC      0.6293565948
 95% CI            [0.5789896351,0.6775867717]
+```
+
+Training loss:
+
+```text
+epoch 1  0.7450505349
+epoch 2  0.6865059846
+epoch 3  0.6524747430
+epoch 4  0.6132239342
 ```
 
 Per-target B13 AUCs, descriptive only:
@@ -110,96 +110,102 @@ Contusion          0.5533063428
 Fracture           0.5888888889
 ```
 
-No target-specific model mixing is permitted from these values.
+## B14 completed result
 
-## B14 — active controlled experiment
+B14 preserved B13's ImageNet protocol but removed one-token-per-series compression and retained every `K x 16` slice token through the study Transformer.
 
-### Scientific question
+### Training integrity
 
-Does B13's generic one-token-per-series compression discard useful focal slice-level pathology information?
-
-```text
-B13
-16 slice tokens / real series -> 1 learned series token
-K series tokens -> study Transformer -> pathology queries
-
-B14
-K real series x 16 slice tokens -> study Transformer -> pathology queries
-```
-
-The B14 architecture is the already-tested B12 full-token model combined with the B13 ImageNet encoder protocol.
-
-### Frozen B14 controls versus B13
+All four epochs completed the frozen full-coverage contract:
 
 ```text
-same ImageNet ConvNeXt-Tiny IMAGENET1K_V1
-same ImageNet mean/std normalization
-same 3120 studies
-same 14123 cells: 6871 positive / 7252 negative
-same 17475-series mapping and SHA-256
-same 16 sampled positions / series
-same 224x224 resize
-same plane/fluid/fat metadata embeddings
-same batch size 2
-same seed / DataLoader seed offsets
-same encoder LR 1e-5
-same head LR 1e-4
-same weight decay
-same augmentation
-same 4 epochs
-same TTA [-1,0,1]
-same 5000 bootstrap replicates
-zero gold gradients / zero gold early stopping
+epoch 1 loss  0.7346330162
+epoch 2 loss  0.6606430862
+epoch 3 loss  0.6074723502
+epoch 4 loss  0.5822778610
+
+batches                         1560 each epoch
+study_draws                     3120 each epoch
+active_supervision_cells_seen  14123 each epoch
+positive_cells_seen             6871 each epoch
+negative_cells_seen             7252 each epoch
+series_instances_seen          17475 each epoch
+max_series_in_any_batch           14
+full_coverage                   true
+full_series_coverage            true
+budget_limited                  false
 ```
 
-Single change:
+### Frozen gold result
 
 ```text
-B13 learned one-token-per-series compression
-    -> removed
-B14 retains all K x 16 slice tokens in study memory
+B14 macro AUC      0.6197914249
+95% CI            [0.5706800512,0.6693542716]
+n                  58
+bootstrap          5000/5000 usable
 ```
 
-### Commands
+Per-target B14 AUCs, descriptive only:
 
-```bash
-export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
-
-rsna-knee-b14 \
-  --config configs/b14_imagenet_full_tokens.yaml \
-  --data-root "$DATA_ROOT" \
-  --b6-root runs/b6_report_labels_v121 \
-  --series-policy runs/b12_variable_series/audit/series_policy.json \
-  --out-root runs/b14_imagenet_full_tokens
+```text
+ACL                0.5122549020
+MCL                0.4693877551
+Medial Meniscus    0.6454326923
+Lateral Meniscus   0.6881987578
+Medial OA          0.5116279070
+Lateral OA         0.5783365571
+PF OA              0.5997425997
+Effusion           0.8347826087
+Synovitis          0.7419354839
+Baker's            0.6884057971
+Contusion          0.5465587045
+Fracture           0.6208333333
 ```
 
-After four complete epochs:
+### Paired B14 versus B13
 
-```bash
-rsna-knee-b14-eval \
-  --config configs/b14_imagenet_full_tokens.yaml \
-  --data-root "$DATA_ROOT" \
-  --checkpoint runs/b14_imagenet_full_tokens/b14_model.pt \
-  --out-root runs/b14_imagenet_full_tokens/gold_eval
+```text
+raw macro delta         -0.0095651699
+median_difference       -0.0093726931
+95% paired CI           [-0.0469823411,+0.0250137870]
+probability_b_better     0.2924
+valid replicates         5000
 ```
 
-Primary paired comparison:
+The paired CI crosses zero. Therefore do not claim B14 is statistically worse in a strict hypothesis-testing sense. The model-selection decision is nevertheless to retain B13 because B14 has a lower global point estimate, low bootstrap probability of superiority, higher computational cost, and no global performance advantage.
 
-```bash
-python -m rsna_knee.cli evaluate \
-  --train-csv "$DATA_ROOT/train.csv" \
-  --oof runs/b13_imagenet/gold_eval/gold_predictions.csv \
-  --compare-oof runs/b14_imagenet_full_tokens/gold_eval/gold_predictions.csv \
-  --n-bootstrap 5000 \
-  --out runs/b14_imagenet_full_tokens/gold_eval/b13_vs_b14.json
+### Descriptive target deltas B14-B13
+
+```text
+ACL               +0.0379901961
+MCL               -0.0861678005
+Medial Meniscus   +0.0360576923
+Lateral Meniscus  +0.0086956522
+Medial OA         -0.1162790698
+Lateral OA        -0.0406189555
+PF OA             -0.0180180180
+Effusion          +0.0670807453
+Synovitis         +0.0310633214
+Baker's           -0.0597826087
+Contusion         -0.0067476383
+Fracture          +0.0319444444
 ```
 
-## B14 decision rule
+These target-level differences must not be used to create target-specific B13/B14 hybrids.
 
-- If B14 is clearly better globally, retain B14.
-- If statistically tied, do not build target-wise hybrids; treat both as viable and prioritize an independent Kaggle signal.
-- If clearly worse, reject B14 and retain B13.
+## Current decision / next stage
 
-Do not tune slice count, epochs, learning rates, target-specific winners, thresholds or ensemble weights from the B14 gold result.
+```text
+B13 RETAIN / development champion
+B14 REJECT globally
+no B14 epoch extension
+no B13/B14 target-wise hybrid
+no ensemble-weight search on gold
+
+next major hypothesis:
+B15 = ImageNet -> competition knee-MRI SSL -> B13 hierarchy
+```
+
+For B15, the 58 gold studies must be excluded from SSL optimization. Gold labels remain forbidden from gradients, early stopping and checkpoint selection.
 
 Actual hidden-test / leaderboard performance remains unknown until a real competition submission is evaluated.
