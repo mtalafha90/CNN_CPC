@@ -50,6 +50,8 @@ def _require_b12_1_contract(config: dict) -> None:
     _require_frozen_policy(config)
     if str(config.get("b12_1_experiment_name", B12_1_EXPERIMENT)) != B12_1_EXPERIMENT:
         raise ValueError(f"B12.1 experiment name must remain {B12_1_EXPERIMENT!r}")
+    if bool(config.get("allow_external_pretrained", False)) or bool(config.get("pretrained", False)):
+        raise ValueError("B12.1 is frozen to the competition-only B5 encoder; use B13 for ImageNet")
     if int(config.get("b7_epochs", 4)) != 4:
         raise ValueError("B12.1 requires exactly four epochs")
     if int(config.get("b7_batch_size", 2)) != 2:
@@ -88,10 +90,9 @@ def _checkpoint_payload(
         "gold_studies_used_in_gradient": 0,
         "gold_studies_used_for_early_stopping": 0,
         "b6_gold_audit_informed_global_policy": True,
-        # None under ImageNet initialisation, where there is no B5 checkpoint.
-        "b5_checkpoint": None if b5_checkpoint is None else str(Path(b5_checkpoint).resolve()),
+        "b5_checkpoint": str(Path(b5_checkpoint).resolve()),
         "b5_variant": b5_payload.get("variant"),
-        "external_pretrained": bool(config.get("pretrained", False)),
+        "external_pretrained": False,
         "b6_root": str(Path(b6_root).resolve()),
         "b6_version": b6_audit.get("b6_version"),
         "series_policy": series_policy,
@@ -120,7 +121,7 @@ def _checkpoint_payload(
 def train_b12_1(
     config: dict,
     *,
-    b5_checkpoint: str | Path | None,
+    b5_checkpoint: str | Path,
     b6_root: str | Path,
     series_policy_path: str | Path,
     out_root: str | Path = "runs/b12_1_hierarchical",
@@ -128,7 +129,6 @@ def train_b12_1(
     validate_competition_config(config, purpose="train")
     _require_b12_1_contract(config)
     seed = int(config.get("seed", 2026))
-    # Intentionally identical to B12 for controlled batch/augmentation ordering.
     seed_everything(seed + 12_000_000)
     runtime = resolve_runtime(config)
     print(runtime.describe())
@@ -192,38 +192,14 @@ def train_b12_1(
         shuffle=True,
         drop_last=False,
         collate_fn=collate_variable_series,
-        # Intentionally identical to B12 for controlled batch order.
         **runtime.loader_kwargs(seed=seed + 12_100_000),
     )
 
-    # Encoder initialisation is the independent variable of B13. Exactly one of
-    # the two sources is used: competition-only SSL (B5) or ImageNet.
-    use_imagenet = bool(config.get("pretrained", False))
-    if use_imagenet:
-        if not bool(config.get("allow_external_pretrained", False)):
-            raise ValueError(
-                "pretrained=true requires allow_external_pretrained=true; external "
-                "pretrained weights must be declared explicitly"
-            )
-        # ImageNet weights expect ImageNet channel statistics, which the encoder
-        # applies itself when normalize_input is set.
-        normalize_input = True
-        spec = b12_1_model_spec(config, normalize_input=normalize_input)
-        model = build_b12_1_model(spec, pretrained_weights=True).to(runtime.device)
-        b5_path = None
-        b5_payload = {}
-        initialization = "imagenet:convnext_tiny:IMAGENET1K_V1"
-        initialization_variant = "external_imagenet"
-    else:
-        if b5_checkpoint is None:
-            raise ValueError("competition-only initialisation requires --b5-checkpoint")
-        b5_path = Path(b5_checkpoint)
-        b5_payload = load_b5_encoder_payload(b5_path)
-        normalize_input = bool(b5_payload.get("config", {}).get("normalize_input", False))
-        spec = b12_1_model_spec(config, normalize_input=normalize_input)
-        model = build_b12_1_model(spec, encoder_state=b5_payload["encoder"]).to(runtime.device)
-        initialization = str(b5_path.resolve())
-        initialization_variant = b5_payload.get("variant")
+    b5_path = Path(b5_checkpoint)
+    b5_payload = load_b5_encoder_payload(b5_path)
+    normalize_input = bool(b5_payload.get("config", {}).get("normalize_input", False))
+    spec = b12_1_model_spec(config, normalize_input=normalize_input)
+    model = build_b12_1_model(spec, encoder_state=b5_payload["encoder"]).to(runtime.device)
 
     encoder_lr = float(config.get("b7_encoder_lr", 1e-5))
     head_lr = float(config.get("b7_head_lr", 1e-4))
@@ -257,9 +233,9 @@ def train_b12_1(
             "learned per-series attention compression: 16 slice tokens -> 1 series token "
             "before the unchanged study Transformer"
         ),
-        "student_initialization": initialization,
-        "student_initialization_variant": initialization_variant,
-        "external_pretrained": use_imagenet,
+        "student_initialization": str(b5_path.resolve()),
+        "student_initialization_variant": b5_payload.get("variant"),
+        "external_pretrained": False,
         "b6_root": str(Path(b6_root).resolve()),
         "b6_version": b6_audit.get("b6_version"),
         "b6_policy": b6_policy,
@@ -376,7 +352,9 @@ def train_b12_1(
             break
 
     if len(history) != 4 or not all(
-        bool(row.get("full_coverage")) and bool(row.get("full_series_coverage"))
+        bool(row.get("full_coverage"))
+        and bool(row.get("full_series_coverage"))
+        and not bool(row.get("budget_limited"))
         for row in history
     ):
         print(
@@ -397,13 +375,15 @@ def load_b12_1_checkpoint(
     payload = torch.load(path, map_location="cpu", weights_only=False)
     if not isinstance(payload, dict) or payload.get("variant") != B12_1_VARIANT:
         raise ValueError(f"not a {B12_1_VARIANT} checkpoint")
+    if payload.get("external_pretrained") not in (False, None):
+        raise ValueError("B12.1 checkpoint unexpectedly declares external pretraining")
     if int(payload.get("gold_studies_used_in_gradient", -1)) != 0:
         raise ValueError("B12.1 checkpoint does not certify zero gold-gradient studies")
     spec = payload.get("model_spec")
     state = payload.get("model_state")
     if not isinstance(spec, dict) or not isinstance(state, dict):
         raise ValueError("B12.1 checkpoint missing model_spec/model_state")
-    model = build_b12_1_model(spec)
+    model = build_b12_1_model(spec, pretrained_weights=False)
     model.load_state_dict(state, strict=True)
     return model.to(device), payload
 
@@ -412,9 +392,7 @@ def main() -> None:
     parser = argparse.ArgumentParser("rsna-knee-b12-1")
     parser.add_argument("--config", required=True)
     parser.add_argument("--data-root", default=None)
-    # Not required under ImageNet initialisation (config pretrained: true),
-    # which replaces the B5 competition-only SSL encoder entirely.
-    parser.add_argument("--b5-checkpoint", default=None)
+    parser.add_argument("--b5-checkpoint", required=True)
     parser.add_argument("--b6-root", required=True)
     parser.add_argument("--series-policy", required=True)
     parser.add_argument("--out-root", default="runs/b12_1_hierarchical")
