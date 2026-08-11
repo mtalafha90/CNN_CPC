@@ -1,0 +1,97 @@
+# B13 ImageNet encoder initialization.
+#
+# Single scientific change vs B12.1: the ConvNeXt-Tiny slice encoder starts from
+# ImageNet-1k weights instead of the B5 competition-only SSL checkpoint.
+# Everything else — B12 all-series policy, B6 v1.2.1 supervision, preprocessing,
+# optimizer, augmentation, four-epoch schedule, TTA and bootstrap — is copied
+# unchanged from configs/b12_1_hierarchical.yaml.
+#
+# Rationale. The B0-B12.1 ladder spans 0.4763 to 0.5661 while a single 95% CI
+# spans ~0.115, so no architecture change has been resolvable. The B5 encoder
+# that every one of those experiments builds on was trained for 8,000 SSL steps
+# at batch size 3 (~5.5 corpus passes), which is far below the scale contrastive
+# SSL needs. This experiment tests whether encoder initialization, not
+# architecture, is the binding constraint.
+#
+# Note on the learning rate: b7_encoder_lr = 1e-5 is retained deliberately. It
+# was arguably too low for a weakly-initialized encoder, but it is the standard
+# rate for fine-tuning a well-pretrained backbone, so keeping it makes this a
+# genuine one-variable experiment. Do not also change it here.
+#
+# External-weights declaration: this config uses ImageNet-1k weights and is
+# therefore NOT on the competition-data-only path. See docs/competition_policy.md.
+
+data_root: /data/rsna-knee-abnormality-detection
+train_csv: train.csv
+train_series_csv: train_series.csv
+
+seed: 2026
+competition_mode: true
+requested_gpus: 1
+
+# --- The single scientific change ---------------------------------------
+allow_external_pretrained: true
+pretrained: true
+
+device: auto
+precision: auto
+runtime_budget_hours: 8.5
+runtime_reserve_minutes: 10
+
+b12_1_experiment_name: B13_imagenet_encoder_init
+b12_use_physical_scale: false
+b12_1_series_pool_heads: 8
+
+# Loader/runtime: unchanged from B12.1.
+num_workers: null
+persistent_workers: true
+prefetch_factor: 2
+multiprocessing_context: spawn
+series_cache_mb_per_worker: 256
+strict_dicom: false
+strict_dicom_inference: true
+
+# Image/model settings: unchanged from B12.1.
+b7_n_slices: 16
+b7_image_size: 224
+b7_triplet_gap: 1
+b7_batch_size: 2
+b7_encoder_batch_size: 24
+b7_gradient_checkpointing: true
+b7_dropout: 0.25
+b7_transformer_layers: 2
+b7_transformer_heads: 8
+b7_transformer_ff_mult: 2.0
+b7_pathology_layers: 1
+
+# Optimization: unchanged from B12.1.
+b7_epochs: 4
+b7_max_batches_per_epoch: 1560
+b7_encoder_lr: 0.00001
+b7_head_lr: 0.0001
+b7_min_lr: 0.000001
+b7_weight_decay: 0.0001
+b7_grad_clip: 1.0
+
+# Frozen B6 v1.2.1 policy: unchanged.
+b7_min_confidence: 0.75
+b7_positive_target: 0.85
+b7_negative_target: 0.05
+b7_positive_weight: 0.50
+b7_negative_weight: 1.00
+
+# MRI augmentation: unchanged from B12.1.
+b7_noise_std: 0.02
+b7_slice_dropout: 0.08
+b7_train_gap_choices: [1, 2]
+b7_center_jitter: 2
+b7_rotation_deg: 5.0
+b7_translate_frac: 0.03
+b7_scale_jitter: 0.05
+b7_gamma_jitter: 0.12
+b7_bias_field_strength: 0.08
+
+# Frozen gold evaluation: unchanged.
+b7_eval_tta_offsets: [-1, 0, 1]
+b7_eval_batch_size: 2
+b7_n_bootstrap: 5000

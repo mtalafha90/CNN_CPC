@@ -88,8 +88,10 @@ def _checkpoint_payload(
         "gold_studies_used_in_gradient": 0,
         "gold_studies_used_for_early_stopping": 0,
         "b6_gold_audit_informed_global_policy": True,
-        "b5_checkpoint": str(Path(b5_checkpoint).resolve()),
+        # None under ImageNet initialisation, where there is no B5 checkpoint.
+        "b5_checkpoint": None if b5_checkpoint is None else str(Path(b5_checkpoint).resolve()),
         "b5_variant": b5_payload.get("variant"),
+        "external_pretrained": bool(config.get("pretrained", False)),
         "b6_root": str(Path(b6_root).resolve()),
         "b6_version": b6_audit.get("b6_version"),
         "series_policy": series_policy,
@@ -118,7 +120,7 @@ def _checkpoint_payload(
 def train_b12_1(
     config: dict,
     *,
-    b5_checkpoint: str | Path,
+    b5_checkpoint: str | Path | None,
     b6_root: str | Path,
     series_policy_path: str | Path,
     out_root: str | Path = "runs/b12_1_hierarchical",
@@ -194,11 +196,34 @@ def train_b12_1(
         **runtime.loader_kwargs(seed=seed + 12_100_000),
     )
 
-    b5_path = Path(b5_checkpoint)
-    b5_payload = load_b5_encoder_payload(b5_path)
-    normalize_input = bool(b5_payload.get("config", {}).get("normalize_input", False))
-    spec = b12_1_model_spec(config, normalize_input=normalize_input)
-    model = build_b12_1_model(spec, encoder_state=b5_payload["encoder"]).to(runtime.device)
+    # Encoder initialisation is the independent variable of B13. Exactly one of
+    # the two sources is used: competition-only SSL (B5) or ImageNet.
+    use_imagenet = bool(config.get("pretrained", False))
+    if use_imagenet:
+        if not bool(config.get("allow_external_pretrained", False)):
+            raise ValueError(
+                "pretrained=true requires allow_external_pretrained=true; external "
+                "pretrained weights must be declared explicitly"
+            )
+        # ImageNet weights expect ImageNet channel statistics, which the encoder
+        # applies itself when normalize_input is set.
+        normalize_input = True
+        spec = b12_1_model_spec(config, normalize_input=normalize_input)
+        model = build_b12_1_model(spec, pretrained_weights=True).to(runtime.device)
+        b5_path = None
+        b5_payload = {}
+        initialization = "imagenet:convnext_tiny:IMAGENET1K_V1"
+        initialization_variant = "external_imagenet"
+    else:
+        if b5_checkpoint is None:
+            raise ValueError("competition-only initialisation requires --b5-checkpoint")
+        b5_path = Path(b5_checkpoint)
+        b5_payload = load_b5_encoder_payload(b5_path)
+        normalize_input = bool(b5_payload.get("config", {}).get("normalize_input", False))
+        spec = b12_1_model_spec(config, normalize_input=normalize_input)
+        model = build_b12_1_model(spec, encoder_state=b5_payload["encoder"]).to(runtime.device)
+        initialization = str(b5_path.resolve())
+        initialization_variant = b5_payload.get("variant")
 
     encoder_lr = float(config.get("b7_encoder_lr", 1e-5))
     head_lr = float(config.get("b7_head_lr", 1e-4))
@@ -232,8 +257,9 @@ def train_b12_1(
             "learned per-series attention compression: 16 slice tokens -> 1 series token "
             "before the unchanged study Transformer"
         ),
-        "student_initialization": str(b5_path.resolve()),
-        "student_initialization_variant": b5_payload.get("variant"),
+        "student_initialization": initialization,
+        "student_initialization_variant": initialization_variant,
+        "external_pretrained": use_imagenet,
         "b6_root": str(Path(b6_root).resolve()),
         "b6_version": b6_audit.get("b6_version"),
         "b6_policy": b6_policy,
@@ -386,7 +412,9 @@ def main() -> None:
     parser = argparse.ArgumentParser("rsna-knee-b12-1")
     parser.add_argument("--config", required=True)
     parser.add_argument("--data-root", default=None)
-    parser.add_argument("--b5-checkpoint", required=True)
+    # Not required under ImageNet initialisation (config pretrained: true),
+    # which replaces the B5 competition-only SSL encoder entirely.
+    parser.add_argument("--b5-checkpoint", default=None)
     parser.add_argument("--b6-root", required=True)
     parser.add_argument("--series-policy", required=True)
     parser.add_argument("--out-root", default="runs/b12_1_hierarchical")

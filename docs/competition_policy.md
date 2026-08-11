@@ -25,6 +25,21 @@ Additional defaults:
 
 ## External-pretraining policy
 
+> **Update — 2026-08-11.** ImageNet-pretrained weights are **permitted**, on the
+> repository owner's reading of the competition rules. The rules text is not
+> stored in this repository and was not independently verified by the code
+> author, so this is recorded as an owner decision rather than a checked fact.
+> To revert, delete `configs/b13_imagenet_init.yaml`; nothing on the
+> competition-data-only path depends on it.
+>
+> The conservative defaults above are unchanged, so every existing experiment
+> (B0-B12.1) stays competition-data-only and reproducible. External weights are
+> opt-in per config and require **both** `allow_external_pretrained: true` and
+> `pretrained: true`; setting only the latter raises rather than quietly loading
+> external weights.
+>
+> First experiment on this path: **B13**, see `docs/B13_IMAGENET_INIT.md`.
+
 The conservative path uses only competition data:
 
 - strong SSL: competition MRI only;

@@ -281,15 +281,29 @@ def build_b12_1_model(
     spec: dict,
     *,
     encoder_state: dict | None = None,
+    pretrained_weights: bool = False,
 ) -> HierarchicalSeriesKneeMILNet:
+    """Build the B12.1 model.
+
+    The encoder is initialised from exactly one source. ``encoder_state``
+    carries competition-only SSL weights (the B5 path); ``pretrained_weights``
+    starts from ImageNet instead. Passing both is rejected rather than silently
+    letting one overwrite the other, because the initialisation is the whole
+    independent variable of the B13 experiment.
+    """
     if spec.get("architecture") != B12_1_ARCHITECTURE:
         raise ValueError("not a B12.1 hierarchical series-token model spec")
     if spec.get("aggregation") != B12_1_AGGREGATION:
         raise ValueError("B12.1 aggregation policy mismatch")
+    if encoder_state is not None and pretrained_weights:
+        raise ValueError(
+            "encoder_state and pretrained_weights are mutually exclusive: choose "
+            "either competition-only SSL init or ImageNet init"
+        )
     model = HierarchicalSeriesKneeMILNet(
         int(spec["n_slices"]),
         in_channels=int(spec.get("in_channels", 3)),
-        pretrained_weights=False,
+        pretrained_weights=bool(pretrained_weights),
         normalize_input=bool(spec["normalize_input"]),
         dropout=float(spec["dropout"]),
         encoder_batch_size=int(spec["encoder_batch_size"]),
