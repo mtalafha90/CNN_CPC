@@ -1,118 +1,225 @@
-# B13 — ImageNet encoder initialization
+# B13 — ImageNet encoder initialization protocol
 
-> **Status:** predeclared, implemented, training ready. Not yet evaluated.
+> **Status — 2026-08-11:** IMPLEMENTED / PREDECLARED / TRAINING READY. Package `0.21.0`.
 
-## Single scientific change
+## Scientific question
 
-The ConvNeXt-Tiny slice encoder starts from **ImageNet-1k weights** instead of
-the **B5 competition-only SSL checkpoint**. Everything else is copied unchanged
-from B12.1.
+Does replacing the B5 competition-only encoder protocol with a standard publicly
+available ImageNet-pretrained ConvNeXt-Tiny encoder improve the frozen B12.1
+hierarchical all-series model?
 
-## Why this experiment
-
-The ladder so far spans a range narrower than its own measurement noise:
-
-```text
-B0  random init         0.4763
-B12 best point estimate 0.5661   95% CI [0.5095, 0.6244]
-ladder span             0.090
-single-measurement CI   0.115
-```
-
-Architecture changes (B8 spatial tokens, B9 routing, B12 all-series, B12.1
-hierarchical pooling) have all been unresolvable against that noise. A common
-cause would explain this better than four independent null results.
-
-Every one of those experiments builds on the same B5 encoder, and that encoder
-was trained at a scale far below what self-supervised learning needs:
+B13 keeps the B12.1 architecture and training surface fixed and changes the
+encoder initialization protocol:
 
 ```text
-SSL schedule    8 epochs x 1000 batches x batch_size 3
-                = 24,000 samples = 8,000 optimizer steps
-                ~ 5.5 passes over the 4,349-study corpus
+B12.1
+ConvNeXt-Tiny encoder <- B5 competition-only SSL checkpoint
+input normalization   <- B5 checkpoint policy
+
+B13
+ConvNeXt-Tiny encoder <- torchvision IMAGENET1K_V1 weights
+input normalization   <- standard ImageNet mean/std
 ```
 
-Two problems compound here. Contrastive objectives learn from in-batch
-negatives, and at `batch_size 3` each anchor sees roughly four of them;
-published contrastive setups use 256-4096 and degrade sharply below ~256. And
-8,000 steps is orders of magnitude short of the hundreds of epochs such methods
-normally require. The encoder that all downstream experiments sit on is
-therefore likely to be weak, and rearranging the layers above a weak encoder
-would not be expected to help.
+The ImageNet weights and their expected normalization are treated as one coherent
+encoder-initialization protocol. The repository does **not** describe this as a
+literal weight-only change because standard ImageNet normalization differs from
+the historical competition-only B5 path.
 
-B13 tests that hypothesis directly by substituting an encoder that is known to
-have learned general visual features.
+## Competition-rule status
 
-## Deliberately unchanged: the encoder learning rate
+The competition rules supplied by the repository owner were checked before this
+experiment was finalized. Their External Data and Tools section permits external
+data and models when they are publicly/equally accessible or otherwise satisfy
+the competition reasonableness standard, unless specifically prohibited by the
+Host. No competition-specific prohibition on publicly available pretrained models
+was present in the supplied rules.
 
-`b7_encoder_lr` stays at `1e-5`.
+The conservative default remains `pretrained: false`; B13 opts in explicitly with:
 
-That rate was arguably far too low for a weakly initialized encoder, and
-raising it is a reasonable separate experiment. But `1e-5` is the standard rate
-for fine-tuning a well-pretrained backbone, so leaving it alone is what keeps
-B13 a genuine one-variable comparison. Changing initialization *and* schedule
-together would leave the result uninterpretable.
-
-A regression test (`tests/test_b13_imagenet_init.py`) pins this: the B13 config
-may differ from B12.1 only in the initialization keys and the experiment name.
-
-## Implementation contract
-
-`build_b12_1_model` previously hardcoded `pretrained_weights=False`, so setting
-the config flag alone would have produced a B12.1 model while reporting itself
-as B13 — a null result that looks real. The flag is now plumbed through, and
-the two initialization sources are mutually exclusive:
-
-```python
-build_b12_1_model(spec, encoder_state=b5_encoder)      # competition-only SSL
-build_b12_1_model(spec, pretrained_weights=True)       # ImageNet
-build_b12_1_model(spec, encoder_state=..., pretrained_weights=True)  # ValueError
+```yaml
+allow_external_pretrained: true
+pretrained: true
 ```
 
-External weights additionally require `allow_external_pretrained: true`;
-`pretrained: true` alone raises, so external weights can never load by accident.
+## Clean experiment separation
 
-## Running it
+B12.1 and B13 have separate trainers, evaluators, variants and CLI commands:
 
-ImageNet weights are downloaded by torchvision on first use, so the machine
-needs internet **once**. They are cached in `~/.cache/torch/hub/checkpoints/`.
-For an offline or no-internet notebook environment, copy that cached file
-across and set `TORCH_HOME` to its parent.
+```text
+B12.1 trainer   rsna-knee-b12-1
+B12.1 evaluator rsna-knee-b12-1-eval
+B12.1 checkpoint runs/b12_1_hierarchical/b12_1_model.pt
+
+B13 trainer     rsna-knee-b13
+B13 evaluator   rsna-knee-b13-eval
+B13 checkpoint  runs/b13_imagenet/b13_model.pt
+```
+
+`b12_1_training.py` is competition-only again and requires the B5 checkpoint.
+B13 has no B5 checkpoint argument at all.
+
+## Frozen controls versus B12.1
+
+```text
+same hierarchical learned series-token architecture
+same frozen B12 all-series mapping
+same 17,475 eligible training MRI series
+same mapping SHA-256:
+5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376
+same 3,120 active studies
+same 14,123 B6 supervised cells
+same 6,871 positive / 7,252 negative cells
+same B6 v1.2.1 target/weight policy
+same 16 sampled 2.5D positions per series
+same 224x224 MRI resize
+same plane/fluid/fat metadata embeddings
+same 8-head learned per-series attention pooling
+same 2-layer study Transformer
+same pathology-query heads
+same batch size 2
+same seed and DataLoader seed offsets
+same optimizer
+same encoder LR 1e-5
+same head LR 1e-4
+same augmentation
+same four full epochs
+same TTA [-1,0,1]
+same 5,000 bootstrap replicates
+zero gold gradients
+zero gold early stopping
+```
+
+B13's contract code rejects changes to the optimizer, architecture, epoch count,
+augmentation, series mapping, TTA or bootstrap settings.
+
+## Shared initialization control
+
+To keep non-encoder random initialization controlled, B13 first constructs the
+complete B12.1 architecture from the same seed using a non-pretrained encoder.
+Only after all shared trainable parameters exist does it load the torchvision
+ImageNet state into `model.encoder`.
+
+This prevents the external pretrained-weight construction from shifting the RNG
+draws used for the study Transformer, pathology tokens, target heads or learned
+series-pooling module.
+
+## Install and test
 
 ```bash
-python -m rsna_knee.b12_1_training \
+cd /media/talafha/Disk_1/CNN_CPC
+git pull --ff-only origin main
+conda activate rsna-knee
+python -m pip install -e .
+python -c "import rsna_knee; print(rsna_knee.__version__)"
+```
+
+Expected:
+
+```text
+0.21.0
+```
+
+Run the focused regression tests:
+
+```bash
+python -m compileall -q src tests
+pytest -q \
+  tests/test_b12_1_hierarchical.py \
+  tests/test_b13_imagenet_init.py
+```
+
+The ImageNet-specific test may download the torchvision weights on first use.
+The normal torchvision cache is typically under:
+
+```text
+~/.cache/torch/hub/checkpoints/
+```
+
+## Train B13
+
+Internet is needed only if the ImageNet checkpoint is not already cached.
+
+```bash
+export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
+
+rsna-knee-b13 \
   --config configs/b13_imagenet_init.yaml \
-  --data-root /path/to/rsna-knee-abnormality-detection \
-  --b6-root runs/b6 \
-  --series-policy runs/b12/series_policy.json \
+  --data-root "$DATA_ROOT" \
+  --b6-root runs/b6_report_labels_v121 \
+  --series-policy runs/b12_variable_series/audit/series_policy.json \
   --out-root runs/b13_imagenet
 ```
 
-`--b5-checkpoint` is **not** passed: under `pretrained: true` the B5 encoder is
-replaced entirely, and supplying both is rejected.
+There is deliberately **no `--b5-checkpoint` argument**.
 
-Then evaluate exactly as B12.1 does, and compare paired against the retained
-benchmark rather than reading the point estimate alone:
+Every complete epoch must report:
 
-```bash
-rsna-knee evaluate \
-  --train-csv /path/to/train.csv \
-  --oof runs/b13_imagenet/oof.csv \
-  --compare-oof runs/b12_1_hierarchical/oof.csv \
-  --n-bootstrap 5000
+```text
+batches                         1560
+study_draws                     3120
+active_supervision_cells_seen  14123
+positive_cells_seen             6871
+negative_cells_seen             7252
+series_instances_seen          17475
+expected_series_instances      17475
+max_series_in_any_batch           14
+full_coverage                   true
+full_series_coverage            true
+budget_limited                  false
 ```
 
-## Interpreting the result
+Do not run gold evaluation unless all four epochs satisfy this contract.
 
-Read `probability_b_better` and the paired CI, not the point estimate. The
-58-study surface gives a ±0.06 interval, so a change under roughly 0.08 is not
-resolvable from a single run.
+## Frozen gold development evaluation
 
-- **Clearly better** — the initialization hypothesis is supported, and the next
-  step is to match the schedule to the new initialization (encoder LR, epochs,
-  effective batch), each as its own controlled change.
-- **Tied or worse** — encoder initialization is not the binding constraint, and
-  attention should move to supervision quality or validation power instead of
-  further architecture work.
+```bash
+rsna-knee-b13-eval \
+  --config configs/b13_imagenet_init.yaml \
+  --data-root "$DATA_ROOT" \
+  --checkpoint runs/b13_imagenet/b13_model.pt \
+  --out-root runs/b13_imagenet/gold_eval
+```
 
-Either outcome is informative, which is the point of running it.
+Primary comparison versus the B5-initialized parent B12.1:
+
+```bash
+python -m rsna_knee.cli evaluate \
+  --train-csv "$DATA_ROOT/train.csv" \
+  --oof runs/b12_1_hierarchical/gold_eval/gold_predictions.csv \
+  --compare-oof runs/b13_imagenet/gold_eval/gold_predictions.csv \
+  --n-bootstrap 5000 \
+  --out runs/b13_imagenet/gold_eval/b12_1_vs_b13.json
+```
+
+Secondary comparison versus B12:
+
+```bash
+python -m rsna_knee.cli evaluate \
+  --train-csv "$DATA_ROOT/train.csv" \
+  --oof runs/b12_variable_series/gold_eval/gold_predictions.csv \
+  --compare-oof runs/b13_imagenet/gold_eval/gold_predictions.csv \
+  --n-bootstrap 5000 \
+  --out runs/b13_imagenet/gold_eval/b12_vs_b13.json
+```
+
+And versus the retained B7.1 benchmark:
+
+```bash
+python -m rsna_knee.cli evaluate \
+  --train-csv "$DATA_ROOT/train.csv" \
+  --oof runs/b7_1_full_coverage/gold_eval/gold_predictions.csv \
+  --compare-oof runs/b13_imagenet/gold_eval/gold_predictions.csv \
+  --n-bootstrap 5000 \
+  --out runs/b13_imagenet/gold_eval/b71_vs_b13.json
+```
+
+`probability_b_better` is the probability that the `--compare-oof` model is
+better than the first `--oof` model under the aligned bootstrap.
+
+## Interpretation policy
+
+The 58 fully labelled studies have been reused throughout sequential development,
+so B13's score is a development/model-selection estimate rather than independent
+validation. Do not tune target-specific winners, ImageNet variants, normalization,
+learning rates, epoch counts or ensemble weights from the B13 gold result.
