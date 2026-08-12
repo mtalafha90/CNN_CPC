@@ -2,7 +2,7 @@
 
 This file separates foundational technical references from public competition implementations used for methodology context. Public repositories are engineering/research references, not verified competition winners.
 
-> Current repository-measured results are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). **B7.1 is the current best standalone development model at macro AUC `0.5644802945`; B8 spatial-anatomy learning is currently training and has no gold score yet.**
+> **Current repository-measured status — 2026-08-12:** B13 is the reused-gold development champion at macro AUC `0.6293565948`. B15 passed the frozen weak-v2 teacher-agreement gate but scored `0.6209002783` on the one-look reused-gold confirmation and did not replace B13. Canonical results are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
 
 ## Competition and standards
 
@@ -16,9 +16,11 @@ This file separates foundational technical references from public competition im
 
 ## Neural-network architecture references
 
-- Liu, Z. et al. **A ConvNet for the 2020s.** CVPR, 2022. ConvNeXt; `CNN_CPC` uses a ConvNeXt-Tiny 2.5D slice/triplet encoder.
-- Vaswani, A. et al. **Attention Is All You Need.** NeurIPS, 2017. Transformer attention used by the multi-sequence MRI/pathology-query architecture.
+- Liu, Z. et al. **A ConvNet for the 2020s.** CVPR, 2022. ConvNeXt; the repository uses ConvNeXt-Tiny as its 2.5D MRI encoder.
+- Vaswani, A. et al. **Attention Is All You Need.** NeurIPS, 2017. Transformer attention used by the multi-series/pathology-query architectures.
 - Paszke, A. et al. **PyTorch: An Imperative Style, High-Performance Deep Learning Library.** NeurIPS, 2019. Primary deep-learning framework.
+
+B15 describes its same-study knee-MRI adaptation as **MICLe-style** because it uses multiple examples from the same knee study as positives. The repository does not claim to reproduce any published MICLe implementation exactly.
 
 ## Statistical evaluation
 
@@ -26,7 +28,9 @@ This file separates foundational technical references from public competition im
 - DeLong, E. R., DeLong, D. M. and Clarke-Pearson, D. L. **Comparing the areas under two or more correlated receiver operating characteristic curves: a nonparametric approach.** *Biometrics*, 1988.
 - Efron, B. and Tibshirani, R. J. **An Introduction to the Bootstrap.** Chapman & Hall/CRC, 1993.
 
-The repository uses rank-based ROC AUC and study-level bootstrap intervals/paired comparisons. With only 58 gold studies, uncertainty must accompany point estimates.
+The repository uses rank-based ROC AUC and study-level bootstrap intervals/paired comparisons. With only 58 expert-gold studies, uncertainty must accompany point estimates.
+
+Weak-v2 uses a stricter bootstrap: a replicate is accepted only when all 12 target AUCs are defined.
 
 ## Classical representation/probe methods
 
@@ -37,43 +41,22 @@ B4/B5 use low-capacity classical tools after freezing the MRI encoder:
 - fixed anatomy/sequence feature subsets;
 - rank averaging for fixed heterogeneous ensembles.
 
-These are implemented with scikit-learn. Their role is diagnostic: test separability of a frozen representation without adding a high-capacity supervised neural head.
+These are implemented with scikit-learn and are used diagnostically to test representation separability without a high-capacity supervised neural head.
 
-## B5 text-representation methods
+## Report representation and weak supervision
 
-B5 does **not** use an external clinical language model. It fits the text space only from competition reports using:
+B5 uses competition-report TF-IDF/TruncatedSVD semantic embeddings for image-report alignment without an external clinical language model.
 
-- word TF-IDF with 1-2 grams;
-- TruncatedSVD to a compact semantic space;
-- L2-normalized report embeddings;
-- image-report contrastive alignment plus cosine alignment;
-- an embedding queue for additional report negatives in small MRI batches;
-- duplicate-report-hash masking to avoid false negatives.
-
-The text branch is training-only; the saved downstream artifact is an MRI encoder.
-
-B5 result under the unchanged B4 probe:
+B6 v1.2.1 uses structured states:
 
 ```text
-macro AUC = 0.5243650851
-95% CI   = [0.4728108406, 0.5761619105]
+positive
+negated
+uncertain
+unmentioned
 ```
 
-B5 remains the report-aligned representation baseline and the encoder source for B7.
-
-## Structured weak supervision context
-
-B6 v1.2.1 uses:
-
-- positive / negated / uncertain / unmentioned states;
-- zero training weight for uncertain/unmentioned cells;
-- no conversion of report silence to negative;
-- confidence separated from target probability;
-- compartment-aware OA parsing;
-- no external language model/resource;
-- zero gold rows in the weak-training export.
-
-The final frozen report-only export contains:
+Frozen B6 scope:
 
 ```text
 active studies  3120
@@ -82,7 +65,7 @@ positive        6871
 negative        7252
 ```
 
-The completed gold audit showed asymmetric reliability, motivating the global B7/B7.1/B8 policy:
+Frozen B7-B15 downstream treatment:
 
 ```text
 positive -> target 0.85, weight 0.50
@@ -90,60 +73,74 @@ negated  -> target 0.05, weight 1.00
 uncertain/unmentioned -> ignored
 ```
 
-Because that policy was informed by the same 58-study audit set, later B7/B7.1/B8 scores are development/model-selection estimates.
+The current post-B15 diagnostic is to measure how all four states relate to expert truth before any new supervision policy is defined. Report silence is not assumed to be a negative.
 
-## Strong competition-only MRI SSL
+## Image-side experiment lineage
 
-The strong SSL encoder was trained only on the 4,349 non-gold competition MRI studies and excludes all 58 gold studies. The completed run covered about 5.52 effective corpus passes.
+The repository has tested:
 
-This encoder supports B1/B4 and initializes B5; B5 then initializes B7.
+- competition-only MRI SSL;
+- image-report representation alignment;
+- full weak-corpus training coverage;
+- spatial tokens;
+- strict semantic routing;
+- physical-scale normalization;
+- pseudo-label completion;
+- all-real-series aggregation;
+- hierarchical one-token-per-series aggregation;
+- ImageNet initialization;
+- full slice-token memory;
+- ImageNet -> knee-MRI same-study contrastive adaptation.
 
-## B7/B7.1 direct weak supervision
+The exact B13 slice audit found median evaluation exposure `100%` and complete evaluation exposure for `95.9%` of 17,475 eligible real series, rejecting slice-count undersampling as the primary B13 bottleneck.
 
-B7 combines:
-
-```text
-B5-initialized ConvNeXt
-+ six MRI streams
-+ slice/stream embeddings
-+ cross-sequence Transformer
-+ 12 pathology queries
-+ frozen B6 target-level weak labels
-```
-
-B7-v1:
-
-```text
-macro AUC = 0.5397724412
-```
-
-B7.1 changes only training coverage to one complete 3,120-study pass per epoch and reaches:
+## Current measured evidence
 
 ```text
-macro AUC = 0.5644802945
-95% CI   = [0.5052432984, 0.6229422178]
+B0                   0.4762536432
+B1                   0.5030284974
+B2                   0.4993244663
+B3                   0.4944652486
+B4                   0.5137567459
+B5                   0.5243650851
+B7-v1                0.5397724412
+B7.1                 0.5644802945
+B5+B7.1 rank         0.5540141184
+B8                   0.5300962807
+B9                   0.5334962669
+B10                  0.5523982721
+B11.1                0.5506902702
+B12                  0.5660915179
+B13                  0.6293565948  retained champion
+B14                  0.6197914249
+B15                  0.6209002783
 ```
 
-B7.1 is the current retained standalone development leader.
+B11-v1 failed viability; B12.1 was implemented but skipped.
 
-## Spatial anatomy context for B8
-
-B8 tests a different representation question: whether global pooling of every sampled slice discards useful pathology-localization information.
+## B15 weak-v2 evidence
 
 ```text
-B7.1 MRI memory = 6 x 16 x 1   = 96 tokens/study
-B8 MRI memory   = 6 x 16 x 2x2 = 384 tokens/study
+B13-v2 control       0.5652498118
+B15                 0.7319060415
+raw delta           +0.1666562297
+paired median       +0.1675245839
+95% paired CI       [+0.1124433208,+0.2165156305]
+P(B15 > control)     1.0000
 ```
 
-B8 preserves a 2x2 spatial grid from the final ConvNeXt feature map, adds learned region-position embeddings, and applies fixed gentle pathology-specific stream/slice attention priors. No fixed medial/lateral/anterior/posterior quadrant is assumed because the preprocessing contract does not certify canonical in-plane orientation.
+The predeclared weak gate passed, but the one-look expert-gold result was:
 
-B8 initializes from the completed B7.1 checkpoint and keeps the B6 weak-label policy/full-corpus training recipe fixed.
+```text
+B15 gold            0.6209002783
+B13 gold            0.6293565948
+```
 
-**Current status: B8 real-data training is in progress; no B8 gold result exists yet.**
+This discrepancy is now a central scientific finding: stronger agreement with the report-derived teacher did not produce a stronger global expert-label ranking.
 
 ## Early public 2026 competition repositories reviewed
 
-The methodology review examined public code from these projects where available:
+The methodology review examined public code from projects including:
 
 - `Chagatai404/knee-abnormality-ML`
 - `jiaweizhong/rsna-knee`
@@ -161,55 +158,19 @@ See [`../README_KAGGLE_METHODS.md`](../README_KAGGLE_METHODS.md) for the synthes
 
 ## How public work is used
 
-Public implementations are used to:
+Public implementations are used to cross-check data structure, DICOM failure modes, multi-plane/2.5D ideas, weak report supervision, representation learning, leakage risks and engineering patterns. A public idea is not treated as an improvement until tested under this repository's own controlled protocol.
 
-- cross-check released data structure;
-- identify DICOM failure modes;
-- compare multi-plane/2.5D representation ideas;
-- motivate weak report supervision and MRI representation learning;
-- identify leakage risks in tiny-gold validation;
-- identify engineering/runtime patterns worth testing.
-
-A public idea is not treated as an improvement until tested under this repository's own validation protocol.
-
-## Repository-specific verified evidence — 2026-08-10
-
-Data/engineering:
-
-- 4,407 training studies;
-- 58 gold and 4,349 report-only;
-- 24,371 series rows;
-- 21,886 selected series audited;
-- 732,556 candidate DICOM files checked;
-- two failed individual files and zero lost selected series;
-- B6 v1.2.1 frozen at 14,123 usable weak-label cells;
-- strong SSL/B5/B7/B7.1 completed on competition-only data.
-
-Measured model evidence:
-
-```text
-B0                   0.4762536432
-B1                   0.5030284974
-B2                   0.4993244663
-B3                   0.4944652486
-B4                   0.5137567459
-B5                   0.5243650851
-B7-v1                0.5397724412
-B7.1                 0.5644802945  current leader
-B5+B7.1 fixed rank   0.5540141184  rejected
-B8                   pending         training in progress
-```
-
-See [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md) for exact intervals and paired comparisons.
-
-## Manuscript citation/reporting policy
+## Manuscript/reporting policy
 
 Use primary literature for architecture/statistical methods. Cite public competition repositories only when they contribute relevant software/methodology context.
 
 Do not:
 
 - present a public repository's self-reported score as an established benchmark unless independently reproduced or clearly labelled;
-- present smoke/preflight results as model performance;
-- present current gold/OOF development results as pristine independent test estimates after they have informed multiple method choices;
-- report a B8 performance value before its frozen training run and first gold evaluation complete;
-- tune B8 spatial/prior hyperparameters from the first B8 result and then describe the re-evaluation as untouched.
+- present preflight/technical-fixture results as model performance;
+- present reused-gold development results as pristine independent validation;
+- present weak-v2 teacher agreement as expert truth;
+- select target-specific winners or gold-tuned ensemble weights;
+- claim B15's weak-v2 result is a hidden-test result.
+
+The hidden Kaggle evaluation remains the next genuinely independent model-performance signal.
