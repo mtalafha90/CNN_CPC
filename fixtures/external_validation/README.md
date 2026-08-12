@@ -1,6 +1,6 @@
 # External four-study knee MRI technical fixture
 
-> **Current campaign note — 2026-08-09:** this fixture remains a technical-only resource. It is not used in B0-B5 scientific OOF evaluation. Current experiment results are in [`../../docs/EXPERIMENT_STATUS.md`](../../docs/EXPERIMENT_STATUS.md); B5 is running and does not use this fixture for representation training.
+> **Current campaign note — 2026-08-12:** this fixture remains a **technical-only** resource. It was not used for B0-B15 scientific model selection or B15 MRI-domain SSL. Current experiment results are in [`../../docs/EXPERIMENT_STATUS.md`](../../docs/EXPERIMENT_STATUS.md): B13 remains the reused-gold development champion at `0.6293565948`; B15 passed weak-v2 but did not improve the reused-gold global metric.
 
 This directory contains **four openly licensed online knee MRI examples for technical pipeline testing**. It is not the competition validation set and must never be used as a leaderboard/scientific macro-AUC benchmark.
 
@@ -123,14 +123,17 @@ PYTHONPATH=src python scripts/materialize_external_validation.py \
 
 Re-materialization requires source network access. The committed files/hashes are the reproducible technical fixture.
 
-## Separation from competition validation
+## Separation from competition validation and B15
 
 Never:
 
 - append these four studies to competition training;
-- include them in the 58-study gold folds;
-- use them in strong SSL or B5 representation training;
-- use their predictions to tune TTA, thresholds, architecture or classifier selection;
-- report sparse fixture labels as macro-AUC.
+- include them in the 58-study gold development surface;
+- include them in strong SSL, B5 representation training, or B15 knee-MRI SSL;
+- include them in frozen weak-v2 construction;
+- use their predictions to tune TTA, thresholds, architecture, supervision rules or classifier selection;
+- report sparse fixture labels as macro AUC.
 
-Real validation is documented in [`../../docs/VALIDATION.md`](../../docs/VALIDATION.md) and uses only official competition gold labels.
+B15 used only competition MRI, excluding all 58 gold studies and all 623 weak-v2 holdout studies from its SSL pool. This fixture did not enter that 3,726-study SSL pool.
+
+Scientific validation governance is documented in [`../../docs/VALIDATION.md`](../../docs/VALIDATION.md).
