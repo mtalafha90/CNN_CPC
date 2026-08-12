@@ -1,20 +1,21 @@
 # Roadmap after B12.1
 
-> **Status — 2026-08-11:** B13 remains the retained development champion. B14 is completed/rejected. The full B13 slice audit is complete and rejects slice-count undersampling as a primary bottleneck. Weak holdout v1 is superseded before model training because its Synovitis holdout had `70 positive / 1 negative`. Package `0.23.0` introduces stratified weak holdout v2 plus strict all-12-target bootstrap. The reserved next representation hypothesis remains **B15: ImageNet -> competition knee-MRI self-supervised adaptation -> B13 hierarchy**.
+> **Status — 2026-08-12:** B13 remains the retained reused-gold development champion. B14 was rejected globally. B15 completed the planned ImageNet -> knee-MRI SSL -> B13 hierarchy experiment, passed the frozen weak-v2 gate decisively, but did not improve global reused-gold macro AUC. The next stage is a B6 report-state audit before any new supervision experiment.
 
 ## Current reference state
 
 ```text
-B7.1 macro AUC        0.5644802945
-B12 macro AUC         0.5660915179
-B13 macro AUC         0.6293565948   retained development champion
-B14 macro AUC         0.6197914249   completed / rejected globally
+B7.1 gold macro AUC       0.5644802945
+B12 gold macro AUC        0.5660915179
+B13 gold macro AUC        0.6293565948   RETAINED / CHAMPION
+B14 gold macro AUC        0.6197914249   REJECTED GLOBALLY
+B15 gold macro AUC        0.6209002783   NO GLOBAL IMPROVEMENT
 
-B14 vs B13
-raw macro difference    -0.0095651699
-median difference       -0.0093726931
-95% paired CI           [-0.0469823411,+0.0250137870]
-P(B14 > B13)             0.2924
+B15 weak-v2               0.7319060415
+B13-v2 control weak-v2    0.5652498118
+paired weak median        +0.1675245839
+95% paired weak CI        [+0.1124433208,+0.2165156305]
+P(B15 > control)           1.0000
 ```
 
 ## Governing rules
@@ -22,12 +23,13 @@ P(B14 > B13)             0.2924
 1. The 58 fully labelled studies are a repeatedly reused development/model-selection surface, not independent validation.
 2. Primary selection remains global macro ROC AUC across 12 targets.
 3. Do not construct target-specific winners from per-target AUCs.
-4. Do not tune slice counts, thresholds, normalization, LR, epoch count or ensemble weights from the reused gold surface.
+4. Do not tune slice counts, thresholds, normalization, LR, epoch count or ensemble weights from reused gold.
 5. No gold labels enter gradients, early stopping or checkpoint selection.
-6. Any B15 SSL stage must exclude all 58 gold studies from SSL optimization.
-7. Any model scored on weak holdout v2 must be trained with every v2 holdout UID excluded.
-8. Weak-surface bootstrap is strict: accepted replicates must define all 12 target AUCs.
-9. The independent Kaggle hidden evaluation is more valuable than repeated local tuning.
+6. Weak-v2 is frozen and measures B6 teacher agreement, not expert truth.
+7. Any model scored on weak-v2 must exclude every weak-v2 holdout UID from training.
+8. Weak-v2 bootstrap is strict: accepted replicates define all 12 target AUCs.
+9. Do not retune B15 from its one-look gold confirmation.
+10. The hidden Kaggle evaluation remains the next genuinely independent performance signal.
 
 ## Completed B13 / B14
 
@@ -35,17 +37,17 @@ P(B14 > B13)             0.2924
 B13
 ImageNet ConvNeXt-Tiny
 one learned token per series
-macro AUC 0.6293565948
+gold macro AUC 0.6293565948
 -> RETAIN
 
 B14
 same ImageNet protocol
 full K x 16 slice-token memory
-macro AUC 0.6197914249
+gold macro AUC 0.6197914249
 -> REJECT GLOBALLY
 ```
 
-B14 reached lower B6 training loss (`0.5822778610`) than B13 (`0.6132239342`) without improving macro AUC. Do not extend B14 or create B13/B14 target-wise mixtures.
+B14 reached lower B6 training loss (`0.5822778610`) than B13 (`0.6132239342`) without improving macro AUC. This closed the immediate “more downstream token memory” branch.
 
 ## Completed diagnostic — exact B13 slice exposure
 
@@ -54,17 +56,9 @@ The corrected audit reproduced the actual B13 2.5D sampler on all 17,475 eligibl
 ```text
 series audited/readable  17475 / 17475
 slices/series median     30 (p95 50, max 320)
-
-eval unique fraction     median 100.0% (p25 100.0%)
-eval max skipped run     median 0.0 slices (p95 0.0)
-training expected/view   median 87.0%
+eval unique fraction     median 100.0%
 complete eval exposure   95.9%
-eval run >=2 slices      3.9%
-eval run >=3 slices      3.8%
-
-Axial      n=4455   eval=100.0% max-run=0.0 train/view=85.2%
-Coronal    n=5815   eval=100.0% max-run=0.0 train/view=87.0%
-Sagittal   n=7205   eval=100.0% max-run=0.0 train/view=87.0%
+eval max skipped run     median 0.0 slices (p95 0.0)
 ```
 
 Decision:
@@ -73,168 +67,204 @@ Decision:
 slice-count undersampling as primary B13 bottleneck -> REJECT
 ```
 
-No global slice-count sweep is justified from the current evidence. In-plane resolution remains a separate possible future question.
+In-plane resolution remains a separate possible later question.
 
-See `docs/B13_SLICE_EXPOSURE_AUDIT.md`.
+## Frozen weak holdout v2
 
-## Weak holdout v1 — superseded
+Historical v1 is superseded; no B15/control model was trained on it.
 
-The first report-group-safe 20% split produced:
+Actual frozen v2:
 
 ```text
-train studies              2496
-holdout studies             624
-report-group overlap          0
-holdout usable cells       2697
-holdout positive cells     1257
-holdout negative cells     1440
-Synovitis                  70 positive / 1 negative
+surface                   weak_b6_holdout_v2
+active studies            3120
+train studies             2497
+holdout studies            623
+holdout usable cells      2875
+positive / negative    1407 / 1468
+report-group overlap         0
 manifest SHA
-fdbc02f88e5a4eff31783b4242890e943609d5c783bd54aca38af8a89e7e0968
+1a1b07bd690bae3cbb945773c4fcb1c3b0d0f6aa1dd18649d62859aeeb4603d1
 ```
 
-No B15 or matched B13-control training used v1. It is superseded before model fitting because the single Synovitis negative makes a stable fixed 12-target macro bootstrap impossible without a high undefined-replicate rate.
+It was frozen before B15/control training and is not eligible for regeneration after seeing results.
 
-## Weak holdout v2 — immediate gate
+## Completed B15 — MRI-domain SSL
 
-Package `0.23.0` freezes a better split using only frozen B6 labels and normalized report groups.
-
-```text
-surface                 weak_b6_holdout_v2
-holdout fraction        0.20
-seed                    2026
-report grouping         mandatory
-minimum class count     4 per side where globally feasible
-candidate splits        4096
-uses gold labels        false
-uses model predictions  false
-```
-
-The split objective balances holdout size and all 24 target/class weak-label counts. For global Synovitis negatives (`17`), at least four must be in holdout and at least four must remain in weak training.
-
-Freeze v2 **before any new control/candidate training**:
-
-```bash
-export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
-
-rsna-knee-weak-holdout \
-  --config configs/b13_imagenet_init.yaml \
-  --data-root "$DATA_ROOT" \
-  --b6-root runs/b6_report_labels_v121 \
-  --holdout-fraction 0.20 \
-  --seed 2026 \
-  --min-class-count 4 \
-  --search-candidates 4096 \
-  --out-root runs/weak_holdout_v2
-```
-
-Once the manifest is successfully frozen, do not regenerate it based on model performance.
-
-See `docs/WEAK_HOLDOUT_V2.md`.
-
-## Strict weak-surface comparison
-
-For every model evaluated on v2:
-
-```text
-study bootstrap
--> all 12 target AUCs computed
--> replicate rejected if any target is undefined
--> macro = mean of exactly 12 AUCs
-```
-
-A clean B15 comparison therefore requires two newly trained models on the same v2 weak-train partition:
-
-```text
-control:   ImageNet -> B13 hierarchy
-candidate: ImageNet -> MRI SSL -> B13 hierarchy
-```
-
-Existing B13/B14 checkpoints are invalid for this weak-holdout comparison because they trained on all 3,120 active B6 studies.
-
-## Next major hypothesis — B15
+B15 tested:
 
 ```text
 ImageNet ConvNeXt-Tiny
         |
         v
-competition knee-MRI self-supervised adaptation
+competition knee-MRI same-study contrastive adaptation
         |
         v
-B13 one-token-per-series hierarchical architecture
+B13 one-token-per-series hierarchy
         |
         v
 frozen B6 downstream recipe on v2 weak-train studies
 ```
 
-Before B15 implementation/training, freeze the SSL objective and data policy:
+SSL data contract:
 
 ```text
-58 gold studies excluded from SSL optimization
-no gold labels in SSL
-no B6 labels in SSL
-no report labels in SSL unless explicitly declared as another experiment
-no gold-based SSL checkpoint selection
-no gold-based SSL hyperparameter sweep
-same B13 downstream hierarchy unless separately predeclared
-same v2 weak-train partition for B13-control and B15 downstream training
-same downstream B6 policy
-same all-series policy
+competition studies     4407
+minus gold                58
+minus v2 holdout         623
+SSL studies             3726
+SSL real MRI series    20534
 ```
 
-Candidate SSL families can be considered **before** freezing B15:
+All four SSL epochs completed exact full passes. Loss decreased `2.70946 -> 2.47569`. Checkpoint selection remained the frozen final epoch; loss was not used for model selection.
+
+## Matched downstream arms
+
+Both newly trained downstream models used:
 
 ```text
-same-study / cross-sequence contrastive learning
-masked slice/token reconstruction
-cross-plane consistency
-teacher-student self-distillation
+2497 studies
+13974 real MRI series
+11248 B6 usable cells
+5464 positive / 5784 negative
+1249 batches/epoch
+4 exact full epochs
 ```
 
-Only one B15 protocol should be selected and frozen before evaluation.
-
-## Decision chain
+Control:
 
 ```text
-freeze weak holdout v2
-       |
-       +--> matched B13-control
-       `--> B15 candidate
-                 |
-                 v
-      paired strict 12-target weak bootstrap
-                 |
-                 v
-      one predeclared winner to reused gold
-                 |
-                 v
-       development confirmation only
-                 |
-                 v
-          Kaggle hidden signal
+ImageNet -> B13 hierarchy
 ```
+
+Candidate:
+
+```text
+ImageNet -> MRI SSL -> B13 hierarchy
+```
+
+B13-v2 control final loss: `0.6622741637`.  
+B15 final loss: `0.6065262400`.  
+Training loss was not a selection metric.
+
+## B15 weak-v2 gate — completed
+
+```text
+B13-v2 control macro AUC   0.5652498118
+B15 macro AUC              0.7319060415
+raw B15-control           +0.1666562297
+paired median             +0.1675245839
+95% paired CI             [+0.1124433208,+0.2165156305]
+P(B15 > control)           1.0000
+valid paired replicates    4921 / 5000
+passes predeclared gate    true
+```
+
+The predeclared gate required positive raw delta, positive paired median and `P>=0.95`; all conditions passed.
+
+## B15 one-look reused-gold confirmation — completed
+
+```text
+B15 gold macro AUC      0.6209002783
+95% CI                 [0.5706720829,0.6675892903]
+B13 gold macro AUC      0.6293565948
+raw B15-B13            -0.0084563164
+```
+
+The very large weak-v2 improvement did not transfer to a global expert-gold improvement. B13 therefore remains the development champion. B15 is closed as a tuning target.
+
+## Main lesson after B15
+
+The campaign has now tested several ways of improving the image side:
+
+- stronger competition-only MRI SSL;
+- report-aligned representation learning;
+- more weak-training coverage;
+- spatial tokens;
+- exact routing;
+- physical scaling;
+- all-series modeling;
+- hierarchical series aggregation;
+- ImageNet initialization;
+- full slice-token memory;
+- MRI-domain contrastive adaptation.
+
+B15 shows that the image representation can become much better at reproducing the frozen report-derived weak targets without improving expert-gold macro AUC. This elevates **supervision semantics/noise/sparsity** as the next bottleneck to investigate directly.
+
+## Immediate next step — B6 report-state audit
+
+Before another GPU training run, audit these parser states against expert truth on the already-reused gold cases:
+
+```text
+positive
+negated
+uncertain
+unmentioned
+```
+
+For each target/state compute counts, expert-positive and expert-negative fractions, coverage, and appropriate predictive values.
+
+The audit should answer whether ignored states contain reliable information and whether that relationship is global or strongly target-dependent.
+
+Do **not** blindly interpret report silence as a negative. A report can omit a finding without explicitly ruling it out.
+
+## If the state audit supports a new supervision experiment
+
+Define a new version/name before training. Possible controlled options include:
+
+- soft/low-weight treatment of selected uncertain/unmentioned states;
+- confidence-aware weak loss;
+- robust loss under noisy weak supervision;
+- a better independently audited report labeler.
+
+B6 v1.2.1 itself remains frozen for historical reproducibility.
 
 ## Later hypotheses
 
-- Supervision-quality improvement must use a separately versioned/frozen B6 successor; do not alter B6 v1.2.1 in place.
-- In-plane resolution can be a later global experiment, but slice-count undersampling itself is closed.
-- Larger foundation encoders remain B16 territory if B15 fails and budget justifies it.
-- Scanner/protocol robustness remains B17/diagnostic.
-- Multi-seed/global ensembling comes only after structure is settled and cannot use gold-selected target weights.
+After the supervision audit, later global experiments may include:
+
+- richer image-report representation learning with the stronger encoder;
+- higher in-plane resolution, distinct from slice count;
+- robust-loss methods;
+- carefully justified architecture changes;
+- multi-seed/global ensembles with fixed, non-target-specific rules.
+
+Larger foundation encoders remain a separate hypothesis, but B15 argues that simply improving weak-teacher agreement is not enough.
 
 ## Explicitly not allowed
 
 ```text
 B14 epoch extension
-target-wise B13/B14 mixture
+B15 SSL/epoch/LR retuning from gold
+target-wise B13/B14/B15 mixtures
 gold-selected slice count
+gold-selected weak-label state weights
 gold-selected thresholds
 gold-selected ensemble weights
 retrospective weak validation of checkpoints trained on holdout studies
-regenerating v2 based on model results
+regenerating weak-v2 based on model results
 calling weak teacher agreement expert truth
 calling the reused 58 studies independent validation
-claiming a 0.75-0.80 supervision ceiling from B6 balanced accuracy
+claiming a numerical B6 AUC ceiling
+blindly mapping unmentioned reports to negative
 ```
 
-The goal remains a higher global macro AUC through controlled, reproducible representation or supervision improvements rather than increasingly fine tuning to 58 repeatedly reused cases.
+## Current decision chain
+
+```text
+B13 retained champion
+        |
+        v
+B6 report-state audit
+        |
+        v
+separately frozen supervision successor only if justified
+        |
+        v
+controlled comparison
+        |
+        v
+Kaggle hidden signal
+```
+
+The goal remains a higher global macro AUC through controlled, reproducible improvements rather than increasingly fine tuning to 58 repeatedly reused expert-labelled studies.
