@@ -1,28 +1,47 @@
 # Modeling strategy
 
-> **Snapshot: 2026-08-10.** **B7.1 remains the best standalone development model at macro AUC `0.5644802945`. B8 spatial-anatomy learning is rejected at `0.5300962807`. B9 strict semantic sequence routing is the active predeclared experiment.** Canonical results are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
+> **Snapshot — 2026-08-12.** **B13 remains the reused-gold development champion at macro AUC `0.6293565948`. B15 passed the frozen weak-v2 teacher-agreement gate decisively but reached `0.6209002783` on its single reused-gold confirmation, so it did not replace B13. The immediate strategy is now supervision-state diagnosis before another training experiment.** Canonical results are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
 
 ## Core principle
 
-`CNN_CPC` treats the challenge as a weakly supervised multi-sequence MRI problem with only 58 fully labelled development studies. The strategy prioritizes supervision quality, leakage control, representation quality, exact data semantics, full-corpus weak supervision, and runtime discipline before increasing model complexity.
+`CNN_CPC` treats the challenge as a weakly supervised multi-series knee MRI problem with only 58 fully labelled expert development studies. The strategy prioritizes leakage control, supervision quality, representation quality, complete data usage and controlled hypothesis testing before increasing model complexity.
+
+The project now has two local ranking surfaces with different meanings:
+
+```text
+58-study gold surface -> expert-labelled development/model selection
+623-study weak-v2     -> B6 report-teacher agreement only
+```
+
+Neither is the hidden Kaggle test set.
 
 ## Experiment evidence so far
 
-| Candidate | Macro AUC | Interpretation |
+| Candidate | Gold macro AUC | Interpretation |
 |---|---:|---|
-| B0 random | `0.4763` | weak baseline |
-| B1 strong MRI SSL | `0.5030` | useful in-domain representation |
-| B4 frozen SSL + classical | `0.5138` | representation separability improved |
-| B5 image-report SSL | `0.524365` | report-aligned representation helped modestly |
-| B7-v1 direct B6 supervision | `0.539772` | direct weak supervision helped |
-| **B7.1 full coverage** | **`0.564480`** | **current best standalone development model** |
-| B5+B7.1 fixed rank | `0.554014` | rejected versus B7.1 |
-| B8 spatial anatomy | `0.530096` | rejected; spatial-prior branch closed |
-| **B9 strict routing** | pending | active label-free data-contract experiment |
+| B0 random | `0.4762536432` | weak baseline |
+| B1 strong MRI SSL | `0.5030284974` | useful in-domain representation |
+| B4 frozen SSL + classical | `0.5137567459` | representation separability improved |
+| B5 image-report SSL | `0.5243650851` | report-aligned representation baseline |
+| B7-v1 direct B6 supervision | `0.5397724412` | direct weak supervision helped |
+| B7.1 full coverage | `0.5644802945` | full weak-corpus coverage helped |
+| B8 spatial anatomy | `0.5300962807` | rejected |
+| B9 strict routing | `0.5334962669` | rejected |
+| B10 physical scale | `0.5523982721` | rejected |
+| B11.1 quantile teacher | `0.5506902702` | rejected |
+| B12 all real series | `0.5660915179` | retained historical reference |
+| **B13 ImageNet + hierarchy** | **`0.6293565948`** | **development champion** |
+| B14 full slice-token memory | `0.6197914249` | rejected globally |
+| **B15 MRI-domain SSL + hierarchy** | **`0.6209002783`** | **weak-v2 gate passed; no global gold improvement** |
+
+B11-v1 failed its pseudo-label viability gate; B12.1 was implemented but skipped.
 
 ## 1. Reports are training supervision only
 
-Final inference remains MRI-only. B5 uses report semantics for representation learning; B6 converts reports to positive / negated / uncertain / unmentioned states. B7/B7.1/B9 train directly from the frozen B6 target cells.
+Final inference remains MRI-only. Reports have served two distinct roles:
+
+- B5: semantic representation alignment without 12-target report labels;
+- B6 onward: structured positive / negated / uncertain / unmentioned weak target states.
 
 Frozen B6 v1.2.1 scope:
 
@@ -34,7 +53,7 @@ positive cells                    6871
 negative cells                    7252
 ```
 
-Global asymmetric policy:
+Global downstream policy through B15:
 
 | state | soft target | base weight |
 |---|---:|---:|
@@ -43,144 +62,173 @@ Global asymmetric policy:
 | uncertain | ignored | 0.00 |
 | unmentioned | ignored | 0.00 |
 
-The parser and supervision policy are frozen.
+B6 v1.2.1 remains frozen for historical reproducibility.
 
-## 2. B7.1 established the strongest current architecture
+## 2. B7.1 established the importance of complete weak-corpus coverage
 
-B7.1 uses:
+B7.1 changed only the training coverage from B7-v1 and reached `0.5644802945`. It demonstrated that direct weak supervision benefited from four full passes over all 3,120 active B6 studies.
 
-```text
-6 MRI streams
--> 16 sampled 2.5D slices/stream
--> ConvNeXt slice encoder initialized from B5
--> slice-position + stream embeddings
--> cross-sequence Transformer
--> 12 pathology queries
--> cross-attention to MRI memory
--> 12 logits
-```
+That result remains an important training-design lesson even though later B13 superseded its architecture/performance.
 
-The only change from B7-v1 was full active-pool coverage:
+## 3. B8-B12 explored data semantics, capacity and supervision completion
 
-```text
-500 -> 1560 batches/epoch
-1000 -> 3120 study draws/epoch
-4 complete corpus passes
-```
+The intermediate experiments established several negative or neutral results:
 
-Result:
+- B8: adding coarse 2x2 within-slice spatial tokens did not improve global AUC;
+- B9: exact fluid/structural routing fixed a real metadata inconsistency but did not improve global AUC;
+- B10: in-plane physical-scale normalization did not improve globally;
+- B11-v1: absolute pseudo-label thresholds failed viability;
+- B11.1: target-wise quantile pseudo-label tails passed viability but did not improve globally;
+- B12: retaining every real MRI acquisition was viable and tied the prior benchmark.
+
+These experiments remain valuable because they narrowed the search space without target-wise post-hoc mixing.
+
+## 4. B13 changed the campaign level
+
+B13 combines:
 
 ```text
-macro AUC = 0.5644802945
-95% CI   = [0.5052432984, 0.6229422178]
+torchvision ConvNeXt-Tiny IMAGENET1K_V1
++ ImageNet normalization
++ every eligible real MRI series
++ 16 sampled 2.5D positions/series
++ learned attention pool -> one token/series
++ study Transformer
++ pathology-query prediction heads
++ frozen B6 supervision
 ```
 
-This is the architecture B9 returns to.
-
-## 3. B8 result closes the spatial-prior branch
-
-B8 preserved a 2x2 ConvNeXt grid per sampled slice and increased MRI memory from 96 to 384 tokens/study. Optimization was stable, but gold development performance fell:
+Gold result:
 
 ```text
-B8 AUC                 0.5300962807
-B7.1 AUC               0.5644802945
-median(B8 - B7.1)     -0.0335501423
-95% paired CI         [-0.0900453633, +0.0223997827]
-P(B8 > B7.1)           0.1156
+macro AUC = 0.6293565948
+95% CI   = [0.5789896351,0.6775867717]
 ```
 
-Do not tune B8 spatial grids, anatomy priors, target-specific priors or blend weights from this result.
+It remains the retained global development model.
 
-## 4. B9 motivation: the six-stream semantic contract was not exact
+## 5. B14 and the exact slice audit narrowed the image-side hypotheses
 
-The intended streams are:
+B14 retained the full `K x 16` slice-token memory and fit B6 more strongly than B13, yet scored `0.6197914249`. The exact slice audit also found essentially complete evaluation exposure for ordinary MRI series.
+
+Together these results argue against two immediate explanations for B13's remaining error:
 
 ```text
-sagittal_fluid       sagittal_structural
-coronal_fluid        coronal_structural
-axial_fluid          axial_structural
+not enough downstream slice-token capacity
+not enough sampled through-plane slice coverage
 ```
 
-The historical selector attempted to populate both slots in a plane when multiple series existed. With two acquisitions of the same contrast type, one could be assigned to the opposite slot.
+They do not rule out in-plane resolution, representation quality or supervision limitations.
 
-A label-free audit of all 4,407 training studies found:
+## 6. Frozen weak-v2 introduced a pre-gold ranking gate
+
+The v2 surface was frozen before B15/control training:
 
 ```text
-historical selected streams  21886
-strict semantically valid     21334
-cross-contrast substitutions    552
-fraction wrong-slot            2.52%
+weak-train studies       2497
+weak holdout studies      623
+holdout cells            2875
+report-group overlap        0
+manifest SHA
+1a1b07bd690bae3cbb945773c4fcb1c3b0d0f6aa1dd18649d62859aeeb4603d1
 ```
 
-Per-stream wrong-slot assignments:
+Its strict bootstrap only accepts a replicate if all 12 target AUCs are defined. It is explicitly a **teacher-agreement** surface.
+
+## 7. B15 tested MRI-domain adaptation cleanly
+
+B15 SSL used 3,726 competition studies after excluding all 58 gold cases and all 623 weak-v2 holdout cases. It trained four exact full passes over 20,534 real MRI series.
+
+Matched downstream arms both used exactly:
 
 ```text
-sagittal_fluid       251
-sagittal_structural   28
-coronal_fluid          2
-coronal_structural    34
-axial_fluid            0
-axial_structural     237
+2497 studies
+13974 series
+11248 usable B6 cells
+5464 positive / 5784 negative
+4 complete epochs
 ```
 
-The provided three-study test surface has one analogous false sagittal-fluid assignment. Historical routing selects 14 streams; strict routing selects 13 valid streams.
-
-This finding uses only acquisition metadata, not target outcomes.
-
-## 5. B9 single scientific change
-
-B9 strict routing:
+The intended difference was encoder initialization:
 
 ```text
-fluid slot:
-    choose only Fluid_Sensitive == True
-
-structural slot:
-    choose only Fluid_Sensitive == False
-
-if the required contrast is unavailable:
-    slot = None
-    presence mask = False
+control: ImageNet
+B15:    ImageNet -> knee-MRI same-study contrastive SSL
 ```
 
-Unknown contrast after metadata repair is not forced into either class.
+## 8. B15 passed weak-v2 but not gold
 
-The historical selector remains untouched so B7.1 is reproducible.
-
-## 6. B9 keeps B7.1 otherwise fixed
-
-Unchanged:
+Weak-v2:
 
 ```text
-B5 encoder initialization
-B6 v1.2.1 labels and weights
-KneeMILNet architecture
-16 slices/stream
-batch size 2
-4 epochs
-1560 batches/epoch
-encoder LR 1e-5
-head LR 1e-4
-same augmentation
-TTA [-1,0,1]
-5000 bootstrap replicates
-no gold gradients
-no gold early stopping
+B13-v2 control          0.5652498118
+B15                    0.7319060415
+raw delta              +0.1666562297
+paired median          +0.1675245839
+95% paired CI          [+0.1124433208,+0.2165156305]
+P(B15 > control)        1.0000
 ```
 
-The first B9 evaluation is one-shot. Primary comparison: paired B7.1 -> B9.
+The predeclared gate passed.
 
-## 7. Validation discipline
+One-look reused gold:
 
-The campaign has repeatedly used the same 58 studies, so results are model-selection/development estimates. Do not:
+```text
+B15                    0.6209002783
+B13                    0.6293565948
+raw B15-B13           -0.0084563164
+```
 
-- tune target-specific routing from gold outcomes;
-- restore individual substituted streams after seeing target AUCs;
-- retune B6 rules or weak-label weights;
-- select per-target winners;
-- optimize ensemble weights;
-- call development AUC a hidden-test guarantee.
+Thus B15 became much better at reproducing the weak teacher without improving the global expert-gold ranking. This is now one of the most important observations in the campaign.
 
-## 8. Current next step
+## 9. Strategic interpretation
 
-Test and train B9 exactly as documented in [`B9_STRICT_ROUTING.md`](B9_STRICT_ROUTING.md). Inspect `routing_audit.json`, `history.json` and `supervision_plan.json` before the first gold evaluation.
+The current bottleneck should not be described simply as “the encoder is too weak.” B15 shows the encoder/representation can be adapted enough to produce a large gain on the weak target surface.
+
+A more plausible next question is whether the available weak labels encode the expert target ordering well enough, especially given sparse state coverage and instance-dependent report mention/negation behavior.
+
+This is a hypothesis to audit, not a reason to declare the labels unusable or to claim a numerical ceiling.
+
+## 10. Immediate next step — report-state audit
+
+Before another GPU training run, measure how the frozen B6 states relate to expert truth:
+
+```text
+positive
+negated
+uncertain
+unmentioned
+```
+
+For every target and state, quantify counts, expert-positive fraction, expert-negative fraction, coverage and appropriate predictive values.
+
+Particularly important questions:
+
+```text
+How often is an unmentioned finding actually expert-positive?
+How reliable are explicit negatives by target?
+Do uncertain states contain useful low-confidence ranking information?
+Are the relationships target-dependent enough to make a global policy inappropriate?
+```
+
+Do not convert unmentioned to negative by assumption.
+
+## 11. Only then define the next model hypothesis
+
+If the audit supports additional supervision information, define a separately named/frozen successor policy. Possible families include soft/low-weight ignored states, confidence-aware/robust weak losses, or a better independently evaluated report labeler.
+
+If the audit does not support such a policy, return to other global hypotheses such as in-plane resolution, richer image-report representation learning, or carefully controlled model diversity.
+
+## 12. Validation discipline
+
+Do not:
+
+- tune target-specific weak-label rules from gold outcomes;
+- select target-wise B13/B15 winners;
+- retune B15 SSL epochs/LR/TTA from its gold result;
+- regenerate weak-v2 after seeing B15;
+- optimize ensemble weights on the reused gold set;
+- call weak-v2 AUC expert performance;
+- call the 58-study development result a hidden-test guarantee.
+
+The next genuinely independent performance signal is the hidden Kaggle evaluation.
