@@ -1,82 +1,67 @@
 # Fold-safe report teacher benchmark
 
-> Current campaign status is summarized in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
+> **Status — 2026-08-12:** **COMPLETED / REJECTED AS A GENERAL 12-TARGET TEACHER.** The benchmark remains historical. Reports later proved useful through B5 representation alignment and B6 structured weak states. B13 is the current reused-gold champion; B15 now motivates a direct audit of B6 report states.
 
 The competition test CSV does not provide report text, so reports are **training supervision only**. Final submission inference remains MRI-only.
 
-## Benchmark components
+## Benchmark
 
-The v0.5 teacher benchmark combined:
+The fold-safe teacher combined:
 
 1. deterministic multilingual clinical-rule states with fold-safe empirical calibration;
-2. word TF-IDF (1-2 grams) + target-specific balanced logistic regression;
-3. character TF-IDF (3-5 grams) + target-specific balanced logistic regression.
+2. word TF-IDF + target-specific balanced logistic regression;
+3. character TF-IDF + target-specific balanced logistic regression.
 
-No external model, external corpus, LLM or pretrained text encoder was used.
+No external model, corpus, LLM or pretrained text encoder was used.
 
-## Leakage contract
+For every outer gold fold, the outer reports/labels were excluded from rule calibration, vocabulary fitting, text-classifier fitting and component selection.
 
-For outer gold fold `k`:
-
-- outer reports/labels are excluded from rule calibration;
-- their report groups are excluded from TF-IDF vocabulary/IDF fitting;
-- their labels are excluded from text classifiers;
-- the remaining two gold folds are cross-fitted;
-- target-specific component weights/calibration are selected only from inner cross-fit evidence;
-- the final fold-`k` teacher is then fitted on all non-outer gold.
-
-This makes the benchmark a legitimate test of whether supervised text classification from the tiny gold set is strong enough to serve as an MRI teacher.
-
-## Final result
+## Result
 
 ```text
 macro AUC = 0.4924496600
-95% CI    = [0.4396044171, 0.5460505497]
+95% CI   = [0.4396044171,0.5460505497]
 ```
 
-Per-target AUC:
+Decision: **rejected as a general Stage-1 12-target teacher**. The tiny gold-labelled report sample was insufficient for reliable supervised text probabilities across all targets.
 
-| Target | AUC |
-|---|---:|
-| ACL | 0.5723 |
-| MCL | 0.3991 |
-| Medial Meniscus | 0.5108 |
-| Lateral Meniscus | 0.3764 |
-| Medial OA | 0.5209 |
-| Lateral OA | 0.4449 |
-| PF OA | 0.4607 |
-| Effusion | 0.4584 |
-| Synovitis | 0.4851 |
-| Baker's | 0.5453 |
-| Contusion | 0.4022 |
-| Fracture | 0.7333 |
+Fracture was the strongest target point estimate, but target-specific post-hoc adoption was not allowed.
 
-## Decision
+## Why reports remained useful
 
-**Rejected as a general Stage-1 teacher.** The pooled result is near chance and the text classifiers see only roughly 38-40 non-outer gold reports per fold.
+Rejecting the fold-safe teacher did not imply that reports contain no useful information.
 
-The exported fold-specific pseudo-label files are retained for audit/research, but they do not globally replace the conservative rule-teacher path.
+B5 instead used all 4,349 report-only competition studies for semantic image-report alignment without requiring 12-target labels. B5 reached `0.5243650851` under the unchanged frozen-feature probe and became the representation source for B7-family experiments.
 
-Fracture was the only clearly strong target in this benchmark. Post-hoc target-specific use is not adopted from these outer results without a new controlled experiment.
-
-## Why B5 still uses reports
-
-Rejecting this teacher does **not** mean reports contain no useful information. It means converting report text into 12 supervised probabilities from only 58 labelled reports was not reliable enough.
-
-B5 takes a different approach:
+B6 then converted reports into auditable target states:
 
 ```text
-4,349 report-only competition studies
-report -> TF-IDF -> TruncatedSVD semantic embedding
-MRI    -> strong SSL ConvNeXt representation
-       -> image-report alignment
+positive
+negated
+uncertain
+unmentioned
 ```
 
-B5 never requires target labels for the report-only studies and excludes all 58 gold cases from representation training. Thus B5 tests whether report semantics can shape the MRI representation without relying on the failed 12-target report classifier.
+with 14,123 usable high-confidence cells across 3,120 active report-only studies.
 
-**B5 is currently running; no B5 AUC is available yet.**
+## Current B15-era interpretation
 
-## Reproduce this benchmark
+B15 strongly improved ranking of the frozen B6 teacher labels:
+
+```text
+B13-v2 control weak-v2  0.5652498118
+B15 weak-v2             0.7319060415
+paired median           +0.1675245839
+95% CI                  [+0.1124433208,+0.2165156305]
+```
+
+Yet B15's expert-gold macro AUC was `0.6209002783`, below B13 `0.6293565948`.
+
+This makes the information content of the report states themselves a high-priority diagnostic. The next step is not to revive the tiny supervised text teacher, but to measure how `positive`, `negated`, `uncertain`, and `unmentioned` states relate to expert truth by target.
+
+Do not assume unmentioned findings are negatives.
+
+## Reproduction
 
 ```bash
 python -m rsna_knee.report_teacher_cli \
@@ -85,17 +70,4 @@ python -m rsna_knee.report_teacher_cli \
   --n-bootstrap 2000
 ```
 
-Outputs:
-
-```text
-runs/report_teacher/
-  metrics.json
-  oof.csv
-  fold_assignments.csv
-  fold0/teacher.json
-  fold0/pseudo_labels.csv
-  fold1/teacher.json
-  fold1/pseudo_labels.csv
-  fold2/teacher.json
-  fold2/pseudo_labels.csv
-```
+Current status: [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). B6 record: [`B6_STRUCTURED_REPORT_LABELS.md`](B6_STRUCTURED_REPORT_LABELS.md).
