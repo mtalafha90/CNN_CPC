@@ -1,10 +1,10 @@
 # B6 — structured multilingual report labels
 
-> **Status — 2026-08-10:** **COMPLETE / FROZEN at v1.2.1.** B6 is the frozen weak-label source for B7-v1, B7.1, and the currently training B8 experiment. No additional parser or confidence-threshold tuning should be performed using the 58 gold studies.
+> **Status — 2026-08-12:** **COMPLETE / FROZEN at v1.2.1.** B6 remains the historical weak-label source through B15. The completed B15 experiment makes a direct audit of B6's four report states the next evidence-driven step; B6 itself must not be edited in place from downstream outcomes.
 
 ## Goal
 
-B6 converts each competition training report into auditable target-level weak labels for all 12 abnormalities:
+B6 converts each competition training report into auditable target-level weak states for all 12 abnormalities:
 
 ```text
 positive
@@ -13,75 +13,50 @@ uncertain
 unmentioned
 ```
 
-Each cell also stores a fixed soft probability, confidence, reason, and evidence snippet. The 58 gold studies are retained only for audit and are excluded from `training_targets.csv`.
+Each cell stores a fixed soft probability, confidence, reason, and evidence snippet. The 58 gold studies are audit-only and are excluded from `training_targets.csv`.
 
 ## Frozen leakage contract
 
 B6 v1.2.1:
 
 - uses only competition `train.csv` reports;
-- uses no external model, external language resource, or external data;
+- uses no external model or external language resource;
 - does not fit calibration on gold;
 - does not convert report silence to a negative;
 - excludes every gold row from the weak-training export;
-- keeps uncertain/unmentioned cells at low or zero confidence;
 - uses the audited confidence threshold `0.75`.
 
-## Corpus audit — v1.2.1
+## Frozen report-only corpus
 
-The final corpus run covered all 4,407 reports, with 58 gold rows audit-only and 4,349 report-only rows available to the weak-label exporter.
-
-At confidence `>=0.75`, v1.2.1 produced **14,123 usable target cells** across the report-only pool.
-
-| Target | Positive | Negative | Usable | Fraction |
-|---|---:|---:|---:|---:|
-| ACL | 572 | 1,089 | 1,661 | 38.2% |
-| MCL | 271 | 1,089 | 1,360 | 31.3% |
-| Medial Meniscus | 1,126 | 536 | 1,662 | 38.2% |
-| Lateral Meniscus | 448 | 1,182 | 1,630 | 37.5% |
-| Medial OA | 484 | 334 | 818 | 18.8% |
-| Lateral OA | 402 | 382 | 784 | 18.0% |
-| PF OA | 682 | 372 | 1,054 | 24.2% |
-| Effusion | 1,338 | 757 | 2,095 | 48.2% |
-| Synovitis | 399 | 17 | 416 | 9.6% |
-| Baker's | 557 | 476 | 1,033 | 23.8% |
-| Contusion | 389 | 466 | 855 | 19.7% |
-| Fracture | 203 | 552 | 755 | 17.4% |
-
-The final review queue contained 107 definite-conflict cells. Remaining conflicts are now mostly real semantic/report disagreements rather than broad parser-scope errors, so further corpus-rule expansion was stopped.
-
-## Parser evolution
-
-### v1.0
-
-The initial implementation established multilingual aliases, target states, negation, uncertainty, and an audit queue. It produced 13,823 usable report-only cells but over-produced structural uncertainty.
-
-### v1.1
-
-The first real-corpus review motivated target-local context, arrow delimiters, direct negated structural findings, non-diagnostic indication handling, deduplication, and the rule that uncertain duplicates do not cancel definite evidence.
-
-### v1.2 / v1.2.1
-
-The final corrections added:
-
-- pathology dominance over generic nearby normality;
-- preservation of abnormalities such as degeneration even when tear is explicitly absent;
-- detection of `loss of normal fibers` as abnormality;
-- suppression of clinical indication/history as diagnostic evidence;
-- component-aware structural aggregation, so a focal abnormality can coexist with normal uninvolved components.
-
-Examples resolved correctly include:
+At confidence `>=0.75`, B6 produced:
 
 ```text
-superficial MCL tear + deep MCL intact -> positive
-posterior-horn meniscal tear + remainder intact -> positive
-proximal ACL tear + tibial insertion intact -> positive
-ACL intact + complete ACL tear -> conflict
+report-only studies   4349
+active studies        3120
+inactive studies      1229
+usable cells         14123
+positive cells        6871
+negative cells        7252
 ```
 
-## Gold audit — frozen v1.2.1
+Per target:
 
-The final parser was audited once against the 58 gold studies without fitting, threshold search, or post-audit parser changes.
+| Target | Positive | Negative | Usable |
+|---|---:|---:|---:|
+| ACL | 572 | 1,089 | 1,661 |
+| MCL | 271 | 1,089 | 1,360 |
+| Medial Meniscus | 1,126 | 536 | 1,662 |
+| Lateral Meniscus | 448 | 1,182 | 1,630 |
+| Medial OA | 484 | 334 | 818 |
+| Lateral OA | 402 | 382 | 784 |
+| PF OA | 682 | 372 | 1,054 |
+| Effusion | 1,338 | 757 | 2,095 |
+| Synovitis | 399 | 17 | 416 |
+| Baker's | 557 | 476 | 1,033 |
+| Contusion | 389 | 466 | 855 |
+| Fracture | 203 | 552 | 755 |
+
+## Frozen gold audit
 
 Across 251 high-confidence usable gold cells:
 
@@ -90,11 +65,7 @@ TP = 116
 TN = 80
 FP = 52
 FN = 3
-```
 
-Pooled metrics:
-
-```text
 positive precision = 0.690476
 sensitivity        = 0.974790
 specificity        = 0.606061
@@ -104,7 +75,7 @@ balanced accuracy  = 0.790425
 coverage           = 0.360632
 ```
 
-The main scientific conclusion is asymmetric: **B6 explicit negatives are much more reliable than B6 explicit positives.** This motivates the fixed global weak-supervision policy used by B7-v1, B7.1, and B8:
+The audit motivated the fixed global downstream policy:
 
 ```text
 B6 positive -> target 0.85, weight 0.50
@@ -112,7 +83,63 @@ B6 negated  -> target 0.05, weight 1.00
 uncertain/unmentioned -> ignored
 ```
 
-Because the global policy was chosen after inspecting the B6 gold audit, subsequent B7/B7.1/B8 performance on the same 58 studies is development performance rather than pristine independent validation.
+Because this global policy was informed by the gold audit, later gold scores are development/model-selection estimates even though gold labels did not enter model gradients or early stopping.
+
+These audit metrics demonstrate noisy, sparse and asymmetric supervision. They do **not** establish a numerical downstream AUC ceiling.
+
+## Downstream evidence through B15
+
+Representative reused-gold results:
+
+```text
+B7-v1   0.5397724412
+B7.1    0.5644802945
+B11.1   0.5506902702
+B12     0.5660915179
+B13     0.6293565948  retained champion
+B14     0.6197914249
+B15     0.6209002783
+```
+
+B15 introduced a frozen weak-v2 teacher-agreement gate. On that surface:
+
+```text
+B13-v2 control  0.5652498118
+B15            0.7319060415
+raw delta      +0.1666562297
+paired median  +0.1675245839
+95% CI         [+0.1124433208,+0.2165156305]
+P(B15>control)  1.0000
+```
+
+The gate passed decisively. Yet B15's one-look expert-gold macro AUC was `0.6209002783`, slightly below B13 `0.6293565948`.
+
+This is the most important new B6-era lesson: **a large improvement in reproducing the frozen B6 target ordering did not translate to a global expert-gold improvement.**
+
+## Current interpretation
+
+The next question is not whether B6 should be tuned blindly. It is whether its four states contain different amounts of expert-label information by target.
+
+The next diagnostic should therefore quantify, for each target/state:
+
+```text
+count
+expert-positive fraction
+expert-negative fraction
+coverage
+precision / NPV where meaningful
+```
+
+with particular attention to:
+
+```text
+P(expert positive | positive)
+P(expert positive | negated)
+P(expert positive | uncertain)
+P(expert positive | unmentioned)
+```
+
+Do **not** assume `unmentioned = negative`. Report silence is distinct from explicit negation.
 
 ## Frozen artifacts
 
@@ -124,25 +151,12 @@ runs/b6_report_labels_v121/
 ├── audit.json
 ├── policy.json
 └── gold_audit/
-    ├── gold_audit.json
-    ├── gold_usable_cells.csv
-    └── gold_mismatches.csv
 ```
 
-## Downstream experiment record
+## Decision
 
-The frozen B6 export has now supported:
+**B6 v1.2.1 remains frozen.** Do not create another parser revision, confidence threshold, or state weighting based directly on the existing downstream gold results and still call it B6 v1.2.1.
 
-```text
-B7-v1  macro AUC = 0.5397724412
-B7.1   macro AUC = 0.5644802945  [current leader]
-B8     pending                     [training in progress]
-```
+If the state audit supports a new policy, define a separately versioned/frozen supervision successor before training.
 
-B7.1 improved the point estimate after increasing weak-training coverage from about 1.28 nominal corpus passes to four full passes. B8 keeps this same B6 supervision and full coverage while changing only the MRI spatial representation/attention path.
-
-## Final decision
-
-**B6 = PASS as asymmetric weak supervision and is frozen.**
-
-Do not create another B6 parser revision based on the existing gold audit or later B7/B8 target-level results. Current downstream status is documented in `docs/B7_WEAK_SUPERVISION.md`, `docs/B7_1_FULL_COVERAGE.md`, `docs/B8_SPATIAL_ANATOMY.md`, and `docs/EXPERIMENT_STATUS.md`.
+Current campaign status: [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). Post-B15 roadmap: [`RAISING_AUC.md`](RAISING_AUC.md).
