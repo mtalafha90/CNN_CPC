@@ -2,12 +2,13 @@
 
 `CNN_CPC` is a PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The released training surface contains 4,407 studies, 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and 12 study-level targets evaluated with macro ROC AUC.
 
-> **Current snapshot — 2026-08-12:** **B13 remains the reused-gold development champion** at macro AUC `0.6293565948`. B15 decisively improved agreement with the frozen B6 weak-label teacher on weak holdout v2 (`0.7319060415` versus matched B13-v2 control `0.5652498118`), but its one-look reused-gold confirmation was `0.6209002783`, so it did **not** replace B13 globally. The next evidence-driven step is a B6 report-state audit before defining any new supervision experiment.
+> **Current snapshot — 2026-08-12:** **B13 remains the reused-gold development champion** at macro AUC `0.6293565948`. B15 decisively improved agreement with the frozen B6 weak-label teacher on weak holdout v2 (`0.7319060415` versus matched B13-v2 control `0.5652498118`), but its one-look reused-gold confirmation was `0.6209002783`, so it did **not** replace B13 globally. Package `0.24.2` adds the no-GPU **B6/B15 reused-gold diagnostic package** to quantify B6 state truth rates and test whether B15 moved toward B6 specifically on B6-wrong gold cells.
 
 Canonical records:
 
 - [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md) — complete experiment ledger.
 - [`docs/B15_MRI_SSL.md`](docs/B15_MRI_SSL.md) — B15 protocol and results.
+- [`docs/B6_B15_GOLD_DIAGNOSTIC.md`](docs/B6_B15_GOLD_DIAGNOSTIC.md) — post-B15 B6/state/noise-alignment diagnostic.
 - [`docs/WEAK_HOLDOUT_V2.md`](docs/WEAK_HOLDOUT_V2.md) — frozen weak-v2 contract and paired gate.
 - [`docs/VALIDATION.md`](docs/VALIDATION.md) — validation-surface governance.
 - [`docs/RAISING_AUC.md`](docs/RAISING_AUC.md) — post-B15 improvement roadmap.
@@ -15,7 +16,7 @@ Canonical records:
 ## Current software state
 
 ```text
-package version          0.24.1
+package version          0.24.2
 primary metric           12-target macro ROC AUC
 development champion     B13 = 0.6293565948
 B14 gold                 0.6197914249 / rejected globally
@@ -23,7 +24,7 @@ B15 weak-v2              0.7319060415 / gate passed
 B15 reused gold          0.6209002783 / did not replace B13
 weak holdout v2          frozen / teacher agreement only
 slice undersampling      rejected as primary B13 bottleneck
-next evidence step       B6 report-state audit
+next evidence step       B6/B15 reused-gold diagnostic (implemented)
 final inference          MRI-only
 ```
 
@@ -168,21 +169,25 @@ Decision: slice-count undersampling as the primary B13 bottleneck is rejected. D
 
 ## Current direction
 
-The B15 result shifts attention from simply improving MRI representation or downstream capacity toward the supervision interface. The next step is an **audit, not another training run**:
+The B15 result shifts attention from simply improving MRI representation or downstream capacity toward the supervision interface. Package `0.24.2` implements the next diagnostic without another training run:
 
 ```text
-B6 report state per target
-positive / negated / uncertain / unmentioned
+B6 state truth audit over all 696 reused-gold cells
+        +
+coverage-conditioned high-confidence teacher AUC
+        +
+full-surface state-only ranking baseline
+        +
+B13 -> B15 movement on B6-correct vs B6-wrong cells
         |
         v
-compare with expert truth on the already-reused gold surface
-        |
-        v
-quantify state-specific truth rates and coverage
+study-cluster bootstrap of teacherward / truthward movement
         |
         v
 only then define a separately frozen supervision successor if justified
 ```
+
+Run it with `rsna-knee-b6-b15-diagnostic`; see [`docs/B6_B15_GOLD_DIAGNOSTIC.md`](docs/B6_B15_GOLD_DIAGNOSTIC.md).
 
 Do not blindly convert unmentioned findings to negatives. Do not construct target-wise B13/B15 hybrids, tune B15 from the gold confirmation, or regenerate weak-v2 based on model performance.
 
