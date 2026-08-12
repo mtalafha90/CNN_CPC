@@ -2,13 +2,13 @@
 
 `CNN_CPC` is a PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The released training surface contains 4,407 studies, 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and 12 study-level targets evaluated with macro ROC AUC.
 
-> **Current snapshot — 2026-08-12:** **B16 is the current reused-gold development champion by the predeclared global point-estimate rule** at macro AUC `0.6349770242`. Its advantage over B13 is only `+0.0056204295` and is statistically unresolved: paired 95% CI `[-0.0395927864,+0.0519351407]`, `P(B16>B13)=0.5828`. **B17 is now implemented and frozen before its first gold look**: it starts from the completed B16 report-aligned encoder, freezes every encoder parameter and training-time encoder stochasticity, and trains only the unchanged B13/B16 hierarchy/head for five exact full B6 passes. No extra label smoothing, robust loss, gold early stopping, or weak-v2 gate is used.
+> **Current snapshot — 2026-08-13:** **B17 is the current reused-gold development champion by the predeclared global point-estimate rule** at macro AUC `0.6425890153`. Its advantage over B16 is `+0.0076119910`, with paired median `+0.0074330332`, 95% paired CI `[-0.0188853047,+0.0332991195]`, and `P(B17>B16)=0.7110`. The gain is positive but statistically unresolved. B17 freezes the completed B16 report-aligned encoder and trains only the unchanged B13/B16 hierarchy/head for five exact full B6 passes.
 
 Canonical records:
 
 - [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md) — current experiment ledger.
-- [`docs/B17_FROZEN_ENCODER.md`](docs/B17_FROZEN_ENCODER.md) — predeclared B17 frozen-encoder protocol.
-- [`docs/B16_FULL_REPORT_ALIGNMENT.md`](docs/B16_FULL_REPORT_ALIGNMENT.md) — B16 protocol, training integrity, and final result.
+- [`docs/B17_FROZEN_ENCODER.md`](docs/B17_FROZEN_ENCODER.md) — completed B17 protocol and result.
+- [`docs/B16_FULL_REPORT_ALIGNMENT.md`](docs/B16_FULL_REPORT_ALIGNMENT.md) — B16 protocol and result.
 - [`docs/B15_MRI_SSL.md`](docs/B15_MRI_SSL.md) — B15 protocol and results.
 - [`docs/B6_B15_GOLD_DIAGNOSTIC.md`](docs/B6_B15_GOLD_DIAGNOSTIC.md) — B6 state/noise-alignment diagnostic.
 - [`docs/VALIDATION.md`](docs/VALIDATION.md) — validation governance.
@@ -18,11 +18,11 @@ Canonical records:
 ```text
 package version          0.26.0
 primary metric           12-target macro ROC AUC
-development champion     B16 = 0.6349770242 by frozen point-estimate rule
-B13 reference            0.6293565948 / statistically unresolved with B16
-B15 reused gold          0.6209002783 / no global improvement
+development champion     B17 = 0.6425890153 by frozen point-estimate rule
+B16 reference            0.6349770242 / statistically unresolved with B17
+B13 reference            0.6293565948
+B15 reused gold          0.6209002783
 B6 full-state baseline   0.7024597743 / descriptive information reference, not ceiling
-B17                     frozen B16 encoder + 5 fixed head/hierarchy epochs / not yet run
 weak-v2                  teacher agreement only / not a B16/B17 gate
 final inference          MRI-only
 next independent signal  hidden Kaggle evaluation
@@ -40,40 +40,64 @@ next independent signal  hidden Kaggle evaluation
 | B6 | structured report labels | n/a | frozen weak-label source |
 | B7.1 | full B6 weak-supervised pathology model | `0.5644802945` gold | historical benchmark |
 | B12 | all real MRI series | `0.5660915179` gold | historical reference |
-| **B13** | **ImageNet ConvNeXt + hierarchical one-token-per-series** | **`0.6293565948` gold** | **retained historical champion/reference** |
+| **B13** | **ImageNet ConvNeXt + hierarchical one-token-per-series** | **`0.6293565948` gold** | historical champion/reference |
 | B14 | full `K x 16` slice-token memory + B13 protocol | `0.6197914249` gold | rejected globally |
 | B15 | ImageNet -> knee-MRI SSL -> B13 hierarchy | weak-v2 `0.7319060415`; gold `0.6209002783` | teacher gain, no gold gain |
-| **B16** | **B15 encoder -> full-report semantic alignment -> full B13/B6 surface** | **`0.6349770242` gold** | **current champion by frozen point-estimate rule; superiority unresolved** |
-| **B17** | **freeze completed B16 report-aligned encoder; train hierarchy/head only for 5 fixed full B6 epochs** | **not run** | **implemented / predeclared** |
+| **B16** | **B15 encoder -> full-report semantic alignment -> full B13/B6 surface** | **`0.6349770242` gold** | historical champion/reference; unresolved with B17 |
+| **B17** | **freeze completed B16 report-aligned encoder; train hierarchy/head only for 5 fixed full B6 epochs** | **`0.6425890153` gold** | **current champion by frozen point-estimate rule; superiority unresolved** |
 
-## B16 completed result
+## B17 completed result
 
-B16 report alignment used all 4,349 non-gold reports and 24,035 eligible real MRI series. Four complete report-alignment passes reduced total loss from `3.8958491301` to `2.5218941658`; every epoch covered exactly 4,349 studies, 24,035 series, and 48,070 2.5D examples with no budget truncation.
+B17 used the completed report-aligned encoder checkpoint:
 
-B16 then returned to the exact full B13 downstream surface:
+```text
+runs/b16_full_report/report_ssl/b16_report_encoder.pt
+```
+
+and froze it completely during downstream training. The encoder had zero trainable parameters, zero optimizer membership, zero gradients, remained in evaluation mode, and retained exactly the same SHA-256 fingerprint through all five epochs:
+
+```text
+b328667cf9dfa9b909ef181c1bcc8975ec42bcd8b9eddad08f908875b73fae96
+```
+
+Every epoch covered exactly:
 
 ```text
 3120 studies
 14123 usable B6 cells
 6871 positive / 7252 negative
 17475 real MRI series
-1560 batches per epoch
-4 complete epochs
+1560 batches
+full coverage true
+full series coverage true
+budget limited false
 ```
 
-Final reused-gold result:
+Training losses:
 
 ```text
-B16 macro AUC      0.6349770242
-95% CI            [0.5854729266,0.6830266155]
-B13 macro AUC      0.6293565948
-raw B16-B13       +0.0056204295
-paired median     +0.0050711608
-95% paired CI     [-0.0395927864,+0.0519351407]
-P(B16 > B13)       0.5828
+0.7371836930
+0.6336947483
+0.6087776578
+0.5862506992
+0.5667051629
 ```
 
-The predeclared rule was global point estimate only, so B16 is retained as the development champion. The paired result does **not** establish true superiority over B13.
+One-look reused-gold result:
+
+```text
+B17 macro AUC      0.6425890153
+95% CI            [0.5935606351,0.6887356582]
+B16 macro AUC      0.6349770242
+raw B17-B16       +0.0076119910
+paired median     +0.0074330332
+95% paired CI     [-0.0188853047,+0.0332991195]
+P(B17 > B16)       0.7110
+```
+
+The predeclared rule uses the global point estimate, so B17 becomes the development champion. The paired evidence does **not** establish true superiority over B16.
+
+B17 gives modest support to preserving the report-aligned representation rather than continuing to update the encoder directly against sparse/noisy B6 supervision. Because B17 also used five fixed downstream epochs versus four for B16, the difference cannot be attributed solely to freezing.
 
 ## B6/B15 diagnostic result
 
@@ -86,39 +110,10 @@ high-confidence B6 cells      251
 B6 correct / wrong            196 / 55
 ```
 
-On the 55 B6-wrong cells, B15 did not systematically move toward B6 errors; 63.6% moved toward expert truth. The state baseline is therefore treated as a **supervision-information reference**, not a numerical MRI ceiling.
-
-## B17 frozen protocol
-
-B17 asks whether B6 fine-tuning is degrading the useful B16 representation. It uses the exact completed representation checkpoint:
-
-```text
-runs/b16_full_report/report_ssl/b16_report_encoder.pt
-```
-
-and enforces:
-
-```text
-encoder trainable parameters      0
-encoder optimizer membership      false
-encoder training mode             false
-encoder LR                        0
-encoder SHA-256                    unchanged before/after every epoch
-head LR                           1e-4
-epochs                            5 exact full passes
-training studies                  3120
-training series                   17475
-B6 targets/weights                unchanged
-additional label smoothing        0
-robust loss                       none
-gold early stopping               none
-weak-v2 gate                      none
-```
-
-B17 deliberately changes both freezing policy and fixed training length (`4 -> 5` epochs) relative to B16, so it is a frozen-short-training protocol test rather than a mathematically pure one-variable freezing ablation.
+On the 55 B6-wrong cells, B15 did not systematically move toward B6 errors; 63.6% moved toward expert truth. The state baseline is treated as a **supervision-information reference**, not a numerical MRI ceiling.
 
 ## Governance
 
-Do not tune B16 after the gold look. For B17, do not add epoch 6, label smoothing, ELR/SCE, head-LR changes, target-wise B16/B17 mixing, or gold checkpoint selection based on the first B17 gold result.
+B16 and B17 are closed to post-gold tuning. Do not add epoch 6, choose label smoothing or ELR/SCE from the B17 gold result, tune head LR from gold, or construct target-specific B16/B17 mixtures.
 
 The 58-study gold surface remains a repeatedly reused development/model-selection set. The most credible independent performance signal remains the **hidden Kaggle evaluation**.
