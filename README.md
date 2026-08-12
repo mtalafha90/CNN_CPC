@@ -2,29 +2,28 @@
 
 `CNN_CPC` is a PyTorch research pipeline for the **2026 RSNA Knee Abnormality Detection** challenge. The released training surface contains 4,407 studies, 58 fully labelled gold studies, 4,349 report-only studies, multiple MRI series per knee, and 12 study-level targets evaluated with macro ROC AUC.
 
-> **Current snapshot — 2026-08-12:** **B16 is the current reused-gold development champion by the predeclared global point-estimate rule** at macro AUC `0.6349770242`. Its advantage over B13 is only `+0.0056204295` and is statistically unresolved: paired 95% CI `[-0.0395927864,+0.0519351407]`, `P(B16>B13)=0.5828`. B16 is therefore retained by policy, not claimed as demonstrated superior. The 58-study gold set remains a repeatedly reused development/model-selection surface, not independent validation.
+> **Current snapshot — 2026-08-12:** **B16 is the current reused-gold development champion by the predeclared global point-estimate rule** at macro AUC `0.6349770242`. Its advantage over B13 is only `+0.0056204295` and is statistically unresolved: paired 95% CI `[-0.0395927864,+0.0519351407]`, `P(B16>B13)=0.5828`. **B17 is now implemented and frozen before its first gold look**: it starts from the completed B16 report-aligned encoder, freezes every encoder parameter and training-time encoder stochasticity, and trains only the unchanged B13/B16 hierarchy/head for five exact full B6 passes. No extra label smoothing, robust loss, gold early stopping, or weak-v2 gate is used.
 
 Canonical records:
 
 - [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md) — current experiment ledger.
+- [`docs/B17_FROZEN_ENCODER.md`](docs/B17_FROZEN_ENCODER.md) — predeclared B17 frozen-encoder protocol.
 - [`docs/B16_FULL_REPORT_ALIGNMENT.md`](docs/B16_FULL_REPORT_ALIGNMENT.md) — B16 protocol, training integrity, and final result.
 - [`docs/B15_MRI_SSL.md`](docs/B15_MRI_SSL.md) — B15 protocol and results.
 - [`docs/B6_B15_GOLD_DIAGNOSTIC.md`](docs/B6_B15_GOLD_DIAGNOSTIC.md) — B6 state/noise-alignment diagnostic.
-- [`docs/WEAK_HOLDOUT_V2.md`](docs/WEAK_HOLDOUT_V2.md) — frozen weak-v2 contract.
 - [`docs/VALIDATION.md`](docs/VALIDATION.md) — validation governance.
 
 ## Current software state
 
 ```text
-package version          0.25.0
+package version          0.26.0
 primary metric           12-target macro ROC AUC
 development champion     B16 = 0.6349770242 by frozen point-estimate rule
 B13 reference            0.6293565948 / statistically unresolved with B16
-B14 gold                 0.6197914249 / rejected globally
-B15 weak-v2              0.7319060415 / teacher-agreement gate passed
 B15 reused gold          0.6209002783 / no global improvement
-B6 full-state baseline   0.7024597743 / descriptive, not ceiling
-weak-v2                  teacher agreement only / not a B16 gate
+B6 full-state baseline   0.7024597743 / descriptive information reference, not ceiling
+B17                     frozen B16 encoder + 5 fixed head/hierarchy epochs / not yet run
+weak-v2                  teacher agreement only / not a B16/B17 gate
 final inference          MRI-only
 next independent signal  hidden Kaggle evaluation
 ```
@@ -45,6 +44,7 @@ next independent signal  hidden Kaggle evaluation
 | B14 | full `K x 16` slice-token memory + B13 protocol | `0.6197914249` gold | rejected globally |
 | B15 | ImageNet -> knee-MRI SSL -> B13 hierarchy | weak-v2 `0.7319060415`; gold `0.6209002783` | teacher gain, no gold gain |
 | **B16** | **B15 encoder -> full-report semantic alignment -> full B13/B6 surface** | **`0.6349770242` gold** | **current champion by frozen point-estimate rule; superiority unresolved** |
+| **B17** | **freeze completed B16 report-aligned encoder; train hierarchy/head only for 5 fixed full B6 epochs** | **not run** | **implemented / predeclared** |
 
 ## B16 completed result
 
@@ -86,10 +86,39 @@ high-confidence B6 cells      251
 B6 correct / wrong            196 / 55
 ```
 
-On the 55 B6-wrong cells, B15 did not systematically move toward B6 errors; 63.6% moved toward expert truth. The pooled state audit showed informative but pathology-dependent middle states, so B16 used full report semantics rather than gold-derived `uncertain`/`unmentioned` pseudo-targets.
+On the 55 B6-wrong cells, B15 did not systematically move toward B6 errors; 63.6% moved toward expert truth. The state baseline is therefore treated as a **supervision-information reference**, not a numerical MRI ceiling.
+
+## B17 frozen protocol
+
+B17 asks whether B6 fine-tuning is degrading the useful B16 representation. It uses the exact completed representation checkpoint:
+
+```text
+runs/b16_full_report/report_ssl/b16_report_encoder.pt
+```
+
+and enforces:
+
+```text
+encoder trainable parameters      0
+encoder optimizer membership      false
+encoder training mode             false
+encoder LR                        0
+encoder SHA-256                    unchanged before/after every epoch
+head LR                           1e-4
+epochs                            5 exact full passes
+training studies                  3120
+training series                   17475
+B6 targets/weights                unchanged
+additional label smoothing        0
+robust loss                       none
+gold early stopping               none
+weak-v2 gate                      none
+```
+
+B17 deliberately changes both freezing policy and fixed training length (`4 -> 5` epochs) relative to B16, so it is a frozen-short-training protocol test rather than a mathematically pure one-variable freezing ablation.
 
 ## Governance
 
-Do not tune B16 after the gold look, extend epochs, change report temperature/queue/loss weight, create target-wise B13/B16 hybrids, or derive new soft labels from the repeatedly reused 58-study gold set.
+Do not tune B16 after the gold look. For B17, do not add epoch 6, label smoothing, ELR/SCE, head-LR changes, target-wise B16/B17 mixing, or gold checkpoint selection based on the first B17 gold result.
 
-The most credible next performance signal is the **hidden Kaggle evaluation**. Any further B17 experiment must be separately predeclared rather than tuned as a continuation of B16.
+The 58-study gold surface remains a repeatedly reused development/model-selection set. The most credible independent performance signal remains the **hidden Kaggle evaluation**.
