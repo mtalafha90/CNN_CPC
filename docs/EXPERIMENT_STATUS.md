@@ -1,7 +1,7 @@
 # Experiment status
 
 **Snapshot:** 2026-08-12  
-**Package:** `0.24.1`  
+**Package:** `0.24.2`  
 **Gold development set:** 58 fully labelled studies  
 **Primary metric:** macro ROC AUC across 12 targets
 
@@ -18,7 +18,7 @@ The 58-study expert-labelled surface has supported repeated sequential developme
 - **B13 therefore remains retained. B15 is not a global gold improvement.**
 - Full B13 slice exposure audit rejects slice-count undersampling as a primary bottleneck.
 - Frozen weak holdout v2 remains fixed and must not be regenerated from model performance.
-- **Next evidence-driven step:** audit B6 report states (`positive`, `negated`, `uncertain`, `unmentioned`) against expert truth before defining a new supervision experiment.
+- **Post-B15 diagnostic implemented:** `rsna-knee-b6-b15-diagnostic` computes coverage-conditioned B6 teacher AUC, a full-surface B6 state-only baseline, per-state expert truth rates, and B13->B15 movement on B6-correct versus B6-wrong gold cells with study-cluster bootstrap. No diagnostic result is recorded until the command is run.
 
 ## Experiment ladder
 
@@ -293,6 +293,22 @@ This is consistent with the supervision interface becoming a leading bottleneck 
 
 The result does **not** prove B15 is intrinsically worse as an MRI representation, and it does not establish a numerical label-noise ceiling.
 
+## B6/B15 reused-gold diagnostic — implemented, pending run
+
+Package `0.24.2` adds `rsna-knee-b6-b15-diagnostic`. It uses only existing artifacts and no GPU. The package computes:
+
+```text
+1. coverage-conditioned high-confidence B6 teacher AUC
+2. full 696-cell B6 state-only ranking baseline
+3. per-target positive / negated / uncertain / unmentioned expert truth rates
+4. B13 -> B15 movement on B6-correct vs B6-wrong high-confidence cells
+5. study-cluster bootstrap intervals for teacherward and truthward movement
+```
+
+The coverage-conditioned teacher AUC is explicitly **not** treated as a full-surface model ceiling. The strongest diagnostic for B6-error imitation is whether B6-wrong cells move toward B6 while moving farther from expert truth.
+
+Canonical protocol: `docs/B6_B15_GOLD_DIAGNOSTIC.md`.
+
 ## Current decision / next stage
 
 ```text
@@ -304,11 +320,10 @@ slice-count hypothesis REJECT
 weak-v2 remains FROZEN
        |
        v
-B6 report-state audit on already-reused gold
-positive / negated / uncertain / unmentioned
+run B6/B15 reused-gold diagnostic
        |
        v
-quantify expert truth rates and coverage
+inspect state truth rates + B6-wrong movement globally
        |
        v
 only if justified: separately versioned/frozen supervision successor
