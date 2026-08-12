@@ -1,6 +1,6 @@
 # B12 — variable-number-of-series MRI model
 
-> **Status — 2026-08-11:** **COMPLETED / RETAINED HISTORICAL REFERENCE.** B12 macro AUC is `0.5660915179`; it was statistically tied with B7.1 and has since been surpassed by B13.
+> **Status — 2026-08-12:** **COMPLETED / RETAINED HISTORICAL REFERENCE.** B12 macro AUC is `0.5660915179`; it was statistically tied with B7.1 and has since been surpassed by B13. B15 completed afterward and did not replace B13.
 
 ## Scientific change
 
@@ -17,13 +17,11 @@ extra fraction vs historical          12.9752%
 studies with extra series                1099
 fraction studies with extra series     35.2244%
 studies with zero eligible series           0
-historical selected series missing          0
 series/study min / median / max       3 / 5 / 14
-q90 / q95 / q99                      8 / 9 / 10
 viability_passed                         true
 ```
 
-Frozen variable-series mapping SHA-256:
+Frozen mapping SHA-256:
 
 ```text
 5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376
@@ -31,16 +29,14 @@ Frozen variable-series mapping SHA-256:
 
 ## Training integrity
 
-All four epochs completed the exact frozen contract:
+All four epochs completed the exact contract:
 
 ```text
 batches                         1560
-each epoch study_draws          3120
+study_draws                     3120
 active supervision cells       14123
 positive / negative          6871 / 7252
 series_instances_seen          17475
-expected_series_instances      17475
-max_series_in_any_batch           14
 full_coverage                   true
 full_series_coverage            true
 budget_limited                  false
@@ -49,17 +45,17 @@ budget_limited                  false
 Losses:
 
 ```text
-epoch 1  0.7349378360
-epoch 2  0.6693112939
-epoch 3  0.6405184795
-epoch 4  0.6084634456
+0.7349378360
+0.6693112939
+0.6405184795
+0.6084634456
 ```
 
-## Frozen development result
+## Reused-gold result
 
 ```text
 B12 macro AUC         0.5660915179
-95% CI               [0.5094993761, 0.6244034568]
+95% CI               [0.5094993761,0.6244034568]
 B7.1 macro AUC        0.5644802945
 median(B12-B7.1)     +0.0023747526
 95% paired CI        [-0.0472104067,+0.0481427722]
@@ -68,30 +64,31 @@ P(B12 > B7.1)         0.5376
 
 Decision at the time: retain B12 as a viable all-series direction but do not claim superiority over B7.1.
 
-Per-target B12 AUCs:
+Per-target B12 values are descriptive only and must not be used for target-wise hybrids.
+
+## Successor experiments
+
+B12.1 introduced hierarchical one-token-per-series aggregation with B5 initialization; it was implemented but skipped.
+
+B13 used the same hierarchical family with the ImageNet ConvNeXt protocol and reached:
 
 ```text
-ACL                0.4791666667
-MCL                0.5147392290
-Medial Meniscus    0.6574519231
-Lateral Meniscus   0.6298136646
-Medial OA          0.4031007752
-Lateral OA         0.4990328820
-PF OA              0.6151866152
-Effusion           0.6658385093
-Synovitis          0.6654719235
-Baker's            0.5163043478
-Contusion          0.5317139001
-Fracture           0.6152777778
+B13 gold macro AUC  0.6293565948
 ```
 
-These target-level values are descriptive only. They must not be used to construct target-wise hybrids.
+It remains the development champion.
+
+B14 returned to full `K x 16` slice-token memory with the B13 ImageNet protocol and scored `0.6197914249`, so it was rejected globally.
+
+B15 then tested ImageNet -> knee-MRI same-study contrastive SSL -> B13 hierarchy. It passed frozen weak-v2 strongly (`0.7319060415` vs control `0.5652498118`, paired median `+0.1675245839`) but reached only `0.6209002783` on the single reused-gold confirmation. Thus B13 remains retained.
+
+## Current interpretation
+
+B12 established that using every real MRI series is viable and supplied the all-series mapping inherited by B13-B15. The B15 weak/gold divergence now makes supervision-state quality a higher-priority diagnostic than another all-series aggregation sweep.
 
 ## Reproduction
 
 ```bash
-export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
-
 rsna-knee-b12 \
   --config configs/b12_variable_series.yaml \
   --data-root "$DATA_ROOT" \
@@ -107,14 +104,4 @@ rsna-knee-b12-eval \
   --out-root runs/b12_variable_series/gold_eval
 ```
 
-## Successor experiments
-
-B12.1 introduced one learned token per real series with B5 initialization; it remains implemented but was skipped for the competition workflow.
-
-B13 combined that hierarchical aggregation with the ImageNet ConvNeXt protocol and reached macro AUC `0.6293565948`, becoming the retained development champion. See [`B13_IMAGENET_INIT.md`](B13_IMAGENET_INIT.md).
-
-B14 returned to the B12 full `K x 16` slice-token architecture while retaining B13's ImageNet encoder protocol. It completed at macro AUC `0.6197914249`, 95% CI `[0.5706800512,0.6693542716]`. The paired B14-B13 median difference was `-0.0093726931`, 95% CI `[-0.0469823411,+0.0250137870]`, with `P(B14>B13)=0.2924`. B14 is rejected globally; B13 remains the development champion. See [`B14_IMAGENET_FULL_TOKENS.md`](B14_IMAGENET_FULL_TOKENS.md).
-
-The next major representation hypothesis is B15: ImageNet -> competition knee-MRI self-supervised adaptation -> B13 hierarchy.
-
-Full roadmap: [`ROADMAP_AFTER_B12_1.md`](ROADMAP_AFTER_B12_1.md).
+Current status: [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). B15 record: [`B15_MRI_SSL.md`](B15_MRI_SSL.md).
