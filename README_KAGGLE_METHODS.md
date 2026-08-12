@@ -1,10 +1,10 @@
 # RSNA Knee Abnormality Detection — Public Code Methodology Review
 
 **Repository:** `mtalafha90/CNN_CPC`  
-**Snapshot:** 2026-08-10  
+**Snapshot:** 2026-08-12  
 **Purpose:** methodology context and repository-measured development evidence, not a leaderboard claim.
 
-> Canonical measured results are in [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md). **B7.1 is the current leader at macro AUC `0.5644802945`; B8 spatial anatomy is rejected at `0.5300962807`; B9 strict semantic sequence routing is the active predeclared experiment.**
+> Canonical measured results are in [`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md). **B13 is the reused-gold development champion at macro AUC `0.6293565948`. B15 passed the frozen weak-v2 teacher-agreement gate (`0.7319060415` vs matched control `0.5652498118`) but its one-look reused-gold result was `0.6209002783`; therefore B13 remains retained.**
 
 ## Problem structure
 
@@ -17,19 +17,18 @@
 primary metric: macro ROC AUC
 ```
 
-This is a weak/semi-supervised multi-sequence MRI problem with an extremely small trusted development set.
+This is a weak/semi-supervised multi-series MRI problem with an extremely small trusted expert-labelled development set.
 
 ## Main lessons from the repository experiments
 
 ### Reports are useful as training supervision, not inference inputs
 
-The test path is MRI-only. The first fold-safe report teacher reached only `0.49245` macro OOF and was rejected as a general 12-target teacher.
+Final inference remains MRI-only. The first fold-safe report teacher reached only `0.49245` macro OOF and was rejected as a general 12-target teacher.
 
-The useful report paths became:
+Reports subsequently became useful through two different paths:
 
-- **B5:** image-report representation alignment using competition reports only;
-- **B6:** conservative structured positive/negated/uncertain/unmentioned states;
-- **B7/B7.1/B9:** direct MRI training from frozen B6 target cells.
+- **B5:** image-report semantic representation alignment;
+- **B6 onward:** structured positive / negated / uncertain / unmentioned weak target states.
 
 ### Unmentioned is not negative
 
@@ -42,7 +41,7 @@ positive cells                  6871
 negative cells                  7252
 ```
 
-B7-family weak supervision uses:
+B7-B15 weak supervision uses:
 
 ```text
 positive -> target 0.85, weight 0.50
@@ -50,98 +49,187 @@ negated  -> target 0.05, weight 1.00
 uncertain/unmentioned -> ignored
 ```
 
-### Strong competition-only MRI representation learning helped
+This distinction remains important after B15. The next diagnostic is explicitly testing how each report state relates to expert truth; the project does not assume that report silence is an explicit negative.
 
-B1 strong SSL improved the random baseline from `0.4762536432` to `0.5030284974`. B4's frozen classical probe reached `0.5137567459`, and B5 report-aligned representation reached `0.5243650851` under the same probe.
+### In-domain MRI representation learning helped, but representation is not the whole bottleneck
 
-### Direct weak supervision and corpus coverage mattered most so far
-
-B7-v1 reached:
+The early sequence showed progressive representation gains:
 
 ```text
-0.5397724412
+B0 random init             0.4762536432
+B1 strong MRI SSL          0.5030284974
+B4 frozen SSL probe        0.5137567459
+B5 image-report SSL        0.5243650851
 ```
 
-but saw only about 1.28 nominal corpus passes over four epochs.
-
-B7.1 changed only the batch cap so each epoch covered all 3,120 active weakly labelled studies:
+Direct weak supervision and full corpus coverage then raised the development point estimate:
 
 ```text
-B7.1 = 0.5644802945
-95% CI = [0.5052432984, 0.6229422178]
+B7-v1                      0.5397724412
+B7.1                       0.5644802945
 ```
 
-This is the current strongest standalone development point estimate.
+B13 later combined all-series hierarchical aggregation with ImageNet ConvNeXt initialization and reached `0.6293565948`, the current champion.
 
-### More spatial tokens did not help
+### More downstream token capacity did not help
 
-B8 retained a 2x2 spatial ConvNeXt grid per slice and increased MRI memory from 96 to 384 tokens/study. Training was stable, but development AUC fell:
+B14 kept every `K x 16` slice token instead of B13's one-token-per-series compression:
 
 ```text
-B8                  0.5300962807
-B7.1                0.5644802945
-median(B8-B7.1)    -0.0335501423
-P(B8 > B7.1)        0.1156
+B13 gold macro AUC         0.6293565948
+B14 gold macro AUC         0.6197914249
+paired median B14-B13     -0.0093726931
+95% paired CI             [-0.0469823411,+0.0250137870]
+P(B14 > B13)               0.2924
 ```
 
-The B8 spatial-prior branch is therefore closed to post-hoc tuning.
+B14 also reached a lower B6 training loss than B13, so fitting the existing weak targets harder did not produce a global expert-gold gain.
 
-## B9: exact sequence semantics before more architecture changes
+### Slice-count undersampling is not the main B13 bottleneck
 
-A label-free `train_series.csv` audit found that the historical dual-stream router sometimes placed a series in the opposite semantic slot when a plane had multiple acquisitions of only one contrast class.
-
-Full training metadata audit:
-
-| Stream | Historical selected | Strict selected | Wrong-slot assignments removed |
-|---|---:|---:|---:|
-| sagittal_fluid | 4,401 | 4,150 | 251 |
-| sagittal_structural | 4,294 | 4,266 | 28 |
-| coronal_fluid | 4,250 | 4,248 | 2 |
-| coronal_structural | 3,440 | 3,406 | 34 |
-| axial_fluid | 4,407 | 4,407 | 0 |
-| axial_structural | 1,094 | 857 | 237 |
-| **Total** | **21,886** | **21,334** | **552** |
-
-Thus `2.52%` of historically selected training streams contradict the supplied `Fluid_Sensitive` slot meaning.
-
-The three provided test studies contain one analogous false sagittal-fluid assignment. Historical routing selects 14 streams; strict routing selects 13 semantically valid streams.
-
-B9 therefore uses:
+The exact 17,475-series audit reproduced B13's real 2.5D sampler:
 
 ```text
-*_fluid       -> Fluid_Sensitive == True only
-*_structural  -> Fluid_Sensitive == False only
-missing class -> masked missing stream
+eval unique fraction     median 100.0%
+complete eval exposure   95.9%
+eval max skipped run     median 0.0 slices (p95 0.0)
 ```
 
-Everything else returns to the B7.1 recipe: B5 initialization, frozen B6 supervision, global-token KneeMILNet architecture, four full corpus passes, same optimizer/augmentation/TTA, and no gold-gradient/early-stopping use.
+This closes the immediate 24/32/48-slice-count sweep. In-plane resolution is a separate question.
 
-This is a cleaner next test than another attention variant because the hypothesis comes from acquisition metadata consistency rather than target-level gold outcomes.
+## Frozen weak-v2 validation surface
+
+To reduce repeated direct model selection on the 58 gold studies, a report-group-safe weak holdout was frozen before B15/control training:
+
+```text
+surface                   weak_b6_holdout_v2
+weak-train studies        2497
+holdout studies            623
+holdout usable cells      2875
+positive / negative    1407 / 1468
+report-group overlap         0
+manifest SHA
+1a1b07bd690bae3cbb945773c4fcb1c3b0d0f6aa1dd18649d62859aeeb4603d1
+```
+
+The weak surface measures **B6 teacher agreement, not expert truth**. Bootstrap replicates are accepted only when all 12 target AUCs are defined.
+
+## B15: clean MRI-domain SSL test
+
+B15 tested whether knee-MRI adaptation of the successful ImageNet encoder improved downstream ranking.
+
+SSL pool:
+
+```text
+4407 competition studies
+-58 gold studies
+-623 weak-v2 holdout studies
+=3726 SSL studies
+20534 eligible real MRI series
+```
+
+All four SSL epochs completed exact full passes.
+
+Matched downstream arms then used exactly:
+
+```text
+2497 studies
+13974 real MRI series
+11248 B6 cells
+5464 positive / 5784 negative
+4 full epochs
+```
+
+Control:
+
+```text
+ImageNet -> B13 hierarchy
+```
+
+Candidate:
+
+```text
+ImageNet -> knee-MRI same-study contrastive SSL -> B13 hierarchy
+```
+
+## B15 weak-v2 result
+
+```text
+B13-v2 control             0.5652498118
+B15                       0.7319060415
+raw delta                 +0.1666562297
+paired median             +0.1675245839
+95% paired CI             [+0.1124433208,+0.2165156305]
+P(B15 > control)           1.0000
+```
+
+The predeclared gate passed decisively. All usable paired bootstrap replicates favored B15.
+
+## B15 expert-gold confirmation
+
+Passing weak-v2 earned B15 one reused-gold development evaluation:
+
+```text
+B15 gold macro AUC         0.6209002783
+95% CI                    [0.5706720829,0.6675892903]
+B13 gold macro AUC         0.6293565948
+raw B15-B13              -0.0084563164
+```
+
+Thus the large improvement in weak-teacher agreement did **not** transfer to a global expert-label improvement.
+
+The correct interpretation is not that MRI SSL failed. Instead, B15 shows that an MRI representation can become much better at matching the weak target surface without improving the expert-gold macro objective. That makes weak-supervision semantics/noise/sparsity a high-priority bottleneck to audit.
 
 ## Current measured ladder
 
-| Candidate | Macro AUC |
-|---|---:|
-| B0 | `0.4763` |
-| B1 | `0.5030` |
-| B4 | `0.5138` |
-| B5 | `0.524365` |
-| B7-v1 | `0.539772` |
-| **B7.1** | **`0.564480`** |
-| B5+B7.1 rank | `0.554014` |
-| B8 | `0.530096` |
-| B9 | pending |
+| Candidate | Gold macro AUC | Status |
+|---|---:|---|
+| B0 | `0.4762536432` | baseline |
+| B1 | `0.5030284974` | retained reference |
+| B2 | `0.4993244663` | rejected |
+| B3 | `0.4944652486` | rejected |
+| B4 | `0.5137567459` | retained ablation |
+| B5 | `0.5243650851` | representation baseline |
+| B7-v1 | `0.5397724412` | coverage ablation |
+| B7.1 | `0.5644802945` | historical benchmark |
+| B5+B7.1 rank | `0.5540141184` | rejected |
+| B8 | `0.5300962807` | rejected |
+| B9 | `0.5334962669` | rejected |
+| B10 | `0.5523982721` | rejected |
+| B11.1 | `0.5506902702` | rejected |
+| B12 | `0.5660915179` | retained historical reference |
+| **B13** | **`0.6293565948`** | **development champion** |
+| B14 | `0.6197914249` | rejected globally |
+| **B15** | **`0.6209002783`** | **weak-v2 gate passed; no global gold improvement** |
+
+B11-v1 failed viability; B12.1 was implemented but skipped.
+
+## Current methodological priority
+
+The next experiment should **not** be another B15 hyperparameter sweep. First audit B6 report states against expert truth:
+
+```text
+positive
+negated
+uncertain
+unmentioned
+```
+
+For each target/state, quantify counts, expert-positive fraction, expert-negative fraction and coverage. Only if that audit supports additional information should a separately versioned weak-supervision successor be defined.
+
+Other later controlled directions include robust weak-label losses, richer image-report representation learning, improved report labelling, higher in-plane resolution and global ensembles after structure is settled.
 
 ## Validation discipline
-
-The same 58 gold studies have supported repeated method decisions. The campaign must therefore be described as development/model-selection CV.
 
 Do not:
 
 - select target-specific winners;
-- optimize blend weights;
-- retune B6 parser rules/weak-label weights from gold outcomes;
-- tune B9 target-specific routing from per-target AUCs;
-- describe the best development score as a hidden-test or leaderboard guarantee.
+- optimize blend weights from the reused 58 labels;
+- retune B6 parser rules/weak-label weights from downstream outcomes;
+- retune B15 SSL epochs/LR/TTA from its gold confirmation;
+- regenerate weak-v2 based on model performance;
+- interpret weak-v2 AUC as expert truth;
+- map all unmentioned findings to negative by assumption;
+- describe local development performance as a hidden-test or leaderboard guarantee.
 
-See [`docs/B9_STRICT_ROUTING.md`](docs/B9_STRICT_ROUTING.md) for the frozen B9 protocol.
+The hidden competition evaluation remains the next genuinely independent performance signal.
