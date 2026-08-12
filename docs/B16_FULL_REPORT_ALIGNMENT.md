@@ -200,7 +200,7 @@ rsna-knee-b16 \
   --config configs/b16_full_report_alignment.yaml \
   --data-root "$DATA_ROOT" \
   --b6-root runs/b6_report_labels_v121 \
-  --series-policy runs/b12_variable_series/series_policy.json \
+  --series-policy runs/b12_variable_series/audit/series_policy.json \
   --report-ssl-checkpoint runs/b16_full_report/report_ssl/b16_report_encoder.pt \
   --out-root runs/b16_full_report/downstream
 ```
