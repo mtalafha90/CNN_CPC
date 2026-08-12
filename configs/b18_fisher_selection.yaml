@@ -1,0 +1,89 @@
+# B18 Fisher-style expert-guided epoch selection.
+#
+# B18 keeps the complete B17 training recipe unchanged and changes ONLY the
+# checkpoint-selection rule: after each of five fixed full B6 epochs, the
+# repeatedly reused 58-study expert set is evaluated with the frozen global
+# 12-target macro ROC AUC. The single best global epoch is retained.
+#
+# The expert labels NEVER enter gradients. Because they select the checkpoint,
+# the selected 58-study AUC is a selection statistic, NOT validation evidence.
+
+data_root: /data/rsna-knee-abnormality-detection
+train_csv: train.csv
+train_series_csv: train_series.csv
+
+seed: 2026
+competition_mode: true
+requested_gpus: 1
+allow_external_pretrained: true
+pretrained: true
+
+device: auto
+precision: auto
+runtime_budget_hours: 8.5
+runtime_reserve_minutes: 10
+
+num_workers: null
+persistent_workers: true
+prefetch_factor: 2
+multiprocessing_context: spawn
+series_cache_mb_per_worker: 256
+strict_dicom: false
+strict_dicom_inference: true
+
+# Unchanged B13/B16/B17 hierarchy and preprocessing.
+b12_use_physical_scale: false
+b12_1_series_pool_heads: 8
+b7_n_slices: 16
+b7_image_size: 224
+b7_triplet_gap: 1
+b7_batch_size: 2
+b7_encoder_batch_size: 24
+b7_gradient_checkpointing: true
+b7_dropout: 0.25
+b7_transformer_layers: 2
+b7_transformer_heads: 8
+b7_transformer_ff_mult: 2.0
+b7_pathology_layers: 1
+
+# Unchanged B17 frozen-encoder / short-training recipe.
+b7_epochs: 5
+b7_max_batches_per_epoch: 1560
+b7_encoder_lr: 0.0
+b7_head_lr: 0.0001
+b7_min_lr: 0.000001
+b7_weight_decay: 0.0001
+b7_grad_clip: 1.0
+b17_encoder_frozen: true
+b17_label_smoothing: 0.0
+b17_robust_loss: none
+
+# B18's only intervention: global expert-guided epoch selection.
+b18_expert_selection: true
+b18_selection_metric: macro_auc_12_target_global
+b18_selection_tie_break: earliest_epoch
+b18_candidate_epochs: 5
+b18_save_candidate_checkpoints: true
+
+# Frozen B6 v1.2.1 policy. No additional generic label smoothing is applied;
+# these targets are already soft.
+b7_min_confidence: 0.75
+b7_positive_target: 0.85
+b7_negative_target: 0.05
+b7_positive_weight: 0.50
+b7_negative_weight: 1.00
+
+# Frozen downstream MRI augmentation.
+b7_noise_std: 0.02
+b7_slice_dropout: 0.08
+b7_train_gap_choices: [1, 2]
+b7_center_jitter: 2
+b7_rotation_deg: 5.0
+b7_translate_frac: 0.03
+b7_scale_jitter: 0.05
+b7_gamma_jitter: 0.12
+b7_bias_field_strength: 0.08
+
+# Frozen expert-selection inference surface.
+b7_eval_tta_offsets: [-1, 0, 1]
+b7_eval_batch_size: 2
