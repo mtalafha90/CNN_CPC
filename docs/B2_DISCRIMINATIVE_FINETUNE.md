@@ -1,84 +1,41 @@
-# B2 discriminative SSL fine-tuning
+# B2 — discriminative SSL fine-tuning
 
-B2 tested one hypothesis: the strong in-domain SSL encoder might be useful, but updating it at the same learning rate as randomly initialized Transformer/pathology layers could overwrite those features too quickly.
+> **Status — 2026-08-12:** **COMPLETED / REJECTED.** B2 remains a historical optimizer ablation. B13 is now the reused-gold development champion; completed B15 did not replace it.
 
-> Current campaign status is summarized in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
-
-## Evidence motivating B2
-
-The controlled B0/B1 experiments gave:
-
-- B0 random-init 58-study OOF macro AUC: `0.4762536432`.
-- B1 strong-SSL 58-study OOF macro AUC: `0.5030284974`.
-- paired bootstrap median B1-B0 difference: `+0.02646`.
-- paired 95% interval: `[-0.04464, +0.09870]`.
-- bootstrap probability B1 is better: `0.771`.
-- nested B0/B1 selection produced only `0.4789929240`, illustrating that the tiny inner folds are too noisy to exploit B1 reliably.
-
-B1 also reduced supervised training loss rapidly while inner AUC often fell after a few epochs. B2 therefore preserved the B1 representation but reduced only the encoder learning rate.
+B2 tested whether the strong in-domain SSL encoder was being overwritten too quickly by using a lower encoder learning rate while keeping the Stage-1 architecture and head learning rate fixed.
 
 ## Single intervention
 
-B2 kept all B1 settings unchanged except:
-
 ```yaml
 encoder_lr: 0.00001
-```
-
-The normal supervised learning rate remained:
-
-```yaml
 lr: 0.0001
 ```
 
-The encoder therefore started at one tenth of the head/Transformer LR. Both parameter groups used the same `CosineAnnealingLR` schedule and existing `min_lr` floor. No encoder freezing was used in B2.
+No encoder freezing was used.
 
-## Isolation
-
-`src/rsna_knee/discriminative_training.py` temporarily replaces only the optimizer factory while calling the normal `training.train_fold`. The original optimizer factory is restored in `finally`, so standard B0/B1 training is unchanged.
-
-Each fold writes `finetune_policy.json` to record the exact optimizer intervention.
-
-## Reproduction
-
-```bash
-pytest -q tests/test_discriminative_training.py tests/test_model.py tests/test_sampling_pairing.py
-
-rsna-knee-b2 --config configs/train_local_ssl_b2.yaml --fold 0
-rsna-knee-b2 --config configs/train_local_ssl_b2.yaml --fold 1
-rsna-knee-b2 --config configs/train_local_ssl_b2.yaml --fold 2
-```
-
-## Final result
-
-B2 completed all three folds.
+## Result
 
 ```text
-pooled macro AUC = 0.4993244663
-95% CI           = [0.4512751879, 0.5464103264]
+B2 macro AUC       0.4993244663
+95% CI            [0.4512751879,0.5464103264]
+B1 macro AUC       0.5030284974
+median(B2-B1)     about -0.00395
+95% paired CI     [-0.05905,+0.05269]
+P(B2 > B1)         0.4506
 ```
 
-Per-target AUC:
+Decision: **rejected**. Lowering the encoder learning rate did not produce a stable improvement over B1, and no further B2 LR search was performed on the same outer gold labels.
 
-| Target | AUC |
-|---|---:|
-| ACL | 0.4841 |
-| MCL | 0.5442 |
-| Medial Meniscus | 0.5649 |
-| Lateral Meniscus | 0.5068 |
-| Medial OA | 0.5411 |
-| Lateral OA | 0.5242 |
-| PF OA | 0.5508 |
-| Effusion | 0.4484 |
-| Synovitis | 0.3883 |
-| Baker's | 0.5580 |
-| Contusion | 0.4588 |
-| Fracture | 0.4222 |
+## Current successor context
 
-Paired B1-versus-B2 analysis gave a median B2-B1 difference of about `-0.00395`, 95% CI `[-0.05905, +0.05269]`, with `P(B2 > B1)=0.4506`.
+Later representation and weak-supervision experiments progressed substantially beyond B2:
 
-## Decision
+```text
+B13 gold  0.6293565948  retained champion
+B14 gold  0.6197914249
+B15 gold  0.6209002783
+```
 
-**Rejected.** Reducing the encoder learning rate did not produce a stable improvement over B1. The observed pattern is more consistent with small-gold-set variance / weak-supervision and downstream-model limitations than with simple catastrophic forgetting.
+B15 also showed a large frozen weak-v2 teacher-agreement gain (`0.7319060415` versus control `0.5652498118`) without expert-gold improvement. The current bottleneck investigation therefore focuses on supervision-state quality, not another encoder-LR sweep.
 
-No further tuning of the B2 encoder LR is planned on the same 58-study outer OOF set.
+Current status: [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
