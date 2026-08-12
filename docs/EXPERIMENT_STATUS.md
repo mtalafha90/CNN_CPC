@@ -1,24 +1,22 @@
 # Experiment status
 
 **Snapshot:** 2026-08-13  
-**Package:** `0.26.0`  
-**Gold development set:** 58 fully labelled studies  
+**Package:** `0.28.0`  
+**Gold development/selection set:** 58 fully labelled studies  
 **Primary metric:** macro ROC AUC across 12 targets
 
-The 58-study expert-labelled surface has supported repeated sequential development decisions and is therefore a **development/model-selection set rather than independent validation**. The frozen weak-v2 surface measures B6 teacher agreement and is not an expert-validation surface.
+The 58-study expert-labelled surface has been reused repeatedly and is therefore a **development/model-selection surface, not independent validation**. With B18 it is deliberately consumed for checkpoint selection. The frozen weak-v2 surface measures B6 teacher agreement and is not an expert-validation surface.
 
 ## Current headline
 
-- **B17 is the current reused-gold development champion by the predeclared global point-estimate rule:** macro AUC `0.6425890153`, 95% CI `[0.5935606351,0.6887356582]`.
-- B16 reference: `0.6349770242`.
-- B17-B16 raw delta: `+0.0076119910`; paired median `+0.0074330332`; 95% paired CI `[-0.0188853047,+0.0332991195]`; `P(B17>B16)=0.7110`.
-- **B17 is retained by the frozen rule but superiority over B16 is not established.**
-- B17 froze the completed B16 report-aligned encoder for all five full downstream epochs; encoder SHA-256 remained exactly unchanged.
-- B15 weak-v2 AUC was `0.7319060415`, but reused-gold AUC was `0.6209002783`; stronger B6 agreement did not transfer globally.
-- The B6/B15 diagnostic found a coverage-conditioned B6 AUC of `0.7736374158` on 251/696 cells and a full-surface state-only baseline of `0.7024597743`.
-- On 55 high-confidence B6-wrong gold cells, B15 did not move systematically toward B6 errors; 63.6% moved toward expert truth.
-- B16 and B17 are now closed to post-gold tuning.
-- The next genuinely independent performance signal remains the hidden Kaggle evaluation.
+- **B13--B17 are now treated as one statistically unresolved high-performing development tier.**
+- B17 (`0.6425890153`) remains the **reference checkpoint** because it has the largest reused-gold point estimate, not because superiority is established.
+- B17-B16: raw `+0.0076119910`, paired median `+0.0074330332`, 95% paired CI `[-0.0188853047,+0.0332991195]`, `P(B17>B16)=0.7110`.
+- B16-B13: raw `+0.0056204295`, paired 95% CI `[-0.0395927864,+0.0519351407]`, `P(B16>B13)=0.5828`.
+- B6 full-state expert-ordering reference is `0.7024597743`; the numerical B6-state minus B17 difference is `0.0598707590`, but this is an information reference rather than a guaranteed MRI-extractable gap.
+- **B18 is implemented / predeclared / not yet run.** It keeps the complete B17 training recipe and uses the 58 expert studies only to choose one global epoch among five fixed candidates.
+- The final all-data fit is implemented but **deferred** while B18 is active.
+- The next genuinely independent performance signal remains Kaggle hidden evaluation.
 
 ## Experiment ladder
 
@@ -26,7 +24,7 @@ The 58-study expert-labelled surface has supported repeated sequential developme
 |---|---|---:|---|
 | B0 | random-init Stage-1 model | `0.4762536432` gold | baseline |
 | Report teacher | fold-safe rules + TF-IDF teacher | `0.49245` gold | rejected |
-| B1 | competition-only MRI SSL + Stage-1 | `0.5030284974` gold | retained historical reference |
+| B1 | competition-only MRI SSL + Stage-1 | `0.5030284974` gold | historical reference |
 | B2 | B1 with lower encoder LR | `0.4993244663` gold | rejected |
 | B3 | pathology-aware low-capacity MIL | `0.4944652486` gold | rejected |
 | B4 | frozen SSL + target-wise PCA/LR | `0.5137567459` gold | retained ablation |
@@ -42,11 +40,13 @@ The 58-study expert-labelled surface has supported repeated sequential developme
 | B11.1 | target-wise teacher tails | `0.5506902702` gold | rejected globally |
 | B12 | all real MRI series + full slice-token memory + B5 init | `0.5660915179` gold | historical reference |
 | B12.1 | one learned token per series + B5 init | not run | implemented / skipped |
-| **B13** | **one learned token per series + ImageNet ConvNeXt** | **`0.6293565948` gold** | historical champion/reference |
+| **B13** | **one learned token per series + ImageNet ConvNeXt** | **`0.6293565948` gold** | unresolved high-performing tier |
 | B14 | full `K x 16` slice-token memory + same ImageNet protocol | `0.6197914249` gold | rejected globally |
-| B15 | ImageNet -> knee-MRI same-study contrastive SSL -> B13 hierarchy | `0.7319060415` weak-v2; `0.6209002783` gold | teacher gain; no global gold gain |
-| **B16** | **B15 encoder -> full-report semantic alignment -> full B13/B6 surface** | **`0.6349770242` gold** | historical champion/reference; unresolved with B17 |
-| **B17** | **freeze B16 report-aligned encoder; train hierarchy/head only for five fixed full B6 passes** | **`0.6425890153` gold** | **current champion by frozen point-estimate rule; superiority unresolved** |
+| B15 | ImageNet -> knee-MRI same-study contrastive SSL -> B13 hierarchy | weak-v2 `0.7319060415`; gold `0.6209002783` | teacher gain, no global gold gain |
+| **B16** | **B15 encoder -> full-report semantic alignment -> full B13/B6 surface** | **`0.6349770242` gold** | unresolved high-performing tier |
+| **B17** | **freeze B16 report-aligned encoder; train hierarchy/head only for five fixed full B6 passes** | **`0.6425890153` gold** | **reference checkpoint; superiority unresolved** |
+| **B18** | **same B17 five-epoch training; expert set selects one GLOBAL epoch** | **selection statistic only** | **implemented / predeclared** |
+| FINAL | B17-style frozen encoder + all 58 expert labels in gradients | no gold evaluation permitted | implemented / deferred |
 
 ## Frozen B6 supervision surface
 
@@ -68,9 +68,9 @@ uncertain/unmentioned -> ignored
 minimum confidence -> 0.75
 ```
 
-The B6 gold audit gave sensitivity `0.9748`, specificity `0.6061`, positive precision `0.6905`, NPV `0.9639`, balanced accuracy `0.7904`, and coverage `0.3606`. These numbers describe noisy/incomplete supervision and do **not** define a numerical downstream AUC ceiling.
+The B6 gold audit gave sensitivity `0.9748`, specificity `0.6061`, positive precision `0.6905`, NPV `0.9639`, balanced accuracy `0.7904`, and coverage `0.3606`. These values characterize noisy/incomplete report-derived supervision and do **not** define a downstream AUC ceiling.
 
-## B6/B15 state/noise diagnostic
+## B6 state/noise diagnostic
 
 ```text
 coverage-conditioned high-confidence B6 macro AUC  0.7736374158
@@ -81,9 +81,9 @@ high-confidence cells                                251
 B6-correct / B6-wrong                                196 / 55
 ```
 
-On the 55 B6-wrong cells, B15's mean movement toward B6 was negative and the point estimate moved slightly toward expert truth. `63.6%` moved toward truth. All predefined strong-evidence flags for B6-error imitation were false.
+On the 55 B6-wrong cells, B15 did not systematically move toward B6 errors; 63.6% moved toward expert truth. The state baseline is therefore a **supervision-information reference**, not a teacher/student ceiling or a guaranteed MRI-extraction target.
 
-Pooled state truth rates:
+Pooled state truth rates remain descriptive only:
 
 ```text
 positive       116 / 168 = 0.6905
@@ -92,7 +92,7 @@ uncertain       11 / 29  = 0.3793
 unmentioned    110 / 416 = 0.2644
 ```
 
-These pooled middle-state rates are not universal training targets because target-level behavior is highly heterogeneous.
+Target-level behavior is heterogeneous, so these pooled middle-state rates are not universal training targets.
 
 ## Frozen all-series surface
 
@@ -108,77 +108,40 @@ series SHA-256
 
 The B13 slice-exposure audit showed near-complete evaluation exposure and rejected slice-count undersampling as the primary bottleneck.
 
-## B13 retained historical result
+## B13--B17 interpretation reset
+
+Historical point estimates:
 
 ```text
-B13 macro AUC      0.6293565948
-95% CI            [0.5789896351,0.6775867717]
+B13  0.6293565948
+B14  0.6197914249
+B15  0.6209002783
+B16  0.6349770242
+B17  0.6425890153
 ```
 
-B13 previously improved over B12 and B7.1 with paired evidence, and remains an important historical reference.
+B13 previously improved over B12/B7.1 with paired evidence. From B13 onward, repeated comparisons on the same 58 studies are too noisy and too reused to support a narrative of sequential proven gains. B16-B13 and B17-B16 both have paired intervals crossing zero. Therefore B17 is a **reference checkpoint**, not a demonstrated superior model.
 
-## B15 completed result
-
-```text
-B13-v2 control weak-v2 AUC  0.5652498118
-B15 weak-v2 AUC             0.7319060415
-paired median              +0.1675245839
-95% paired CI              [+0.1124433208,+0.2165156305]
-P(B15 > control)            1.0000
-
-B15 reused-gold AUC         0.6209002783
-B13 reused-gold AUC         0.6293565948
-raw B15-B13                -0.0084563164
-```
-
-Thus weak-v2 is retained only as a B6-teacher-agreement diagnostic, not as a surrogate selector for expert AUC.
-
-## B16 completed result
-
-B16 added full-report semantic alignment on all 4,349 non-gold MRI/report pairs before returning to the full B13/B6 surface.
-
-```text
-B16 macro AUC      0.6349770242
-95% CI            [0.5854729266,0.6830266155]
-B13 macro AUC      0.6293565948
-raw B16-B13       +0.0056204295
-paired median     +0.0050711608
-95% paired CI     [-0.0395927864,+0.0519351407]
-P(B16 > B13)       0.5828
-```
-
-B16 became champion by the predeclared global point-estimate rule, but remained statistically unresolved with B13.
-
-## B17 completed frozen-encoder result
+## B17 completed result
 
 Canonical record: [`B17_FROZEN_ENCODER.md`](B17_FROZEN_ENCODER.md).
 
-B17 started from:
+B17 froze the completed B16 report-aligned encoder and used exactly:
 
 ```text
-runs/b16_full_report/report_ssl/b16_report_encoder.pt
-```
-
-and enforced:
-
-```text
-encoder requires_grad           false
-encoder optimizer membership    false
-encoder training mode           false
-encoder LR                      0
-runtime encoder checkpointing   false
-head LR                         1e-4
-epochs                          5 exact full passes
 training studies                3120
-training series                 17475
-additional label smoothing      0
+training series                17475
+B6 cells                       14123
+positive / negative           6871 / 7252
+batches / epoch                1560
+epochs                            5
+encoder LR                        0
+head LR                         1e-4
+additional label smoothing        0
 robust loss                     none
-gold early stopping             none
-gold checkpoint selection       none
-weak-v2 gate                    none
 ```
 
-The encoder fingerprint remained unchanged for all five epochs:
+Encoder SHA remained unchanged:
 
 ```text
 b328667cf9dfa9b909ef181c1bcc8975ec42bcd8b9eddad08f908875b73fae96
@@ -194,8 +157,6 @@ epoch 4  0.5862506992
 epoch 5  0.5667051629
 ```
 
-Each epoch had exactly 1,560 batches, 3,120 study draws, 14,123 active B6 cells, 6,871 positive cells, 7,252 negative cells, and 17,475 series, with full study/series coverage and no budget truncation.
-
 One-look reused-gold result:
 
 ```text
@@ -206,27 +167,66 @@ raw B17-B16       +0.0076119910
 paired median     +0.0074330332
 95% paired CI     [-0.0188853047,+0.0332991195]
 P(B17 > B16)       0.7110
-5000 / 5000 paired bootstrap replicates usable
 ```
 
-B17 is therefore retained as the development champion by the predeclared point-estimate rule. The paired interval crosses zero, so true superiority is not established.
+## B18 predeclared expert-selection protocol
 
-Descriptively, the largest B17-B16 target gains were Baker's (`+0.07065`), Synovitis (`+0.05854`), and Medial Meniscus (`+0.02885`). The largest declines were Contusion (`-0.03104`), Lateral Meniscus (`-0.02112`), and MCL (`-0.02041`). These target-level differences are descriptive only and cannot authorize target-wise winner mixing.
+Canonical record: [`B18_FISHER_SELECTION.md`](B18_FISHER_SELECTION.md).
 
-Because B17 changed both encoder optimization and fixed training length (`4 -> 5`) relative to B16, the result supports the frozen-short-training protocol but cannot attribute the gain solely to freezing.
+B18 changes **only checkpoint selection** relative to B17:
+
+```text
+train epoch 1 on B6 only -> evaluate 58 expert studies -> global macro AUC
+train epoch 2 on B6 only -> evaluate 58 expert studies -> global macro AUC
+train epoch 3 on B6 only -> evaluate 58 expert studies -> global macro AUC
+train epoch 4 on B6 only -> evaluate 58 expert studies -> global macro AUC
+train epoch 5 on B6 only -> evaluate 58 expert studies -> global macro AUC
+select maximum global macro; numerical tie -> earliest epoch
+```
+
+Frozen constraints:
+
+```text
+expert labels in gradients            NO
+expert studies                         58
+expert target cells                   696
+expert MRI series                     336
+selection metric                      global 12-target macro AUC only
+per-target epoch selection            forbidden
+per-target selection values logged    no
+selection bootstrap                   none
+encoder                               frozen B16 report-aligned encoder
+B6 training surface                   identical B17
+additional generic smoothing          0
+robust loss                           none
+resolution / positions                224 / 16
+TTA                                   [-1,0,1]
+```
+
+Because the expert set selects the checkpoint, the selected 58-study score is **not validation evidence** and must not be used to claim B18 improved over B17. Independent Kaggle evaluation is required.
+
+Expected outputs:
+
+```text
+runs/b18_fisher_selection/candidates/epoch_1.pt ... epoch_5.pt
+runs/b18_fisher_selection/selection_history.json
+runs/b18_fisher_selection/selection.json
+runs/b18_fisher_selection/b18_model.pt
+```
 
 ## Governance
 
-Current rules:
-
 ```text
-B16: closed; no post-gold tuning
-B17: closed; no epoch 6 from gold
-B17: no label smoothing / ELR / SCE selected from gold
-B17: no head-LR tuning from gold
-B17: no target-specific B16/B17 winner mixing
-no regeneration of weak-v2 from model outcomes
-no universal gold-derived uncertain/unmentioned pseudo-labels
+B16/B17: closed to post-gold retuning
+B13--B17: statistically unresolved development tier
+B18: five fixed B6-only epochs; expert set selects one GLOBAL checkpoint
+B18: expert labels never enter gradients
+B18: selected expert score is not validation evidence
+B18: no target-specific epoch choice or target mixing
+B18: no smoothing/robust-loss/LR/architecture/resolution/TTA tuning from selection curve
+weak-v2: do not regenerate from outcomes
+uncertain/unmentioned: no universal gold-derived pseudo-labels
+FINAL all-data fit: deferred until B18/development phase is closed
 ```
 
-The hidden competition evaluation remains the next genuinely independent performance signal.
+The next genuinely independent performance signal is Kaggle hidden evaluation.
