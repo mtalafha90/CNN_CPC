@@ -1,8 +1,6 @@
 # B13 exact slice-exposure audit
 
-> **Status — 2026-08-11:** **COMPLETE. Slice-count undersampling rejected as a primary B13 bottleneck.**
-
-This diagnostic used the corrected audit in package `0.22.1` on the exact frozen B13 non-gold surface.
+> **Status — 2026-08-12:** **COMPLETE. Slice-count undersampling remains rejected as a primary B13 bottleneck.** Subsequent B15 also failed to improve global reused-gold macro AUC, so no slice-count sweep has been reopened.
 
 ## Frozen surface
 
@@ -14,7 +12,7 @@ series SHA-256
 5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376
 ```
 
-The audit reads DICOM headers only and reproduces B13 sampling rather than using the retired `16 / n_slices` proxy:
+The audit reproduces B13's actual sampling:
 
 ```text
 16 center positions / real series
@@ -56,25 +54,29 @@ Sagittal   n=7205   eval=100.0% max-run=0.0 train/view=87.0%
 
 ## Interpretation
 
-The exact B13 evaluation sampler exposes essentially the complete ordinary MRI series. `95.9%` of all eligible series have complete evaluation exposure, the median and p95 longest skipped runs are both zero, and median evaluation exposure is `100%` in every plane.
+The exact B13 evaluation sampler exposes essentially the complete ordinary MRI series. `95.9%` of eligible series have complete evaluation exposure, and the median/p95 longest skipped runs are both zero.
 
-The remaining long-tail series include acquisitions as long as 320 frames, but only `3.9%` of all series have an evaluation gap of at least two slices. This is not evidence for a global slice-count bottleneck.
-
-Therefore the controlled development conclusion is:
+Decision:
 
 ```text
 slice-count undersampling as primary B13 bottleneck -> REJECT
 ```
 
-Do not launch a 24/32/48-slice sweep from the reused 58-study gold surface. If a later slice-budget experiment is undertaken for another reason, it must be globally predeclared and evaluated without target-specific tuning.
+Do not launch a 24/32/48-slice sweep from the repeatedly reused gold surface. This result does **not** rule out in-plane resolution loss at `224x224`, representation limitations, weak-label noise/sparsity or optimization limitations.
 
-This result does **not** rule out in-plane resolution loss at `224x224`, MRI representation limitations, weak-label noise/sparsity, or optimization limitations.
+## Successor context through B15
 
-## Command used
+```text
+B13 gold     0.6293565948  retained champion
+B14 gold     0.6197914249  rejected
+B15 gold     0.6209002783  no global improvement
+```
+
+B15 nevertheless raised frozen weak-v2 teacher agreement from matched-control `0.5652498118` to `0.7319060415`, with paired median `+0.1675245839` and 95% CI `[+0.1124433208,+0.2165156305]`. The lack of expert-gold transfer shifts the immediate diagnostic priority toward supervision quality rather than slice count.
+
+## Reproduction
 
 ```bash
-export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
-
 rsna-knee-slice-audit \
   --config configs/b13_imagenet_init.yaml \
   --data-root "$DATA_ROOT" \
@@ -83,9 +85,11 @@ rsna-knee-slice-audit \
   --out runs/slice_audit_b13
 ```
 
-Local artifacts:
+Artifacts:
 
 ```text
 runs/slice_audit_b13/slice_audit.csv
 runs/slice_audit_b13/slice_audit.json
 ```
+
+Current campaign status: [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). Post-B15 roadmap: [`RAISING_AUC.md`](RAISING_AUC.md).
