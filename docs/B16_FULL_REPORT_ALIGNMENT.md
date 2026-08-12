@@ -1,6 +1,6 @@
 # B16 — full-report semantic representation alignment
 
-> **Status — 2026-08-12:** REPORT-ALIGNMENT STAGE COMPLETED SUCCESSFULLY / DOWNSTREAM NOT YET RUN. Package `0.25.0`.
+> **Status — 2026-08-12:** REPORT ALIGNMENT + DOWNSTREAM TRAINING COMPLETED SUCCESSFULLY / GOLD DEVELOPMENT LOOK NOW AUTHORIZED. Package `0.25.0`.
 
 ## Why B16 follows B15
 
@@ -118,11 +118,11 @@ Final report-alignment checkpoint:
 runs/b16_full_report/report_ssl/b16_report_encoder.pt
 ```
 
-The representation stage is therefore accepted as complete. Loss improvement is an optimization diagnostic only; it is not a model-selection metric and does not establish expert-label improvement.
+The representation stage is accepted as complete. Loss improvement is an optimization diagnostic only; it is not a model-selection metric and does not establish expert-label improvement.
 
 ## Frozen downstream contract
 
-B16 now returns to the full B13 training surface, not the B15 weak-v2 subset:
+B16 returns to the full B13 training surface, not the B15 weak-v2 subset:
 
 ```text
 B6-active studies        3120
@@ -160,9 +160,28 @@ uncertain/unmentioned -> ignored
 
 No state probabilities from the reused 58-study audit enter B16 training.
 
-## Next command — downstream training
+## Completed downstream stage
 
-Use the exact frozen B12/B13 series policy:
+All four downstream epochs completed the exact B13 full-surface study/series contract:
+
+| Epoch | B6 training loss | Batches | Studies | Active cells | Positive | Negative | Series | Full coverage | Full series | Budget limited |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|
+| 1 | `0.7379701049` | 1560 | 3120 | 14123 | 6871 | 7252 | 17475 | true | true | false |
+| 2 | `0.6212521367` | 1560 | 3120 | 14123 | 6871 | 7252 | 17475 | true | true | false |
+| 3 | `0.5901195104` | 1560 | 3120 | 14123 | 6871 | 7252 | 17475 | true | true | false |
+| 4 | `0.5675074643` | 1560 | 3120 | 14123 | 6871 | 7252 | 17475 | true | true | false |
+
+Final downstream checkpoint:
+
+```text
+runs/b16_full_report/downstream/b16_model.pt
+```
+
+The downstream stage is accepted as complete. The B6 training loss decreased by about 23.1% from epoch 1 to epoch 4, but training loss is not a model-selection metric and must not be used to infer gold performance.
+
+## Single reused-gold development look — authorized now
+
+The frozen prerequisites are satisfied. Run exactly one B16 gold development evaluation:
 
 ```bash
 cd /media/talafha/Disk_1/CNN_CPC
@@ -170,35 +189,6 @@ conda activate rsna-knee
 
 export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
 
-rsna-knee-b16 \
-  --config configs/b16_full_report_alignment.yaml \
-  --data-root "$DATA_ROOT" \
-  --b6-root runs/b6_report_labels_v121 \
-  --series-policy runs/b12_variable_series/audit/series_policy.json \
-  --report-ssl-checkpoint runs/b16_full_report/report_ssl/b16_report_encoder.pt \
-  --out-root runs/b16_full_report/downstream
-```
-
-Every downstream epoch must report:
-
-```text
-study draws                  3120
-active supervision cells    14123
-positive cells               6871
-negative cells               7252
-series instances            17475
-full coverage                true
-full series coverage         true
-budget limited               false
-```
-
-Do not run the gold evaluator unless all four downstream epochs satisfy this exact contract.
-
-## Single reused-gold development look
-
-Only after four exact downstream epochs:
-
-```bash
 rsna-knee-b16-gold-eval \
   --config configs/b16_full_report_alignment.yaml \
   --data-root "$DATA_ROOT" \
