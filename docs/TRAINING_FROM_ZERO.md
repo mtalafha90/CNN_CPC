@@ -1,31 +1,8 @@
 # CNN_CPC Training From Zero
 
-This is the clean end-to-end guide for setting up `CNN_CPC` on a fresh Linux machine and reproducing the current experiment path.
+This is the clean setup/reproduction guide for the current `CNN_CPC` state.
 
-> **Repository snapshot — 2026-08-10:** package `0.14.0`. **B7.1 is the current best standalone development model at macro AUC `0.5644802945`; B8 is rejected at `0.5300962807`; B9 strict semantic routing is the current predeclared experiment.** Exact results are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
-
-## Current reproducible ladder
-
-```text
-clone/update
--> Conda environment
--> install + tests
--> verify one GPU
--> place competition data
--> inspect CSVs
--> DICOM preflight + full audit
--> strong competition-only MRI SSL
--> B5 image-report representation learning
--> B6 frozen structured multilingual report labels
--> B7-v1 direct weak supervision
--> B7.1 full-corpus weak supervision [current leader]
--> fixed B5+B7.1 rank ensemble [rejected]
--> B8 spatial anatomy [rejected]
--> B9 strict semantic routing [current]
--> inspect B9 routing/training artifacts
--> one frozen B9 gold development evaluation
--> paired B7.1 -> B9 bootstrap
-```
+> **Repository snapshot — 2026-08-12:** package `0.24.1`. **B13 is the reused-gold development champion at `0.6293565948`. B15 is completed: weak-v2 gate passed, one-look gold `0.6209002783`, no global improvement over B13.** Exact results are in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
 
 ## 1. Clone/update
 
@@ -62,10 +39,10 @@ pytest -q
 python -m compileall -q src tests kaggle scripts
 ```
 
-Expected package version:
+Expected current package version:
 
 ```text
-0.14.0
+0.24.1
 ```
 
 ## 3. GPU
@@ -83,7 +60,7 @@ if torch.cuda.is_available():
 PY
 ```
 
-The conservative production path uses one GPU and no `torchrun`.
+The production path uses one GPU and no DDP/`torchrun`.
 
 ## 4. Competition data
 
@@ -91,17 +68,7 @@ The conservative production path uses one GPU and no `torchrun`.
 export DATA_ROOT="/path/to/rsna-knee-abnormality-detection"
 ```
 
-Expected files:
-
-```text
-train.csv
-train_series.csv
-test.csv
-test_series.csv
-sample_submission.csv
-```
-
-Verified release:
+Expected release:
 
 ```text
 training studies  4407
@@ -142,175 +109,175 @@ B1 strong SSL                    0.5030284974
 B4 frozen SSL + classical        0.5137567459
 B5 image-report SSL              0.5243650851
 B7-v1 direct weak supervision    0.5397724412
-B7.1 full coverage               0.5644802945  [current leader]
-B5+B7.1 fixed rank ensemble      0.5540141184  [rejected]
-B8 spatial anatomy               0.5300962807  [rejected]
-B9 strict routing                pending       [current]
+B7.1 full coverage               0.5644802945
+B8 spatial anatomy               0.5300962807
+B9 strict routing                0.5334962669
+B10 physical scale               0.5523982721
+B11.1 quantile pseudo labels     0.5506902702
+B12 all real series              0.5660915179
+B13 ImageNet hierarchy           0.6293565948  CHAMPION
+B14 ImageNet full tokens         0.6197914249  REJECTED
+B15 ImageNet->MRI SSL hierarchy  0.6209002783  NO GLOBAL GOLD IMPROVEMENT
 ```
 
-## 7. Required retained artifacts
+B11-v1 failed viability; B12.1 was implemented but skipped.
 
-B5 initialization:
+## 7. Historical build path
+
+For full historical reproduction, follow the experiment-specific documents from strong SSL through B5/B6/B7, B8-B12, B13/B14 and B15. The current canonical ledger is [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
+
+Core retained historical artifacts include:
 
 ```text
+runs/ssl_strong/ssl_encoder.pt
 runs/b5_report_ssl/b5_encoder.pt
-```
-
-B6 frozen weak labels:
-
-```text
 runs/b6_report_labels_v121/
-├── training_targets.csv
-├── policy.json
-└── audit.json
-```
-
-B7.1 benchmark:
-
-```text
 runs/b7_1_full_coverage/b7_model.pt
-runs/b7_1_full_coverage/gold_eval/gold_predictions.csv
+runs/b12_variable_series/audit/series_policy.json
+runs/b13_imagenet/b13_model.pt
 ```
 
-Frozen B6 scope:
+## 8. Frozen weak-v2 surface
+
+The B15-era nested validation surface is:
 
 ```text
-active studies  3120
-usable cells   14123
-positive        6871
-negative        7252
+surface                 weak_b6_holdout_v2
+active studies          3120
+weak-train studies      2497
+holdout studies          623
+holdout cells           2875
+positive / negative  1407 / 1468
+report-group overlap       0
+manifest SHA
+1a1b07bd690bae3cbb945773c4fcb1c3b0d0f6aa1dd18649d62859aeeb4603d1
 ```
 
-## 8. Why B9 exists
+It measures B6 teacher agreement only. Do not regenerate it based on model performance.
 
-A label-free audit of `train_series.csv` found that the historical dual-stream selector can populate a missing contrast slot with a same-plane acquisition from the opposite contrast class.
+## 9. Reproduce completed B15 training path
 
-```text
-historical selected streams  21886
-strict selected streams      21334
-wrong-slot substitutions       552
-wrong-slot fraction            2.52%
-strict semantic mismatches        0
-```
-
-The three-study test metadata contain one analogous false sagittal-fluid assignment.
-
-B9 exact rule:
-
-```text
-*_fluid       -> Fluid_Sensitive == True only
-*_structural  -> Fluid_Sensitive == False only
-missing class -> None / presence mask False
-```
-
-This is the only scientific change versus B7.1.
-
-## 9. Test B9 implementation
+Set:
 
 ```bash
-pytest -q \
-  tests/test_b6_report_labels.py \
-  tests/test_b6_gold_audit.py \
-  tests/test_b7_weak_supervision.py \
-  tests/test_b9_strict_routing.py
-
-which rsna-knee-b9
-which rsna-knee-b9-eval
+export B6_ROOT="runs/b6_report_labels_v121"
+export SERIES_POLICY="runs/b12_variable_series/audit/series_policy.json"
+export WEAK_V2="runs/weak_holdout_v2"
 ```
 
-## 10. Train B9
+B15 SSL:
 
 ```bash
-rsna-knee-b9 \
-  --config configs/b9_strict_routing.yaml \
+rsna-knee-b15-ssl \
+  --config configs/b15_mri_ssl.yaml \
   --data-root "$DATA_ROOT" \
-  --b5-checkpoint runs/b5_report_ssl/b5_encoder.pt \
-  --b6-root runs/b6_report_labels_v121 \
-  --out-root runs/b9_strict_routing
+  --weak-holdout-root "$WEAK_V2" \
+  --out-root runs/b15_mri_ssl
 ```
 
-Expected outputs:
-
-```text
-runs/b9_strict_routing/
-├── b9_model.pt
-├── history.json
-├── policy.json
-├── routing_audit.json
-└── supervision_plan.json
-```
-
-## 11. Inspect B9 before gold evaluation
+Matched B13-v2 control:
 
 ```bash
-cat runs/b9_strict_routing/routing_audit.json
-cat runs/b9_strict_routing/history.json
-cat runs/b9_strict_routing/supervision_plan.json
-```
-
-Mandatory routing condition:
-
-```text
-strict_semantic_mismatches = 0
-routing_policy = fluid_sensitive_exact_v1
-```
-
-Every complete epoch should retain the B7.1 supervision contract:
-
-```text
-batches                1560
-study draws            3120
-active cells          14123
-positive cells         6871
-negative cells         7252
-```
-
-## 12. B9 gold development evaluation
-
-Use a runtime-only worker-safe config if desired:
-
-```bash
-python - <<'PY'
-import yaml
-with open('configs/b9_strict_routing.yaml') as f:
-    c=yaml.safe_load(f)
-c['num_workers']=0
-c['persistent_workers']=False
-with open('/tmp/b9_eval.yaml','w') as f:
-    yaml.safe_dump(c,f,sort_keys=False)
-print('/tmp/b9_eval.yaml')
-PY
-```
-
-Then:
-
-```bash
-rsna-knee-b9-eval \
-  --config /tmp/b9_eval.yaml \
+rsna-knee-b13-v2 \
+  --config configs/b15_mri_ssl.yaml \
   --data-root "$DATA_ROOT" \
-  --checkpoint runs/b9_strict_routing/b9_model.pt \
-  --out-root runs/b9_strict_routing/gold_eval
+  --b6-root "$B6_ROOT" \
+  --series-policy "$SERIES_POLICY" \
+  --weak-holdout-root "$WEAK_V2" \
+  --out-root runs/b13_v2_control
 ```
 
-Primary benchmark:
-
-```text
-B7.1 macro AUC = 0.5644802945
-```
-
-Paired comparison:
+B15 downstream:
 
 ```bash
-python -m rsna_knee.cli evaluate \
-  --train-csv "$DATA_ROOT/train.csv" \
-  --oof runs/b7_1_full_coverage/gold_eval/gold_predictions.csv \
-  --compare-oof runs/b9_strict_routing/gold_eval/gold_predictions.csv \
-  --n-bootstrap 5000 \
-  --out runs/b9_strict_routing/gold_eval/b71_vs_b9.json
+rsna-knee-b15 \
+  --config configs/b15_mri_ssl.yaml \
+  --data-root "$DATA_ROOT" \
+  --b6-root "$B6_ROOT" \
+  --series-policy "$SERIES_POLICY" \
+  --weak-holdout-root "$WEAK_V2" \
+  --ssl-checkpoint runs/b15_mri_ssl/b15_ssl_encoder.pt \
+  --out-root runs/b15_mri_ssl/downstream
 ```
 
-Positive `median_difference` favors B9.
+These commands reproduce the frozen experiment; **do not use them to tune B15 after its gold result**.
 
-## 13. Reporting discipline
+## 10. Reproduce B15 validation
 
-The 58 gold studies are a repeated development/model-selection set. Do not tune target-specific B9 routing, restore individual substituted streams, change weak-label weights, select per-target winners, or optimize ensemble weights after seeing B9 gold results and then describe the result as independent validation.
+Control weak-v2:
+
+```bash
+rsna-knee-b15-weak-eval \
+  --config configs/b15_mri_ssl.yaml \
+  --data-root "$DATA_ROOT" \
+  --checkpoint runs/b13_v2_control/b13_v2_control.pt \
+  --b6-root "$B6_ROOT" \
+  --weak-holdout-root "$WEAK_V2" \
+  --mode control \
+  --out-root runs/b13_v2_control/weak_eval
+```
+
+B15 weak-v2:
+
+```bash
+rsna-knee-b15-weak-eval \
+  --config configs/b15_mri_ssl.yaml \
+  --data-root "$DATA_ROOT" \
+  --checkpoint runs/b15_mri_ssl/downstream/b15_model.pt \
+  --b6-root "$B6_ROOT" \
+  --weak-holdout-root "$WEAK_V2" \
+  --mode b15 \
+  --out-root runs/b15_mri_ssl/weak_eval
+```
+
+Paired gate:
+
+```bash
+rsna-knee-b15-compare \
+  --config configs/b15_mri_ssl.yaml \
+  --data-root "$DATA_ROOT" \
+  --b6-root "$B6_ROOT" \
+  --weak-holdout-root "$WEAK_V2" \
+  --control-predictions runs/b13_v2_control/weak_eval/weak_predictions.csv \
+  --b15-predictions runs/b15_mri_ssl/weak_eval/weak_predictions.csv \
+  --out runs/b15_mri_ssl/weak_eval/b13_v2_vs_b15.json
+```
+
+Observed gate:
+
+```text
+control 0.5652498118
+B15    0.7319060415
+paired median +0.1675245839
+95% CI [+0.1124433208,+0.2165156305]
+P=1.0000
+PASS
+```
+
+B15 earned one gold look:
+
+```bash
+rsna-knee-b15-gold-eval \
+  --config configs/b15_mri_ssl.yaml \
+  --data-root "$DATA_ROOT" \
+  --checkpoint runs/b15_mri_ssl/downstream/b15_model.pt \
+  --gate-json runs/b15_mri_ssl/weak_eval/b13_v2_vs_b15.json \
+  --out-root runs/b15_mri_ssl/gold_confirmation
+```
+
+Observed gold:
+
+```text
+B15 0.6209002783
+B13 0.6293565948
+```
+
+## 11. Current next step
+
+Do not rerun/tune B15 from this result. First audit B6 `positive`, `negated`, `uncertain`, and `unmentioned` states against expert truth. Any new supervision policy must be separately named and frozen.
+
+## 12. Reporting discipline
+
+The 58 gold studies are repeated development/model-selection data. Weak-v2 is teacher agreement only. Do not select target-specific winners, optimize blend weights, map unmentioned to negative by assumption, regenerate weak-v2, or describe local AUC as a hidden-test guarantee.
+
+The hidden Kaggle evaluation remains the next independent performance signal.
