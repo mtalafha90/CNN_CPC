@@ -1,6 +1,6 @@
 # B12.1 — hierarchical learned series-token aggregation
 
-> **Status — 2026-08-11:** IMPLEMENTED / PREDECLARED / **SKIPPED FOR THE COMPETITION WORKFLOW**. Package `0.22.0`.
+> **Status — 2026-08-12:** **IMPLEMENTED / SKIPPED FOR THE COMPETITION WORKFLOW.** Its architecture became the basis of B13 and B15 downstream modeling, but the clean B5-initialized B12.1 control itself was never trained.
 
 ## Original purpose
 
@@ -33,19 +33,17 @@ legacy 224x224 resize
 16 2.5D positions per real series
 plane/fluid/fat metadata embeddings
 batch size 2
-same B12 seed/DataLoader offsets
-same optimizer / LR / augmentation
 4 full epochs
 TTA [-1,0,1]
 5000 bootstrap replicates
 zero gold gradients / zero gold early stopping
 ```
 
-B12.1 is explicitly competition-only and requires the B5 encoder checkpoint. Its trainer rejects external pretrained flags; ImageNet belongs to the separate B13/B14 experiments.
+B12.1 is explicitly competition-only and requires the B5 encoder checkpoint. ImageNet belongs to the separate B13+ experiments.
 
-## Why it is skipped
+## Why it was skipped
 
-B13 completed before B12.1 and produced a substantially stronger development result:
+B13 completed first and produced a much stronger reused-gold development result:
 
 ```text
 B13 macro AUC      0.6293565948
@@ -60,32 +58,34 @@ median(B13-B12)    +0.0638674720
 P(B13 > B12)        0.9920
 ```
 
-Paired versus B7.1:
-
-```text
-median(B13-B7.1)   +0.0652260946
-95% paired CI      [+0.0039768779,+0.1266069220]
-P(B13 > B7.1)       0.9808
-```
-
 The competition workflow did not spend another full run solely to complete this causal ablation.
 
-## Scientific consequence of skipping B12.1
+## Scientific consequence
 
-The clean comparison:
+The clean comparison
 
 ```text
-B12.1 = hierarchical architecture + B5 initialization
-B13   = hierarchical architecture + ImageNet encoder protocol
+B12.1 = hierarchy + B5 initialization
+B13   = hierarchy + ImageNet encoder protocol
 ```
 
 is unavailable. Therefore the project does not claim that the entire B13 improvement is caused solely by ImageNet initialization.
 
+## Successor results through B15
+
+```text
+B13 gold  0.6293565948  retained champion
+B14 gold  0.6197914249  rejected globally
+B15 gold  0.6209002783  no global improvement
+```
+
+B15 reused the hierarchical one-token-per-series downstream architecture after knee-MRI same-study contrastive adaptation. On frozen weak-v2 it improved from matched-control `0.5652498118` to `0.7319060415`, with paired median `+0.1675245839` and 95% CI `[+0.1124433208,+0.2165156305]`, but the gain did not transfer to global expert-gold AUC.
+
+This makes the B12.1 hierarchy an important architectural ancestor, while the immediate scientific priority shifts toward auditing weak-supervision states rather than training the skipped B12.1 ablation.
+
 ## Reproduction commands — archived
 
 ```bash
-export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
-
 rsna-knee-b12-1 \
   --config configs/b12_1_hierarchical.yaml \
   --data-root "$DATA_ROOT" \
@@ -103,12 +103,4 @@ rsna-knee-b12-1-eval \
 
 These commands remain for reproducibility, not the active roadmap.
 
-## Successor results
-
-B13 remains the retained development champion. See [`B13_IMAGENET_INIT.md`](B13_IMAGENET_INIT.md).
-
-B14 tested the full `K x 16` slice-token memory with the same B13 ImageNet encoder protocol and completed at macro AUC `0.6197914249`, below B13's `0.6293565948`. The paired B14-B13 median was `-0.0093726931`, 95% CI `[-0.0469823411,+0.0250137870]`, with `P(B14>B13)=0.2924`. B14 is therefore rejected globally and B13 remains retained. See [`B14_IMAGENET_FULL_TOKENS.md`](B14_IMAGENET_FULL_TOKENS.md).
-
-The next major representation hypothesis is B15: ImageNet -> competition knee-MRI self-supervised adaptation -> B13 hierarchical aggregation.
-
-Full updated roadmap: [`ROADMAP_AFTER_B12_1.md`](ROADMAP_AFTER_B12_1.md).
+Current status: [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md). Post-B15 roadmap: [`RAISING_AUC.md`](RAISING_AUC.md).
