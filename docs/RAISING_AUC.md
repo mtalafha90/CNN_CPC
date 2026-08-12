@@ -1,54 +1,44 @@
 # Raising macro AUC beyond B13
 
-> **Status — 2026-08-11.** B13 remains the development champion at macro AUC `0.6293565948`. B14 completed at `0.6197914249` and was rejected globally. The full corrected B13 slice audit is complete and rejects slice-count undersampling as a primary bottleneck. Package `0.23.0` supersedes weak holdout v1 with a stratified v2 plus strict all-12-target bootstrap.
+> **Status — 2026-08-12.** B13 remains the reused-gold development champion at macro AUC `0.6293565948`. B14 was rejected globally at `0.6197914249`. B15 passed the frozen weak-v2 gate by a very large margin but its one-look reused-gold confirmation was `0.6209002783`, so the next priority shifts from more representation tuning to a direct audit of the weak-supervision states.
 
 ## Current evidence
 
 ```text
-B13 macro AUC        0.6293565948
-B14 macro AUC        0.6197914249
+B13 gold macro AUC       0.6293565948   retained champion
+B14 gold macro AUC       0.6197914249   rejected globally
+B15 gold macro AUC       0.6209002783   no global improvement
 
-paired B14-B13
-median difference    -0.0093726931
-95% paired CI        [-0.0469823411,+0.0250137870]
-P(B14 > B13)          0.2924
+B15 weak-v2              0.7319060415
+B13-v2 control weak-v2   0.5652498118
+paired weak median       +0.1675245839
+95% paired weak CI       [+0.1124433208,+0.2165156305]
+P(B15 > control)          1.0000
 ```
 
-B14 fit the B6 weak labels more strongly than B13 (`0.5822778610` versus `0.6132239342` final training loss) but did not improve global macro AUC. This argues against simply increasing downstream token capacity or fitting B6 harder.
+The key new result is the **weak/gold divergence**. B15 learned a representation that ranks B6 report-derived labels much better, yet this did not improve the primary expert-gold macro AUC.
 
-## What the B6 audit implies
+## What B14 already ruled against
+
+B14 retained full `K x 16` downstream slice-token memory and fit B6 more strongly than B13:
 
 ```text
-sensitivity          0.975
-specificity          0.606
-positive precision   0.690
-balanced accuracy    0.790
-coverage             0.361
+B14 final B6 loss  0.5822778610
+B13 final B6 loss  0.6132239342
 ```
 
-These values establish noisy and incomplete weak supervision. They do **not** establish a numerical downstream macro-AUC ceiling. Supervision quality remains a plausible limiting factor, but historical B6 v1.2.1 must stay frozen for controlled B7-B15 comparisons.
+Yet B14 gold macro AUC remained lower. This argues against simply adding downstream token capacity or fitting the current weak labels harder.
 
-## Diagnostic 1 complete — exact B13 slice exposure
+## What the exact B13 slice audit ruled against
 
-The retired `16 / n_slices` proxy was wrong because B13 uses 16 2.5D triplets, training gaps `[1,2]` with center jitter `+/-2`, and evaluation TTA offsets `[-1,0,1]`.
-
-The full corrected audit on the exact 17,475-series non-gold B13 surface found:
+The corrected 17,475-series audit found:
 
 ```text
 series audited/readable  17475 / 17475
 slices/series median     30 (p95 50, max 320)
-
-eval unique fraction     median 100.0% (p25 100.0%)
-eval max skipped run     median 0.0 slices (p95 0.0)
-training expected/view   median 87.0%
+eval unique fraction     median 100.0%
 complete eval exposure   95.9%
-eval run >=2 slices      3.9%
-eval run >=3 slices      3.8%
-skipped-run length       median 0.0 mm (p95 0.0 mm)
-
-Axial      n=4455   eval=100.0% max-run=0.0 train/view=85.2%
-Coronal    n=5815   eval=100.0% max-run=0.0 train/view=87.0%
-Sagittal   n=7205   eval=100.0% max-run=0.0 train/view=87.0%
+eval max skipped run     median 0.0 slices (p95 0.0)
 ```
 
 Decision:
@@ -57,140 +47,189 @@ Decision:
 slice-count undersampling as primary B13 bottleneck -> REJECT
 ```
 
-Do not launch a 24/32/48-slice sweep from the reused gold surface. This result does not rule out in-plane resolution loss at `224x224`.
+Do not launch a 24/32/48-slice sweep from the reused gold surface. In-plane resolution remains a different question.
 
-Canonical record: `docs/B13_SLICE_EXPOSURE_AUDIT.md`.
+## What B15 established
 
-## Diagnostic 2 — weak holdout v1 superseded
+### Stronger MRI-domain representation learning is possible
 
-The first report-group-safe 20% split had the correct global size and zero leakage:
+B15 used ImageNet initialization followed by same-study, multi-instance knee-MRI contrastive adaptation on 3,726 competition studies while excluding all 58 gold studies and all 623 weak-v2 holdout studies.
+
+All four SSL passes completed exactly over 20,534 eligible series. The downstream control and B15 candidate then trained on the same 2,497-study weak-train partition with identical B13 hierarchy/optimization.
+
+### The frozen weak-v2 gate was decisive
 
 ```text
-holdout studies          624
-holdout usable cells    2697
-report-group overlap       0
-gold studies               0
+control weak-v2      0.5652498118
+B15 weak-v2          0.7319060415
+raw delta           +0.1666562297
+paired median       +0.1675245839
+95% paired CI       [+0.1124433208,+0.2165156305]
+P(B15 > control)     1.0000
+```
+
+### The expert-gold transfer was absent globally
+
+```text
+B13 gold             0.6293565948
+B15 gold             0.6209002783
+raw B15-B13         -0.0084563164
+```
+
+This does not prove a representation ceiling. It shows that **optimizing compatibility with the current B6 weak supervision is not sufficient** for improving expert-label ranking.
+
+## What the B6 audit implies — and does not imply
+
+Frozen B6 gold audit:
+
+```text
+sensitivity          0.9748
+specificity          0.6061
+positive precision   0.6905
+NPV                  0.9639
+balanced accuracy    0.7904
+coverage             0.3606
+```
+
+These values establish noisy, sparse and asymmetric supervision. They do **not** establish a `0.75-0.80` downstream AUC ceiling.
+
+Under idealized class-conditional label noise, ranking can even be preserved by an affine transformation of the posterior. The real concern here is that report noise is likely instance-dependent and target-dependent: what is mentioned, negated or omitted depends on the study, radiologist and finding.
+
+## Priority 1 — B6 report-state audit
+
+Before training another model, inspect all four parser states against expert truth on the already-reused gold studies:
+
+```text
+positive
+negated
+uncertain
+unmentioned
+```
+
+For every target/state quantify:
+
+```text
+number of cells
+expert-positive count/fraction
+expert-negative count/fraction
+coverage
+precision / NPV where meaningful
+state-specific uncertainty
+```
+
+Key quantities include:
+
+```text
+P(expert positive | B6 positive)
+P(expert positive | B6 negated)
+P(expert positive | B6 uncertain)
+P(expert positive | B6 unmentioned)
+```
+
+This audit is diagnostic. It must not be converted directly into a post-hoc target-specific winner scheme.
+
+### Why unmentioned deserves audit rather than hard-negative conversion
+
+The current B6 policy correctly distinguishes `negated` from `unmentioned`. Report silence is not equivalent to an explicit negative. Do **not** blindly map all unmentioned findings to negative.
+
+Only if the audit supports a systematic relationship should a separately named/frozen successor supervision policy use unmentioned or uncertain states, preferably with conservative soft targets/low weights rather than unsupported hard labels.
+
+## Priority 2 — separately versioned supervision successor, only if audit supports it
+
+Potential controlled directions include:
+
+- soft/low-weight use of selected uncertain or unmentioned states;
+- target-global state weights declared before evaluation;
+- robust loss formulations such as symmetric/robust cross-entropy or early-learning regularization;
+- explicit modeling of label confidence rather than treating every usable report cell equally apart from the existing global weights.
+
+Any such experiment must have a new name/version. **B6 v1.2.1 remains frozen** for historical B7-B15 comparisons.
+
+## Priority 3 — richer report information without forcing sparse target labels
+
+B5 already demonstrated that full report semantics can shape MRI representations. A future experiment can revisit image-report learning with the stronger ImageNet/B15-era encoder while keeping the report branch training-only.
+
+The scientific question should be representation alignment to the report, not another gold-tuned 12-target report classifier.
+
+## Priority 4 — better report labelling
+
+A stronger report labeler may be valuable, but improvement should come from a small, deliberately annotated report set or a separately validated labeler rather than another round of parser tuning against the same 58 image-level gold labels.
+
+If expert report annotation is collected, preserve a held-out subset for measuring the labeler itself.
+
+## Priority 5 — robust weak-label optimization
+
+After label-state quality is understood, test one robust-loss hypothesis at a time. Avoid combining robust loss, new labels, new representation and larger resolution in one experiment, because attribution would be impossible.
+
+## Priority 6 — in-plane resolution
+
+The exact slice audit closes **slice-count** undersampling, not `224x224` in-plane detail. Higher in-plane resolution remains a plausible later experiment, particularly for focal ligament/meniscal findings.
+
+It should be a global predeclared comparison, not a target-specific resolution selection based on reused gold.
+
+## Priority 7 — architecture/capacity only after supervision is addressed
+
+B8 and B14 both show that more downstream token structure/capacity can fit training well without improving macro AUC. Larger Transformers, more pathology layers or more slice tokens are therefore lower priority than supervision quality.
+
+## Priority 8 — global ensembles after structure is settled
+
+Multi-seed or architecture-diverse ensembles may reduce variance. They should use globally fixed weights/rules and must not use gold-selected target-specific mixtures.
+
+## Frozen validation discipline
+
+Weak-v2 remains frozen:
+
+```text
+train studies             2497
+holdout studies            623
+holdout cells             2875
 manifest SHA
-fdbc02f88e5a4eff31783b4242890e943609d5c783bd54aca38af8a89e7e0968
+1a1b07bd690bae3cbb945773c4fcb1c3b0d0f6aa1dd18649d62859aeeb4603d1
 ```
 
-However, Synovitis had:
+Do not regenerate it after B15.
+
+The reused 58 studies remain development confirmation only. The next genuinely independent signal is the hidden Kaggle evaluation.
+
+## Explicitly prohibited
 
 ```text
-70 positive / 1 negative
-```
-
-With only one negative, a substantial fraction of ordinary study-bootstrap replicates omit that class. Allowing undefined targets to drop out would change the macro estimand across replicates.
-
-No B15 candidate or matched B13 control was trained on v1. It is therefore superseded **before model fitting**, without using gold performance or model predictions.
-
-## Weak holdout v2
-
-Package `0.23.0` makes `rsna-knee-weak-holdout` freeze `weak_b6_holdout_v2` by default.
-
-The split policy uses only frozen B6 labels and normalized report groups:
-
-```text
-holdout fraction        0.20
-seed                    2026
-report groups           mandatory
-candidate splits        4096
-minimum class count     4 per side where globally feasible
-split objective         match holdout size + all 24 target/class counts
-uses gold labels        false
-uses model predictions  false
-```
-
-For the 17 global Synovitis negatives, v2 requires at least 4 in holdout and at least 4 in weak training.
-
-Freeze v2 before any B15/control training:
-
-```bash
-export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
-
-rsna-knee-weak-holdout \
-  --config configs/b13_imagenet_init.yaml \
-  --data-root "$DATA_ROOT" \
-  --b6-root runs/b6_report_labels_v121 \
-  --holdout-fraction 0.20 \
-  --seed 2026 \
-  --min-class-count 4 \
-  --search-candidates 4096 \
-  --out-root runs/weak_holdout_v2
-```
-
-Once v2 is frozen successfully, its manifest SHA is part of the experiment contract and must not be regenerated based on model results.
-
-## Strict weak-surface bootstrap
-
-Weak evaluation now keeps the estimand fixed:
-
-```text
-bootstrap studies with replacement
--> compute all 12 target AUCs
--> discard replicate if any target AUC is undefined
--> accepted macro = mean of exactly 12 target AUCs
-```
-
-Always report both `n_valid_replicates` and `valid_replicate_fraction`. The weak surface still measures teacher agreement, not expert truth.
-
-## B15 remains the next representation hypothesis
-
-```text
-ImageNet ConvNeXt-Tiny
-        |
-        v
-competition knee-MRI self-supervised adaptation
-        |
-        v
-B13 one-token-per-series hierarchy
-        |
-        v
-frozen downstream B6 recipe
-```
-
-For a valid weak-surface comparison, train two new models on the same v2 weak-train partition:
-
-```text
-control:   ImageNet -> B13 hierarchy
-candidate: ImageNet -> MRI SSL -> B13 hierarchy
-```
-
-Existing B13/B14 checkpoints were trained on all 3,120 B6-active studies and cannot be retrospectively scored on v2 as validation.
-
-The intended decision chain is:
-
-```text
-freeze v2
-   -> matched B13-control + B15 candidate
-   -> paired strict 12-target weak bootstrap
-   -> one predeclared winner to reused 58-study gold surface
-   -> gold used as development confirmation only
-   -> Kaggle hidden evaluation as independent signal
-```
-
-## Priority order
-
-1. **Freeze weak holdout v2.** This is now the immediate gate.
-2. **Implement B15 plus a matched B13-control trainer that respects the v2 manifest.**
-3. **Compare on v2 with paired strict all-12-target bootstrap.**
-4. **Take only the predeclared winner to one reused-gold development confirmation.**
-5. **Investigate supervision quality** under a separately versioned/frozen label experiment if B15 stalls.
-6. **Investigate in-plane resolution** only as a separately predeclared global experiment; slice-count undersampling itself is closed.
-7. **Multi-seed/global ensembling** only after structure is settled and without gold-selected target weights.
-
-## Still prohibited
-
-```text
-target-wise B13/B14 winners
+target-wise B13/B14/B15 winners
+gold-selected weak-label state weights
 gold-selected slice counts
 gold-selected thresholds
 gold-selected ensemble weights
-retrospective weak-holdout evaluation of checkpoints trained on holdout studies
-regenerating v2 based on model performance
-claiming the weak holdout is expert truth
-claiming the reused 58 studies are independent validation
-claiming a 0.75-0.80 supervision ceiling from B6 balanced accuracy
+B15 SSL epoch/LR retuning from its gold result
+retrospective weak validation of checkpoints trained on holdout studies
+regenerating weak-v2 based on performance
+calling weak-v2 teacher agreement expert truth
+calling reused gold independent validation
+claiming a numerical B6 AUC ceiling from balanced accuracy
+blindly mapping unmentioned report states to negative
 ```
 
-The objective remains higher **global macro ROC AUC** through controlled, reproducible representation or supervision improvements rather than increasingly fine tuning to the repeatedly reused 58 labelled studies.
+## Current recommended sequence
+
+```text
+B13 remains champion
+        |
+        v
+B6 report-state audit
+        |
+        v
+Does audit justify additional weak information?
+   | no                         | yes
+   v                            v
+prioritize other          define frozen/versioned
+representation or         supervision successor
+resolution hypotheses           |
+   \____________________________/
+                |
+                v
+      frozen model comparison
+                |
+                v
+        hidden Kaggle signal
+```
+
+The goal remains higher **global macro ROC AUC** through controlled, reproducible improvements rather than increasingly fine tuning to 58 repeatedly reused expert-labelled cases.
