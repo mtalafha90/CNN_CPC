@@ -1,6 +1,6 @@
 # B13 — ImageNet encoder initialization protocol
 
-> **Status — 2026-08-11:** **COMPLETED / RETAINED / DEVELOPMENT CHAMPION.** Package `0.22.0`.
+> **Status — 2026-08-12:** **COMPLETED / RETAINED / DEVELOPMENT CHAMPION.** Originally introduced in package `0.22.0`; B13 remains the reused-gold champion after completed B14 and B15 successor experiments.
 
 ## Scientific question
 
@@ -168,28 +168,51 @@ B14 also achieved a lower final B6 training loss (`0.5822778610`) than B13 (`0.6
 
 See [`B14_IMAGENET_FULL_TOKENS.md`](B14_IMAGENET_FULL_TOKENS.md).
 
+## Controlled successor result — B15
+
+B15 tested ImageNet -> competition knee-MRI same-study contrastive adaptation -> the unchanged B13 hierarchical downstream model. It used a matched newly trained B13-v2 control on the frozen weak-v2 training partition.
+
+Weak-v2 teacher-agreement result:
+
+```text
+B13-v2 control              0.5652498118
+B15                        0.7319060415
+raw B15-control            +0.1666562297
+paired median              +0.1675245839
+95% paired CI              [+0.1124433208,+0.2165156305]
+P(B15 > control)            1.0000
+predeclared gate            PASS
+```
+
+B15 then received the single predeclared reused-gold confirmation:
+
+```text
+B15 macro AUC               0.6209002783
+95% CI                     [0.5706720829,0.6675892903]
+B13 macro AUC               0.6293565948
+raw B15-B13                -0.0084563164
+```
+
+The large weak-teacher improvement did not transfer to a global expert-gold improvement. B13 therefore remains the development champion. Do not construct target-wise B13/B15 hybrids or retune B15 from this gold result.
+
+See [`B15_MRI_SSL.md`](B15_MRI_SSL.md).
+
 ## Retained decision
 
 ```text
 B13 RETAIN / DEVELOPMENT CHAMPION
 B14 REJECT GLOBALLY
+B15 WEAK-V2 GATE PASS / NO GLOBAL GOLD IMPROVEMENT
 ```
 
 B12.1 is still skipped, so the project does not claim that the full B13 gain is caused solely by ImageNet initialization.
 
-## Next representation hypothesis
+## Current next step
 
-The next major controlled hypothesis is B15:
+The next evidence-driven step is not another B15 representation sweep. First audit the frozen B6 states (`positive`, `negated`, `uncertain`, `unmentioned`) against expert truth on the already-reused gold surface. Only if that audit supports additional supervision should a separately versioned/frozen supervision successor be defined.
 
-```text
-ImageNet ConvNeXt-Tiny
-        -> competition knee-MRI self-supervised adaptation
-        -> B13 hierarchical aggregation
-        -> frozen B6 downstream recipe
-```
-
-All 58 gold studies must be excluded from B15 SSL optimization. No gold labels may enter gradients, early stopping or checkpoint selection.
+Do not blindly map unmentioned report states to negative.
 
 ## Interpretation policy
 
-The 58 fully labelled studies have been reused throughout sequential development. B13's `0.6294` and B14's `0.6198` are development/model-selection estimates, not independent validation and not leaderboard results. A Kaggle hidden-test/leaderboard result remains the next genuinely independent performance signal.
+The 58 fully labelled studies have been reused throughout sequential development. B13's `0.6294`, B14's `0.6198`, and B15's `0.6209` are development/model-selection estimates, not independent validation and not leaderboard results. Weak-v2 is B6 teacher agreement, not expert truth. A Kaggle hidden-test/leaderboard result remains the next genuinely independent performance signal.
