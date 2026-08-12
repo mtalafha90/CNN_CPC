@@ -1,6 +1,6 @@
 # Local Real-Data Training Runbook
 
-> **Current stage — 2026-08-10:** package `0.14.0`. **B7.1 remains the current leader at macro AUC `0.5644802945`. B8 is rejected at `0.5300962807`. B9 strict semantic routing is implemented and ready for testing/training.** See [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
+> **Current stage — 2026-08-12:** package `0.24.1`. **B13 is the reused-gold development champion at macro AUC `0.6293565948`. B15 is fully completed: it passed frozen weak-v2 but scored `0.6209002783` on its single reused-gold confirmation and did not replace B13. The next step is a B6 report-state audit, not another B15 training run.** See [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
 
 ## Environment
 
@@ -11,7 +11,7 @@ precision: bf16
 one visible GPU
 ```
 
-Verified paths:
+Verified local paths used in the completed campaign:
 
 ```text
 repo:      /media/talafha/Disk_1/CNN_CPC
@@ -28,23 +28,19 @@ cd "$REPO"
 conda activate rsna-knee
 ```
 
-## Pull/install between stages
+## Pull/install
 
 ```bash
 git checkout main
 git pull --ff-only origin main
 python -m pip install -e .
-
-python - <<'PY'
-import rsna_knee
-print(rsna_knee.__version__)
-PY
+python -c "import rsna_knee; print(rsna_knee.__version__)"
 ```
 
-Expected version:
+Expected current package version:
 
 ```text
-0.14.0
+0.24.1
 ```
 
 ## Current measured ladder
@@ -55,197 +51,139 @@ B1 strong SSL                    0.5030284974
 B4 frozen SSL + classical        0.5137567459
 B5 image-report SSL              0.5243650851
 B7-v1 weak supervision           0.5397724412
-B7.1 full coverage               0.5644802945   CURRENT LEADER
-B5+B7.1 fixed rank ensemble      0.5540141184   REJECTED
-B8 spatial anatomy               0.5300962807   REJECTED
-B9 strict semantic routing       pending        ACTIVE
+B7.1 full coverage               0.5644802945
+B8 spatial anatomy               0.5300962807
+B9 strict routing                0.5334962669
+B10 physical scale               0.5523982721
+B11.1 quantile pseudo labels     0.5506902702
+B12 all real series              0.5660915179
+B13 ImageNet hierarchy           0.6293565948   DEVELOPMENT CHAMPION
+B14 ImageNet full tokens         0.6197914249   REJECTED GLOBALLY
+B15 MRI SSL hierarchy            0.6209002783   NO GLOBAL GOLD IMPROVEMENT
 ```
 
-## Why B9
+B11-v1 failed its viability gate; B12.1 was implemented but skipped.
 
-The historical six-stream selector sometimes places a same-class acquisition into the opposite semantic slot when a plane has multiple series but lacks one contrast class.
-
-Full training metadata audit:
+## Key retained artifacts
 
 ```text
-historical selected streams   21886
-strict selected streams       21334
-wrong-slot substitutions        552
-wrong-slot fraction             2.52%
-strict semantic mismatches         0
-```
-
-Per stream:
-
-```text
-sagittal_fluid       251 removed
-sagittal_structural   28 removed
-coronal_fluid          2 removed
-coronal_structural    34 removed
-axial_fluid            0 removed
-axial_structural     237 removed
-```
-
-Provided test metadata:
-
-```text
-historical selected streams 14
-strict selected streams     13
-wrong-slot substitutions     1
-```
-
-B9 uses exact semantics:
-
-```text
-*_fluid       -> Fluid_Sensitive == True only
-*_structural  -> Fluid_Sensitive == False only
-missing class -> None / masked
-```
-
-## B9 scientific contract
-
-Only routing differs from B7.1. These remain unchanged:
-
-```text
-B5 initialization
-B6 v1.2.1 weak labels
-KneeMILNet architecture
-16 slices/stream
-batch size 2
-4 epochs
-1560 batches/epoch
-encoder LR 1e-5
-head LR 1e-4
-same augmentation
-TTA [-1,0,1]
-5000 bootstrap replicates
-no gold gradients
-no gold early stopping
-```
-
-## Test B9 before training
-
-```bash
-pytest -q \
-  tests/test_b6_report_labels.py \
-  tests/test_b6_gold_audit.py \
-  tests/test_b7_weak_supervision.py \
-  tests/test_b9_strict_routing.py
-```
-
-Also verify the commands are installed:
-
-```bash
-which rsna-knee-b9
-which rsna-knee-b9-eval
-```
-
-## Train B9-v1
-
-```bash
-rsna-knee-b9 \
-  --config configs/b9_strict_routing.yaml \
-  --data-root "$DATA_ROOT" \
-  --b5-checkpoint runs/b5_report_ssl/b5_encoder.pt \
-  --b6-root runs/b6_report_labels_v121 \
-  --out-root runs/b9_strict_routing
-```
-
-Expected outputs:
-
-```text
-runs/b9_strict_routing/
-├── b9_model.pt
-├── history.json
-├── policy.json
-├── routing_audit.json
-└── supervision_plan.json
-```
-
-The model checkpoint is refreshed after each completed epoch.
-
-## Inspect before gold evaluation
-
-```bash
-cat runs/b9_strict_routing/routing_audit.json
-cat runs/b9_strict_routing/history.json
-cat runs/b9_strict_routing/supervision_plan.json
-```
-
-Mandatory routing checks:
-
-```text
-routing_policy             fluid_sensitive_exact_v1
-strict_semantic_mismatches 0
-```
-
-For each complete full epoch, expect approximately the B7.1 supervision contract:
-
-```text
-batches                         1560
-study draws                     3120
-active supervision cells       14123
-positive cells                  6871
-negative cells                  7252
-```
-
-If strict routing unexpectedly leaves a weak-training study with no selected MRI stream at all, `supervision_plan.json` will report that explicitly. Do not conceal or patch such filtering after the fact.
-
-## B9 gold evaluation
-
-Only after inspecting the artifacts:
-
-```bash
-python - <<'PY'
-import yaml
-with open('configs/b9_strict_routing.yaml') as f:
-    c=yaml.safe_load(f)
-c['num_workers']=0
-c['persistent_workers']=False
-with open('/tmp/b9_eval.yaml','w') as f:
-    yaml.safe_dump(c,f,sort_keys=False)
-print('/tmp/b9_eval.yaml')
-PY
-
-rsna-knee-b9-eval \
-  --config /tmp/b9_eval.yaml \
-  --data-root "$DATA_ROOT" \
-  --checkpoint runs/b9_strict_routing/b9_model.pt \
-  --out-root runs/b9_strict_routing/gold_eval
-```
-
-Primary benchmark:
-
-```text
-B7.1 = 0.5644802945
-```
-
-Then compare B7.1 -> B9:
-
-```bash
-python -m rsna_knee.cli evaluate \
-  --train-csv "$DATA_ROOT/train.csv" \
-  --oof runs/b7_1_full_coverage/gold_eval/gold_predictions.csv \
-  --compare-oof runs/b9_strict_routing/gold_eval/gold_predictions.csv \
-  --n-bootstrap 5000 \
-  --out runs/b9_strict_routing/gold_eval/b71_vs_b9.json
-```
-
-For this orientation, positive `median_difference` favors B9 and `probability_b_better` is `P(B9 > B7.1)`.
-
-## Preserve these artifacts
-
-```text
-runs/b5_report_ssl/
+runs/b5_report_ssl/b5_encoder.pt
 runs/b6_report_labels_v121/
-runs/b7_weak_supervision/
-runs/b7_1_full_coverage/
-runs/b8_spatial_anatomy/
-runs/b9_strict_routing/
+runs/b12_variable_series/audit/series_policy.json
+runs/b13_imagenet/b13_model.pt
+runs/weak_holdout_v2/
+runs/b15_mri_ssl/b15_ssl_encoder.pt
+runs/b13_v2_control/b13_v2_control.pt
+runs/b15_mri_ssl/downstream/b15_model.pt
+runs/b13_v2_control/weak_eval/
+runs/b15_mri_ssl/weak_eval/
+runs/b15_mri_ssl/gold_confirmation/
 ```
 
-Do not delete completed prediction/evaluation files; they are the experiment audit trail.
+Preserve these artifacts; they are the campaign audit trail.
 
-## Interpretation rule
+## Frozen weak-v2 contract
 
-The 58 gold studies are now a repeated development/model-selection set. Do not tune B9 target-specific routing, restore individual substituted streams, change weak-label weights, select target-specific model winners, or optimize ensemble weights from the first B9 gold result and then call that result independent validation.
+```text
+surface                 weak_b6_holdout_v2
+train studies           2497
+holdout studies          623
+holdout cells           2875
+report-group overlap       0
+manifest SHA
+1a1b07bd690bae3cbb945773c4fcb1c3b0d0f6aa1dd18649d62859aeeb4603d1
+```
+
+Do not regenerate this split from model outcomes.
+
+## B15 completed training integrity
+
+### SSL
+
+```text
+SSL studies             3726
+series/pass            20534
+batches/epoch           1863
+4 full epochs
+loss 2.70946 -> 2.47569
+gold images used            0
+v2 holdout images used      0
+```
+
+### Matched downstream arms
+
+Both control and B15 used:
+
+```text
+2497 studies
+13974 real MRI series
+11248 B6 cells
+5464 positive / 5784 negative
+1249 batches/epoch
+4 complete epochs
+```
+
+Control final loss: `0.6622741637`.  
+B15 final loss: `0.6065262400`.  
+Training loss is not a selection metric.
+
+## B15 completed validation
+
+Weak-v2:
+
+```text
+control                0.5652498118
+B15                   0.7319060415
+paired median         +0.1675245839
+95% paired CI         [+0.1124433208,+0.2165156305]
+P(B15 > control)       1.0000
+predeclared gate       PASS
+```
+
+One-look reused gold:
+
+```text
+B15                   0.6209002783
+95% CI               [0.5706720829,0.6675892903]
+B13                   0.6293565948
+raw B15-B13          -0.0084563164
+```
+
+B13 remains retained.
+
+## Evaluation runtime note
+
+The B15 weak evaluator uses three-view TTA and can create multiprocessing cleanup warnings with several workers. The completed evaluations succeeded with the standard config. If a terminal/session is unstable, runtime-only worker settings may be reduced without changing the scientific evaluation contract, provided model/TTA/bootstrap settings remain frozen.
+
+Do not change:
+
+```text
+b7_eval_batch_size = 2
+b7_eval_tta_offsets = [-1,0,1]
+b7_n_slices = 16
+b7_image_size = 224
+b7_n_bootstrap = 5000
+```
+
+## Current next task
+
+Do **not** rerun B15 or change its SSL/downstream hyperparameters from the gold result.
+
+The next diagnostic is a B6 state audit on the already-reused gold studies:
+
+```text
+positive
+negated
+uncertain
+unmentioned
+```
+
+For each target/state quantify counts, expert-positive fraction, expert-negative fraction and coverage. In particular, do not assume `unmentioned = negative`.
+
+Any new supervision policy must receive a new version/name and be frozen before model evaluation.
+
+## Reporting discipline
+
+The 58 gold studies are repeated development/model-selection data. Weak-v2 is B6 teacher agreement only. Do not select target-specific winners, optimize ensemble weights, regenerate weak-v2, retune B15 from gold, or describe local development AUC as independent hidden-test performance.
+
+The hidden Kaggle evaluation remains the next genuinely independent model-performance signal.
