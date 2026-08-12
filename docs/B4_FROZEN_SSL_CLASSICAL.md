@@ -1,137 +1,62 @@
-# B4 frozen SSL + classical pathology classifiers
+# B4 — frozen SSL + classical pathology classifiers
 
-B4 freezes the strong competition-only SSL ConvNeXt encoder and uses the 58 gold labels only in low-capacity target-specific PCA + logistic-regression classifiers.
+> **Status — 2026-08-12:** **COMPLETED / RETAINED HISTORICAL ABLATION.** B4 gold macro AUC was `0.5137567459`. B13 is now the reused-gold development champion at `0.6293565948`; B15 completed afterward without replacing B13.
 
-> Current campaign status is summarized in [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
+## Scientific question
 
-## Motivation
+B4 froze the strong competition-only SSL ConvNeXt encoder and used the 58 gold labels only in low-capacity target-specific PCA + logistic-regression classifiers. It tested whether useful pathology signal was already present in the representation but obscured by high-variance end-to-end fine-tuning.
 
-Before B4, the completed full-model candidates were:
-
-| Model | Macro AUC |
-|---|---:|
-| B0 random | `0.4762536432` |
-| B1 strong SSL | `0.5030284974` |
-| B2 differential LR | `0.4993244663` |
-| B3 pathology-aware MIL | `0.4944652486` |
-| B1+B3 fixed rank | `0.5048038179` |
-
-B4 tests whether the strong SSL representation already contains useful pathology signal that is obscured by high-variance end-to-end fine-tuning on only 58 trusted studies.
-
-## Representation
-
-Checkpoint:
+Verified gold feature cache:
 
 ```text
-runs/ssl_strong/ssl_encoder.pt
+studies  58
+features [58, 6, 2304]
+streams  6
+pooling  mean + std + max
+encoder frozen true
 ```
 
-Requirements:
+## Nested probe
 
-- source metadata equals `competition_training_data`;
-- no external pretrained image weights;
-- encoder is fully frozen;
-- deterministic gold feature extraction;
-- six dual MRI streams;
-- mean, standard deviation and max pooling of 768-dimensional slice embeddings.
-
-The verified gold cache is:
+For each outer fold/target, B4 selected among a fixed grid on non-outer gold only:
 
 ```text
-study_uids = (58,)
-features   = (58, 6, 2304)
-present    = (58, 6)
-finite     = true
+feature mode   all / fixed prior subset
+PCA components 4 / 8 / 12 / 16
+logistic C     0.1 / 1.0
 ```
 
-Missing-stream presence flags are explicitly appended to downstream design matrices.
+Outer labels were not used for policy selection.
 
-## Nested classifier protocol
-
-For each outer fold and target:
-
-1. hold the outer fold untouched;
-2. use the predefined inner fold for target-specific policy selection;
-3. fit PCA + logistic regression on the remaining gold selection-training fold;
-4. choose among the fixed grid by inner target AUC;
-5. refit the selected recipe on all non-outer gold studies;
-6. predict the outer fold once.
-
-Feature modes:
-
-- `all`: all six streams;
-- `prior`: fixed anatomy/sequence subsets declared before B4 OOF.
-
-Grid:
+## Completed result
 
 ```text
-feature mode:   all, prior
-PCA components: 4, 8, 12, 16
-logistic C:     0.1, 1.0
+B4 macro AUC       0.5137567459
+95% CI            [0.4619827141,0.5642366629]
+B1 macro AUC       0.5030284974
+paired median      +0.0102107449
+95% paired CI      [-0.0514266147,+0.0709432872]
+P(B4 > B1)          0.6378
 ```
 
-## Reproduction
+The paired interval was wide. B4 was retained as a useful frozen-representation ablation rather than a proven improvement.
 
-```bash
-rsna-knee-b4 extract \
-  --config configs/train_local_ssl_strong.yaml \
-  --split train \
-  --scope gold \
-  --out runs/b4_frozen_ssl/gold_features.npz
+B4.1-B4.3 tested shared/grouped/two-way policy selection and all scored lower, so the selector branch was frozen.
 
-rsna-knee-b4 nested \
-  --config configs/train_local_ssl_strong.yaml \
-  --features runs/b4_frozen_ssl/gold_features.npz \
-  --out-root runs/b4_frozen_ssl \
-  --n-bootstrap 5000
-```
+## Successor context
 
-## Final result
+B5 changed the representation while reusing this probe and reached `0.5243650851`. Later direct weak-supervision/all-series/ImageNet experiments ultimately produced:
 
 ```text
-pooled macro AUC = 0.5137567459
-95% CI           = [0.4619827141, 0.5642366629]
+B13 gold  0.6293565948  retained champion
+B14 gold  0.6197914249
+B15 gold  0.6209002783
 ```
 
-Per-target AUC:
-
-| Target | AUC |
-|---|---:|
-| ACL | 0.5858 |
-| MCL | 0.4807 |
-| Medial Meniscus | 0.5421 |
-| Lateral Meniscus | 0.6050 |
-| Medial OA | 0.5504 |
-| Lateral OA | 0.3985 |
-| PF OA | 0.6384 |
-| Effusion | 0.4447 |
-| Synovitis | 0.4456 |
-| Baker's | 0.3750 |
-| Contusion | 0.5587 |
-| Fracture | 0.5403 |
-
-Compared with B1 (A=B1, B=B4):
-
-```text
-paired median difference = +0.0102107449
-95% CI                   = [-0.0514266147, +0.0709432872]
-P(B4 > B1)               = 0.6378
-```
-
-## Policy instability
-
-The 36 target/fold selections were highly dispersed:
-
-```text
-feature mode: prior 20, all 16
-PCA:          4 -> 10, 8 -> 11, 12 -> 6, 16 -> 9
-C:            0.1 -> 19, 1.0 -> 17
-```
-
-B4.1-B4.3 tested increasingly shared/stabilized selection policies. All reduced pooled OOF performance.
+B15 also raised frozen weak-v2 teacher agreement to `0.7319060415` but did not improve expert-gold macro AUC. This reinforces the decision not to return to increasingly fine target-wise classifier selection on the same 58 labels.
 
 ## Decision
 
-**B4 is the current best clean standalone point estimate (`0.5138`).** The paired uncertainty versus B1 is wide, so it is not claimed as a statistically proven improvement.
+B4 remains a historical representation-separability diagnostic. Do not reopen target-specific PCA/C/grid design or use B4/B13/B15 target winners from reused gold.
 
-The B4 selector branch is now frozen: no further policy/grid redesign should be driven by the same 58 outer labels. B5 instead changes the representation while keeping this B4 probe fixed.
+Current status: [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md).
