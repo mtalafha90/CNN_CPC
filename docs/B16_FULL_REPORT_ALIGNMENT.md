@@ -1,30 +1,19 @@
 # B16 — full-report semantic representation alignment
 
-> **Status — 2026-08-12:** IMPLEMENTED / PREDECLARED / NOT YET RUN. Package `0.25.0`.
+> **Status — 2026-08-12:** REPORT-ALIGNMENT STAGE COMPLETED SUCCESSFULLY / DOWNSTREAM NOT YET RUN. Package `0.25.0`.
 
 ## Why B16 follows B15
 
 B15 decisively improved frozen weak-v2 B6-teacher agreement (`0.5652498118 -> 0.7319060415`) but did not improve the reused 58-study expert-gold macro AUC (`B13=0.6293565948`, `B15=0.6209002783`).
 
-The subsequent B6/B15 gold diagnostic added two key observations:
+The post-B15 B6/B15 gold diagnostic found:
 
 ```text
 coverage-conditioned high-confidence B6 macro AUC  0.7736374158
 full-surface four-state B6 ranking baseline          0.7024597743
 ```
 
-The high-confidence B6-error-alignment audit did **not** show B15 moving toward B6 mistakes. On 55 B6-wrong high-confidence gold cells, B15 moved toward expert truth more often than toward B6. Therefore B16 is not motivated as an error-correction experiment.
-
-The state audit instead showed that ignored report states contain information but are strongly pathology-dependent. Pooled expert-positive rates were:
-
-```text
-positive       116 / 168 = 0.6905
-negated          3 / 83  = 0.0361
-uncertain       11 / 29  = 0.3793
-unmentioned    110 / 416 = 0.2644
-```
-
-Target-specific rates vary too much to justify a universal `uncertain -> p` or `unmentioned -> p` training target. B16 therefore consumes the **full report semantics directly during representation learning** rather than converting the middle report states into new pseudo-labels.
+The B6-error alignment audit did not show B15 moving toward B6 mistakes. The state audit instead showed that ignored report states contain information but are strongly pathology-dependent, so B16 uses full report semantics directly rather than assigning new hard or soft targets to `uncertain` or `unmentioned` states.
 
 ## Scientific question
 
@@ -37,24 +26,16 @@ improve global 12-target expert-gold ranking?
 ## Representation path
 
 ```text
-torchvision ImageNet ConvNeXt-Tiny
-        |
-        v
-completed B15 same-study knee-MRI SSL encoder
-        |
-        v
-B16 full-report semantic alignment
-        |
-        v
-MRI encoder only
-        |
-        v
-B13 hierarchical one-token-per-series downstream model
+ImageNet ConvNeXt-Tiny
+        -> completed B15 same-study knee-MRI SSL encoder
+        -> B16 full-report semantic alignment
+        -> MRI encoder only
+        -> B13 hierarchical one-token-per-series downstream model
 ```
 
 ## Report semantics
 
-B16 deliberately reuses the established B5 competition-only text representation:
+B16 reuses the established B5 competition-only text representation:
 
 ```text
 full normalized report
@@ -65,25 +46,23 @@ full normalized report
 -> L2-normalized report vector
 ```
 
-No external clinical language model is introduced in B16-v1. This keeps the experiment focused on whether **full report content** adds value on top of B15's MRI-domain encoder.
+No external clinical language model is introduced in B16-v1. The report projection head is training-only; final inference remains MRI-only.
 
-The report projection head is training-only and discarded after alignment; final downstream inference remains MRI-only.
-
-## B16 report-alignment data contract
+## Report-alignment data contract
 
 ```text
 competition studies          4407
 gold studies excluded          58
 report-alignment studies     4349
+eligible real MRI series    24035
+2.5D examples / epoch       48070
 uses all non-gold reports    true
 gold labels                  false
 B6 labels in report stage    false
 weak-v2 as selection gate    false
 ```
 
-Unlike B15, the old 623-study weak-v2 split is not held out from B16 representation learning. Weak-v2 was invalidated as a surrogate selector for expert-gold improvement by the B15 experiment and is no longer a B16 model-selection surface.
-
-Every eligible repaired real MRI series for the 4,349 non-gold studies is retained.
+Unlike B15, the old 623-study weak-v2 split is not held out from B16 representation learning because weak-v2 is no longer used as a surrogate selector for expert-gold improvement.
 
 ## Frozen report-alignment protocol
 
@@ -112,11 +91,38 @@ Objective:
 loss = image->report contrastive NCE + 0.25 * cosine alignment
 ```
 
-Duplicate normalized reports are masked as false negatives by the established B5 report-group logic.
+Duplicate normalized reports are masked as false negatives using the established B5 report-group logic.
+
+## Completed representation stage
+
+All four epochs completed the exact full-coverage contract:
+
+| Epoch | Total loss | Report NCE | Cosine loss | Batches | Studies | Series | 2.5D examples | Full coverage | Budget limited |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
+| 1 | `3.8958491301` | `3.7314807830` | `0.6574733884` | 2175 | 4349 | 24035 | 48070 | true | false |
+| 2 | `3.1331863229` | `3.0068265086` | `0.5054392496` | 2175 | 4349 | 24035 | 48070 | true | false |
+| 3 | `2.7944439663` | `2.6814318427` | `0.4520484886` | 2175 | 4349 | 24035 | 48070 | true | false |
+| 4 | `2.5218941658` | `2.4161238326` | `0.4230813365` | 2175 | 4349 | 24035 | 48070 | true | false |
+
+Observed optimization change from epoch 1 to epoch 4:
+
+```text
+total loss    -35.27%
+report NCE    -35.25%
+cosine loss   -35.65%
+```
+
+Final report-alignment checkpoint:
+
+```text
+runs/b16_full_report/report_ssl/b16_report_encoder.pt
+```
+
+The representation stage is therefore accepted as complete. Loss improvement is an optimization diagnostic only; it is not a model-selection metric and does not establish expert-label improvement.
 
 ## Frozen downstream contract
 
-After report alignment, B16 returns to the **full B13 training surface**, not the B15 weak-v2 subset:
+B16 now returns to the full B13 training surface, not the B15 weak-v2 subset:
 
 ```text
 B6-active studies        3120
@@ -152,50 +158,18 @@ negated  -> target 0.05, weight 1.00
 uncertain/unmentioned -> ignored
 ```
 
-No state probabilities from the 58-study audit are inserted into B16 training.
+No state probabilities from the reused 58-study audit enter B16 training.
 
-## Run sequence
+## Next command — downstream training
 
-### 1. Pull/install/test
+Use the exact frozen B12/B13 series policy:
 
 ```bash
 cd /media/talafha/Disk_1/CNN_CPC
-git pull --ff-only origin main
 conda activate rsna-knee
-python -m pip install -e .
 
-pytest -q \
-  tests/test_b16_full_report.py \
-  tests/test_b15_mri_ssl.py \
-  tests/test_b6_b15_gold_diagnostic.py
-```
-
-### 2. B16 report alignment
-
-```bash
 export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
 
-rsna-knee-b16-report-ssl \
-  --config configs/b16_full_report_alignment.yaml \
-  --data-root "$DATA_ROOT" \
-  --b15-ssl-checkpoint runs/b15_mri_ssl/b15_ssl_encoder.pt \
-  --out-root runs/b16_full_report/report_ssl
-```
-
-Before downstream training inspect:
-
-```bash
-cat runs/b16_full_report/report_ssl/history.json
-cat runs/b16_full_report/report_ssl/policy.json
-```
-
-Require four complete unbudgeted passes.
-
-### 3. B16 downstream training
-
-Use the same frozen B12/B13 series policy used by B13:
-
-```bash
 rsna-knee-b16 \
   --config configs/b16_full_report_alignment.yaml \
   --data-root "$DATA_ROOT" \
@@ -205,7 +179,7 @@ rsna-knee-b16 \
   --out-root runs/b16_full_report/downstream
 ```
 
-Require every downstream epoch to report:
+Every downstream epoch must report:
 
 ```text
 study draws                  3120
@@ -218,9 +192,11 @@ full series coverage         true
 budget limited               false
 ```
 
-### 4. Single reused-gold development look
+Do not run the gold evaluator unless all four downstream epochs satisfy this exact contract.
 
-Only after the four downstream epochs satisfy the frozen contract:
+## Single reused-gold development look
+
+Only after four exact downstream epochs:
 
 ```bash
 rsna-knee-b16-gold-eval \
@@ -235,13 +211,13 @@ The evaluator performs B16 inference and the aligned paired B16-vs-B13 bootstrap
 
 ## Predeclared decision rule
 
-Primary selection is **global 12-target macro ROC AUC**.
+Primary selection is global 12-target macro ROC AUC. Historical champion:
 
 ```text
-historical champion B13 = 0.6293565948
+B13 = 0.6293565948
 ```
 
-B16 replaces B13 as the development champion only if the B16 global point estimate is higher. The paired bootstrap interval and `P(B16>B13)` quantify uncertainty but do not authorize target-wise mixing.
+B16 replaces B13 only if the global B16 point estimate is higher. The paired bootstrap quantifies uncertainty but does not authorize target-wise mixing.
 
 Regardless of result:
 
@@ -251,38 +227,4 @@ no report-loss tuning from gold
 no target-specific B13/B16 winners
 no post-gold queue/temperature/LR search
 no weak-v2 gate
-```
-
-A failed B16 is still informative: it would indicate that simple TF-IDF/SVD full-report alignment is insufficient and would motivate a separately defined richer image-text representation experiment rather than retroactive B16 tuning.
-
-## Outputs
-
-Representation stage:
-
-```text
-runs/b16_full_report/report_ssl/
-├── b16_report_encoder.pt
-├── history.json
-├── policy.json
-├── report_vectorizer.joblib
-├── report_svd.joblib
-└── report_semantics.npz
-```
-
-Downstream:
-
-```text
-runs/b16_full_report/downstream/
-├── b16_model.pt
-├── history.json
-├── policy.json
-└── supervision_plan.json
-```
-
-Gold development confirmation:
-
-```text
-runs/b16_full_report/gold_confirmation/
-├── gold_predictions.csv
-└── eval.json
 ```
