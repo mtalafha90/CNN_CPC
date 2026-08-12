@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rsna-knee-cnn-cpc"
-version = "0.26.1"
+version = "0.27.0"
 description = "One-GPU nested-validation weakly supervised knee MRI pipeline for the 2026 RSNA AI Challenge"
 requires-python = ">=3.10"
 dependencies = [
@@ -43,7 +43,7 @@ rsna-knee-b11 = "rsna_knee.b11_teacher_student:main"
 rsna-knee-b11-eval = "rsna_knee.b11_gold_eval:main"
 rsna-knee-b11-1-pseudo = "rsna_knee.b11_1_quantile_pseudo:main"
 rsna-knee-b11-1 = "rsna_knee.b11_1_teacher_student:main"
-rsna-knee-b11-1-eval = "rsna_knee.b11_1_gold_eval:main"
+rsna-knee-b11-1-eval = "rsna_knee.b11_gold_eval:main"
 rsna-knee-b12-audit = "rsna_knee.b12_series_audit:main"
 rsna-knee-b12 = "rsna_knee.b12_training:main"
 rsna-knee-b12-eval = "rsna_knee.b12_gold_eval:main"
@@ -68,6 +68,8 @@ rsna-knee-b16-gold-eval = "rsna_knee.b16_gold_eval:main"
 rsna-knee-b17 = "rsna_knee.b17_training:main"
 rsna-knee-b17-gold-eval = "rsna_knee.b17_gold_eval:main"
 rsna-knee-b17-submit = "rsna_knee.b17_submission:main"
+rsna-knee-final = "rsna_knee.final_all_data_training:main"
+rsna-knee-final-submit = "rsna_knee.final_all_data_submission:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
