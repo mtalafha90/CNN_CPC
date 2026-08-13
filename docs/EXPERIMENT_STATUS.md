@@ -5,17 +5,18 @@
 **Gold development/selection set:** 58 fully labelled studies  
 **Primary metric:** macro ROC AUC across 12 targets
 
-The 58-study expert-labelled surface has been reused repeatedly and is therefore a **development/model-selection surface, not independent validation**. B18--B20 deliberately consume it for one global checkpoint-selection statistic. The frozen weak-v2 surface measures B6 teacher agreement and is not an expert-validation surface.
+The 58-study expert-labelled surface has been reused repeatedly and is therefore a **development/model-selection surface, not independent validation**. B18--B20 use it for global checkpoint selection. Nested audits below estimate checkpoint-selection optimism only; they do not erase broader development-set reuse.
 
 ## Current headline
 
-- **B18, B19 and B20 are completed five-epoch frozen-encoder experiments.**
-- B18 full-FOV selected epoch 2 at `0.6654496134`.
-- B19 90% crop + cosine vignette selected epoch 3 at `0.6581308356`, but post-hoc Grad-CAM exposed a strong artificial vignette-boundary shortcut; **B19 is rejected as the spatial formulation**.
-- B20 90% crop-only selected epoch 2 at `0.6671593555` and passed the local 3-study / 15-series inference/schema smoke test.
-- The B20-B18 selected-statistic difference is only `+0.0017097421` and is **not independent evidence of superiority** because both use the same reused 58-study development/selection surface.
-- Same-source Grad-CAM on one expert-positive effusion case showed B20 removes B19's synthetic-border shortcut but remains more diffuse than B18; therefore **B18 vs B20 remains unresolved**.
-- The next useful internal analysis is a fixed multi-case CAM audit; the next genuinely independent predictive-performance signal is competition evaluation on data not used for selection.
+- **B20 is the primary knee-focused candidate.** It uses a centered 90% crop with no vignette, black border, cosine taper, or crop jitter.
+- B20 selected epoch 2 at `0.6671593555` and passed the local 3-study / 15-series inference/schema smoke test.
+- B20's primary three-fold cross-fitted epoch-selection audit selected epoch 2 in every outer fold (`[2,2,2]`), producing OOF macro AUC `0.6671593555` and measured epoch-selection optimism `0.0`.
+- The strict one-inner-fold sensitivity analysis selected `[2,5,2]`, produced OOF macro AUC `0.6351640998`, and estimated optimism `0.0319952557`; this reflects the much smaller and noisier selection subset.
+- B19 remains rejected because its cosine vignette created an artificial border shortcut.
+- B18 full-FOV remains a retained comparison baseline at selected epoch 2 / `0.6654496134`.
+- The B20-B18 selected-statistic difference is only `+0.0017097421`; **predictive superiority remains unresolved** because both models were developed on the same reused 58-study surface.
+- The B18 nested epoch-selection audit is now implemented and should be run before interpreting the B17 -> B18 jump as robust progress.
 
 ## Experiment ladder
 
@@ -42,12 +43,72 @@ The 58-study expert-labelled surface has been reused repeatedly and is therefore
 | **B13** | **one learned token per series + ImageNet ConvNeXt** | **`0.6293565948` gold** | unresolved high-performing tier |
 | B14 | full `K x 16` slice-token memory + same ImageNet protocol | `0.6197914249` gold | rejected globally |
 | B15 | ImageNet -> knee-MRI same-study contrastive SSL -> B13 hierarchy | weak-v2 `0.7319060415`; gold `0.6209002783` | teacher gain, no global gold gain |
-| **B16** | **B15 encoder -> full-report semantic alignment -> full B13/B6 surface** | **`0.6349770242` gold** | unresolved high-performing tier |
-| **B17** | **freeze B16 report-aligned encoder; train hierarchy/head only for five fixed full B6 passes** | **`0.6425890153` gold** | historical fixed-epoch reference; superiority unresolved |
-| **B18** | **same B17 five-epoch training; expert set selects one GLOBAL epoch; full FOV** | **epoch 2; `0.6654496134` selection only** | completed; B18/B20 unresolved |
-| **B19** | **B18 recipe + 90% crop + cosine vignette** | **epoch 3; `0.6581308356` selection only** | **rejected spatial formulation; artificial border shortcut** |
-| **B20** | **B18 recipe + 90% crop only; no vignette** | **epoch 2; `0.6671593555` selection only** | **completed; B18/B20 unresolved** |
+| **B16** | **B15 encoder -> full-report semantic alignment -> full B13/B6 surface** | **`0.6349770242` gold** | retained high-performing tier |
+| **B17** | **freeze B16 report-aligned encoder; train hierarchy/head only for five fixed full B6 passes** | **epoch 5; `0.6425890153` gold** | fixed-epoch reference |
+| **B18** | **same B17 trajectory; global expert set selects epoch; full FOV** | **epoch 2; `0.6654496134` selection only** | retained; nested audit pending |
+| **B19** | **B18 recipe + 90% crop + cosine vignette** | **epoch 3; `0.6581308356` selection only** | **rejected; artificial border shortcut** |
+| **B20** | **B18 recipe + 90% crop only; no vignette** | **epoch 2; `0.6671593555`; cross-fit optimism `0.0`** | **primary knee-focused candidate** |
 | FINAL | B17-style frozen encoder + all 58 expert labels in gradients | no gold evaluation permitted | implemented / deferred |
+
+## B20 completed result
+
+```text
+epoch 1  loss 0.7456469554  selection AUC 0.6177301847
+epoch 2  loss 0.6459858875  selection AUC 0.6671593555  <- selected
+epoch 3  loss 0.6226234155  selection AUC 0.6492154172
+epoch 4  loss 0.5998095677  selection AUC 0.6570041510
+epoch 5  loss 0.5828775678  selection AUC 0.6577823350
+```
+
+```text
+selected epoch        2
+selection statistic   0.667159355531343
+checkpoint            runs/b20_crop_focus/b20_model.pt
+```
+
+## B20 nested epoch-selection audit
+
+The five saved B20 candidate checkpoints were rescored without retraining.
+
+Primary two-fold cross-fitted selection:
+
+```text
+selected epochs by outer fold       [2,2,2]
+OOF macro AUC                        0.667159355531343
+all 12 targets defined              true
+estimated epoch-selection optimism  0.0
+```
+
+Strict historical-manifest sensitivity analysis:
+
+```text
+selected epochs                     [2,5,2]
+OOF macro AUC                       0.6351640998170208
+estimated selection optimism        0.03199525571432216
+```
+
+Fixed endpoint comparison:
+
+```text
+all-58 selected macro AUC           0.667159355531343
+fixed epoch-5 macro AUC             0.6577823350159498
+selection uplift vs epoch 5        +0.00937702051539313
+```
+
+Interpretation: the primary cross-fitted audit finds no measured optimism attributable specifically to B20 epoch choice. The strict result is retained as a small-selection-set sensitivity diagnostic. Neither result is pristine independent validation because the 58 studies have influenced the broader development campaign.
+
+Canonical record: [`B20_NESTED_EPOCH_AUDIT.md`](B20_NESTED_EPOCH_AUDIT.md).
+
+## B18/B19/B20 spatial-focus comparison
+
+```text
+              E1         E2         E3         E4         E5
+B18        0.618716   0.665450   0.651115   0.639416   0.642589
+B19        0.580216   0.624272   0.658131   0.636993   0.648569
+B20        0.617730   0.667159   0.649215   0.657004   0.657782
+```
+
+B19's cosine/vignette formulation is rejected. B20 removes the synthetic-boundary shortcut and is the preferred knee-focused formulation. B18 versus B20 global predictive superiority remains unresolved.
 
 ## Frozen B6 supervision surface
 
@@ -69,21 +130,6 @@ uncertain/unmentioned -> ignored
 minimum confidence -> 0.75
 ```
 
-The B6 gold audit gave sensitivity `0.9748`, specificity `0.6061`, positive precision `0.6905`, NPV `0.9639`, balanced accuracy `0.7904`, and coverage `0.3606`. These values characterize noisy/incomplete report-derived supervision and do **not** define a downstream AUC ceiling.
-
-## B6 state/noise diagnostic
-
-```text
-coverage-conditioned high-confidence B6 macro AUC  0.7736374158
-coverage                                              0.360632
-full-surface state-only macro AUC                    0.7024597743
-95% CI                                               [0.6537393397,0.7507506766]
-high-confidence cells                                251
-B6-correct / B6-wrong                                196 / 55
-```
-
-On the 55 B6-wrong cells, B15 did not systematically move toward B6 errors; 63.6% moved toward expert truth. The state baseline is therefore a **supervision-information reference**, not a teacher/student ceiling or a guaranteed MRI-extraction target.
-
 ## Frozen all-series surface
 
 ```text
@@ -96,117 +142,54 @@ series SHA-256
 5c4bb1c52294e45f9e83274c5c07d198dc54811c49b96111b7c8439bd7bcd376
 ```
 
-## B17 completed result
-
-Canonical record: [`B17_FROZEN_ENCODER.md`](B17_FROZEN_ENCODER.md).
-
-```text
-training studies                3120
-training series                17475
-B6 cells                       14123
-positive / negative           6871 / 7252
-batches / epoch                1560
-epochs                            5
-encoder LR                        0
-head LR                         1e-4
-additional label smoothing        0
-robust loss                     none
-```
-
-Encoder SHA:
+Encoder SHA used by B18--B20:
 
 ```text
 b328667cf9dfa9b909ef181c1bcc8975ec42bcd8b9eddad08f908875b73fae96
 ```
 
-B17 fixed epoch-5 reused-gold result:
-
-```text
-B17 macro AUC      0.6425890153
-95% CI            [0.5935606351,0.6887356582]
-B16 macro AUC      0.6349770242
-raw B17-B16       +0.0076119910
-paired median     +0.0074330332
-95% paired CI     [-0.0188853047,+0.0332991195]
-P(B17 > B16)       0.7110
-```
-
-## B18 completed expert-selection result
-
-Canonical record: [`B18_FISHER_SELECTION.md`](B18_FISHER_SELECTION.md).
-
-B18 changed **only checkpoint selection** relative to B17. The five completed candidate epochs were:
-
-```text
-epoch 1  loss 0.7371836930  selection AUC 0.6187157061
-epoch 2  loss 0.6336947483  selection AUC 0.6654496134  <- selected
-epoch 3  loss 0.6087776578  selection AUC 0.6511148368
-epoch 4  loss 0.5862506992  selection AUC 0.6394162186
-epoch 5  loss 0.5667051629  selection AUC 0.6425890153
-```
-
-Because the expert set selected the checkpoint, `0.6654496134` is **not independent validation evidence**.
-
-## B19/B20 spatial-focus ablation
-
-B19 and B20 preserved the B18 training/selection contract and changed only the spatial input policy.
-
-```text
-B19: 90% centered crop -> resize -> cosine vignette
-B20: 90% centered crop -> resize
-```
-
-Completed selection histories:
-
-```text
-              E1         E2         E3         E4         E5
-B18        0.618716   0.665450   0.651115   0.639416   0.642589
-B19        0.580216   0.624272   0.658131   0.636993   0.648569
-B20        0.617730   0.667159   0.649215   0.657004   0.657782
-```
-
-Post-hoc same-source Grad-CAM on one expert-positive effusion case showed:
-
-```text
-B18 mask fraction   0.01256
-B19 mask fraction   0.05899
-B20 mask fraction   0.02938
-```
-
-The B19 CAM was dominated by the imposed vignette boundaries. B20 removed that synthetic-boundary shortcut, but B18 was more focal on the inspected case. Therefore B19 is rejected and B18 versus B20 remains unresolved pending broader localization auditing and independent predictive evaluation.
-
-The first comparison also exposed a visualization-only mode bug: direct per-view probabilities were obtained without explicitly setting `model.eval()`, allowing dropout to affect the automatic view bookkeeping. The comparison code now enforces evaluation mode and checks direct-versus-Grad-CAM view-probability consistency. Training, checkpoint selection and submission inference were not affected.
-
-## Local selected-checkpoint smoke tests
-
-B18 and B20 selected checkpoints passed local inference/schema validation:
+## Local inference smoke surface
 
 ```text
 test studies                   3
 test series                   15
 series / study                 5 / 5 / 5
 TTA                            [-1,0,1]
-sample columns match           true
-sample UID order match         true
 metadata repairs               0
 ```
 
-The three-row local test is only a smoke surface and must not be confused with independent competition evaluation.
+This surface checks engineering/inference compatibility only; it has no labels and cannot measure AUC.
 
-## Governance
+## Current governance
 
 ```text
 B16/B17: closed to post-gold retuning
-B18: completed; epoch 2 frozen as selected checkpoint
-B19: completed and rejected as spatial formulation because of artificial vignette shortcut
-B20: completed; epoch 2 frozen as selected checkpoint
-B18 vs B20: unresolved; do not claim B20 superiority from +0.00171 reused-selection difference
+B18: completed; epoch 2 retained; nested audit implemented and pending execution
+B19: completed and rejected because of artificial vignette shortcut
+B20: primary knee-focused candidate; epoch 2 retained
+B20 nested audit: cross-fit epochs [2,2,2], measured epoch-selection optimism 0.0
+B18 vs B20: predictive superiority unresolved
 B18/B19/B20: expert labels never entered gradients
-B18/B19/B20: selected expert scores are not validation evidence
 B18/B19/B20: no target-specific epoch choice or target mixing
+selected expert scores: development/checkpoint-selection evidence, not independent validation
 weak-v2: do not regenerate from outcomes
 uncertain/unmentioned: no universal gold-derived pseudo-labels
-FINAL all-data fit: remain deferred until the development/competition-evaluation decision is made
+FINAL all-data fit: deferred pending the independent-evaluation decision
 ```
 
-The next useful internal diagnostic is a pre-specified multi-case CAM audit. The next genuinely independent predictive-performance signal is competition evaluation on data not used to select B18/B20.
+## Immediate next steps
+
+1. Run the **B18 nested epoch-selection audit** using the same folds and saved checkpoints, so the B17 -> B18 selection gain can be quantified directly.
+2. Keep B20 as the primary knee-focused candidate.
+3. Use B20 cross-fitted predictions to rank all 12 targets, then inspect false positives/false negatives for the weakest targets.
+4. Only after those diagnostics decide whether the next B20 change should address series/plane routing, slice sampling, crop behaviour, or weak-label quality.
+
+## Canonical records
+
+- [`B17_FROZEN_ENCODER.md`](B17_FROZEN_ENCODER.md)
+- [`B18_FISHER_SELECTION.md`](B18_FISHER_SELECTION.md)
+- [`B19_JOINT_FOCUS.md`](B19_JOINT_FOCUS.md)
+- [`B20_CROP_ONLY_FOCUS.md`](B20_CROP_ONLY_FOCUS.md)
+- [`B20_NESTED_EPOCH_AUDIT.md`](B20_NESTED_EPOCH_AUDIT.md)
+- [`VALIDATION.md`](VALIDATION.md)
+- [`VISUALIZATION_GUIDE.md`](VISUALIZATION_GUIDE.md)
