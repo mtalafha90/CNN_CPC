@@ -10,7 +10,7 @@ checkpoint             runs/b20_crop_focus/b20_model.pt
 canonical epoch        2
 implemented geometry   native MRI -> resize 224 -> center crop 90% -> resize 224
 cosine/vignette mask   no
-encoder                frozen B16 report-aligned encoder
+encoder                frozen historical B16 report-aligned encoder
 ```
 
 The crop-order audit found that B20's historical crop is applied after the normal 224x224 triplet resize. B20 is preserved unchanged so that its existing checkpoint remains a reproducible working baseline.
@@ -30,11 +30,23 @@ B21 development is deliberately moved away from repeated use of the 58 expert st
 weak-v2 train studies      2497
 weak-v2 holdout studies     623
 fixed training epochs         2
+scheduler horizon              5  # preserves historical B20 E1/E2 LR trajectory
 expert epoch selection        no
 gold development looks        0
 ```
 
-The historical B20 checkpoint cannot be scored fairly on weak-v2 because it was trained on all 3,120 active B6 studies, including the weak-v2 holdout. Therefore B21 is compared against a newly trained matched B20-v2 control using the same 2,497 weak-train studies and fixed two-epoch schedule. Crop ordering is the intended difference between those two development arms.
+### Representation-leakage correction
+
+The historical B16 report encoder cannot be used for weak-v2 model ranking because B16 trained on all 4,349 non-gold MRI/report pairs, including the 623 weak-v2 holdout studies. The optimization protocol therefore first builds a **weak-v2-safe B16 report encoder** from the already-safe B15 MRI-SSL checkpoint while excluding all 623 weak-v2 holdout UIDs and all 58 gold UIDs.
+
+```text
+B15 MRI SSL encoder
+  -> weak-v2-safe B16 report alignment on 3,726 studies
+  -> frozen safe encoder
+  -> matched B20-v2 control and B21 candidate
+```
+
+The historical B20 checkpoint also cannot be scored fairly on weak-v2 because it was trained on all 3,120 active B6 studies, including the weak-v2 holdout. Therefore B21 is compared against a newly trained matched B20-v2 control using the same safe encoder, the same 2,497 weak-train studies and the same fixed two-epoch schedule. Crop ordering is the intended difference between those two development arms.
 
 Canonical protocol: [`B21_PRERESIZE_CROP.md`](B21_PRERESIZE_CROP.md).
 
@@ -80,8 +92,9 @@ B21  pre-resize crop optimization candidate; not promoted
 ## Governance
 
 - Do not modify the historical B20 checkpoint or reinterpret its preprocessing after the fact.
-- Develop B21 on the frozen weak-v2 split, not by repeatedly ranking variants on the 58 expert studies.
-- B20-v2 control and B21 must use the same weak-train UIDs, initialization, optimizer, augmentation, frozen encoder, crop fraction and fixed two-epoch endpoint.
-- Robust losses, aggregation changes, ensembling and resolution increases are deferred until the crop-order experiment is resolved.
+- Do not use the historical B16 encoder for weak-v2 B21 ranking; it saw the weak-v2 holdout during report alignment.
+- Build the weak-v2-safe B16 report encoder first and use that exact encoder for both matched development arms.
+- B20-v2 control and B21 must use the same weak-train UIDs, initialization, optimizer, augmentation, frozen encoder, crop fraction, five-epoch LR horizon and fixed E2 endpoint.
+- Robust losses, aggregation changes, ensembling, resolution increases and occlusion-guided retraining are deferred until the crop-order experiment is resolved.
 - If B21 is favorable on weak-v2, freeze it before one predeclared expert acceptance comparison.
 - Until that acceptance step succeeds, B20 remains the working model.
