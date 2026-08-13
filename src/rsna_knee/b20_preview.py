@@ -3,18 +3,19 @@
 This preview is intentionally lightweight: it decodes only one representative
 DICOM image from at most one sagittal, coronal and axial series. It does not
 instantiate the full B12 study dataset or decode every slice/series in a study.
+
+The preview montage is written with Pillow rather than Matplotlib so a local
+font-cache/backend problem cannot block a simple preprocessing sanity check.
 """
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
+from PIL import Image, ImageDraw
 
 from .b7_weak_supervision import _read_config
 from .b20_crop_focus import b20_crop_focus_policy
@@ -31,19 +32,13 @@ def _dicom_candidates(path: Path) -> list[Path]:
 
 
 def _representative_image(series_dir: Path) -> np.ndarray:
-    """Decode one approximately central DICOM image from a series.
-
-    We intentionally avoid decoding the complete volume because B20's preview
-    only needs to demonstrate the in-plane crop transform.
-    """
+    """Decode one approximately central DICOM image from a series."""
     import pydicom
 
     candidates = _dicom_candidates(series_dir)
     if not candidates:
         raise RuntimeError(f"no DICOM candidates in {series_dir}")
 
-    # Header-only reads are cheap and let InstanceNumber choose an approximate
-    # anatomical middle without touching pixel data for every file.
     ordered: list[tuple[float, Path]] = []
     for ordinal, path in enumerate(candidates):
         try:
@@ -100,6 +95,56 @@ def _resize_224(image: np.ndarray) -> torch.Tensor:
     )
 
 
+def _to_pil_gray(image: np.ndarray) -> Image.Image:
+    array = np.clip(np.asarray(image, dtype=np.float32), 0.0, 1.0)
+    return Image.fromarray(np.round(array * 255.0).astype(np.uint8), mode="L").convert("RGB")
+
+
+def _save_montage(
+    output: Path,
+    *,
+    uid: str,
+    policy: dict,
+    panels: list[tuple[str, np.ndarray, np.ndarray]],
+) -> None:
+    """Save a compact 2xN PNG without invoking Matplotlib."""
+    cell = 224
+    label_h = 28
+    header_h = 44
+    gap = 8
+    cols = len(panels)
+    width = cols * cell + max(cols - 1, 0) * gap
+    height = header_h + 2 * (label_h + cell) + gap
+
+    canvas = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(canvas)
+    draw.text(
+        (6, 6),
+        f"B20 crop-only preview | UID={uid}",
+        fill="black",
+    )
+    draw.text(
+        (6, 23),
+        f"crop_fraction={float(policy['crop_fraction']):.2f} | no vignette / no black mask",
+        fill="black",
+    )
+
+    for col, (plane, original, crop) in enumerate(panels):
+        x = col * (cell + gap)
+        y0 = header_h
+        draw.text((x + 4, y0 + 6), f"{plane} - original", fill="black")
+        canvas.paste(_to_pil_gray(original), (x, y0 + label_h))
+
+        y1 = y0 + label_h + cell + gap
+        draw.text((x + 4, y1 + 6), f"{plane} - B20 crop-only", fill="black")
+        canvas.paste(_to_pil_gray(crop), (x, y1 + label_h))
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    print({"preview_save": str(output), "writer": "Pillow", "status": "saving"}, flush=True)
+    canvas.save(output, format="PNG", optimize=False)
+    print({"preview_save": str(output), "writer": "Pillow", "status": "done"}, flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser("rsna-knee-b20-preview")
     parser.add_argument("--config", required=True)
@@ -116,9 +161,6 @@ def main() -> None:
     root = Path(config["data_root"])
 
     train = load_train_csv(root / config.get("train_csv", "train.csv"))
-    # Default to an expert-labelled study, matching the B19 preview policy and
-    # avoiding an arbitrary first report-only study that may contain unusual
-    # acquisition files. --uid can still select any training study explicitly.
     if args.uid:
         uid = str(args.uid)
         if uid not in set(train["StudyInstanceUID"].astype(str)):
@@ -146,8 +188,8 @@ def main() -> None:
     if not selected:
         raise RuntimeError("no sagittal/coronal/axial series available for preview")
 
-    fig, axes = plt.subplots(2, len(selected), figsize=(5 * len(selected), 8), squeeze=False)
-    for col, (plane, series_uid) in enumerate(selected):
+    panels: list[tuple[str, np.ndarray, np.ndarray]] = []
+    for plane, series_uid in selected:
         series_dir = find_series_dir(root, "train", uid, series_uid)
         if series_dir is None:
             raise FileNotFoundError(f"missing training series {uid}/{series_uid}")
@@ -160,13 +202,7 @@ def main() -> None:
         crop = apply_crop_focus(original, policy)
         original_np = original[0, 0].numpy()
         crop_np = crop[0, 0].numpy()
-
-        axes[0, col].imshow(original_np, cmap="gray", vmin=0, vmax=1)
-        axes[0, col].set_title(f"{plane} — original")
-        axes[1, col].imshow(crop_np, cmap="gray", vmin=0, vmax=1)
-        axes[1, col].set_title(f"{plane} — B20 crop-only")
-        for row in range(2):
-            axes[row, col].axis("off")
+        panels.append((plane, original_np, crop_np))
         print(
             {
                 "plane": plane,
@@ -178,11 +214,8 @@ def main() -> None:
             flush=True,
         )
 
-    fig.suptitle(f"B20 crop-only preview | UID={uid} | policy={policy}", fontsize=11)
     output = Path(args.out)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output, dpi=180, bbox_inches="tight")
-    plt.close(fig)
+    _save_montage(output, uid=uid, policy=policy, panels=panels)
     print(output, flush=True)
 
 
