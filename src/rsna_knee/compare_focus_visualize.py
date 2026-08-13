@@ -66,6 +66,10 @@ def _dataset_item(kind, config, root, uid, variable_index, offsets, truth_row, p
 
 
 def _explain(model, item, variable_index, uid, target_idx, runtime, offsets, view_offset, cam_layer):
+    # Visualization/inference probabilities must be deterministic. The shared
+    # _view_probabilities helper does not change model mode itself, so enforce
+    # eval() here before both probability and Grad-CAM passes.
+    model.eval()
     volumes_views = item["volumes"]
     present = item["present"].unsqueeze(0).to(runtime.device)
     series_meta = item["series_meta"].unsqueeze(0).to(runtime.device)
@@ -76,6 +80,14 @@ def _explain(model, item, variable_index, uid, target_idx, runtime, offsets, vie
         model, volumes, present, series_meta,
         target_idx=target_idx, runtime=runtime, cam_layer=cam_layer
     )
+    expected_view_probability = float(view_probs[view_idx])
+    consistency_delta = abs(float(explained_probability) - expected_view_probability)
+    if consistency_delta > 0.02:
+        raise RuntimeError(
+            "view-probability bookkeeping mismatch after eval-mode enforcement: "
+            f"offset={view_offset}, direct={expected_view_probability:.6f}, "
+            f"Grad-CAM={float(explained_probability):.6f}, delta={consistency_delta:.6f}"
+        )
     return {
         "volumes": volumes,
         "cams": cams,
@@ -84,6 +96,8 @@ def _explain(model, item, variable_index, uid, target_idx, runtime, offsets, vie
         "view_probs": view_probs,
         "tta_probability": float(np.mean(view_probs)),
         "explained_probability": float(explained_probability),
+        "expected_view_probability": expected_view_probability,
+        "view_probability_consistency_abs_delta": consistency_delta,
     }
 
 
@@ -134,29 +148,24 @@ def main() -> None:
     if args.b20_checkpoint:
         models["b20"], payload20 = load_b20_checkpoint(args.b20_checkpoint, device=runtime.device)
         payloads["b20"] = payload20
+    for model in models.values():
+        model.eval()
 
     root = Path(args.data_root)
     gold, variable_index, _ = _load_gold_surface(configs["b18"], root)
     uid = str(args.uid)
-
-    # gold retains original train.csv index labels. Use a boolean mask to obtain
-    # a true POSITION before indexing with iloc; an original label can be much
-    # larger than 57 even though gold has only 58 rows.
-    uid_mask = gold["StudyInstanceUID"].astype(str).eq(uid).to_numpy()
+    uid_mask = gold["StudyInstanceUID"].astype(str).to_numpy() == uid
     positions = np.flatnonzero(uid_mask)
     if positions.size == 0:
         raise ValueError("UID is not on the 58-study expert surface")
-    if positions.size != 1:
-        raise RuntimeError(f"expert surface contains duplicate UID {uid}")
-    row_pos = int(positions[0])
-
+    row_idx = int(positions[0])
     target_idx = _resolve_target(args.target)
     if target_idx is None:
         raise ValueError("--target is required")
-    truth = float(gold.iloc[row_pos][TARGETS[target_idx]])
+    truth = float(gold.iloc[row_idx][TARGETS[target_idx]])
     if truth <= 0.5:
         raise ValueError(f"requested expert case is not positive for {TARGETS[target_idx]}")
-    truth_row = [float(gold.iloc[row_pos][target]) for target in TARGETS]
+    truth_row = [float(gold.iloc[row_idx][target]) for target in TARGETS]
 
     offsets = tuple(int(x) for x in configs["b18"].get("b7_eval_tta_offsets", [-1, 0, 1]))
     items = {
@@ -167,11 +176,13 @@ def main() -> None:
         items["b20"] = _dataset_item("b20", configs["b20"], root, uid, variable_index, offsets, truth_row, p20)
 
     # Determine one common TTA view. If not forced, use the reference model's
-    # highest-probability view, then hold that exact offset fixed for all models.
+    # highest deterministic evaluation-mode probability, then hold that exact
+    # offset fixed for all models.
     ref = args.reference_model
     ref_item = items[ref]
     ref_present = ref_item["present"].unsqueeze(0).to(runtime.device)
     ref_meta = ref_item["series_meta"].unsqueeze(0).to(runtime.device)
+    models[ref].eval()
     ref_probs = _view_probabilities(models[ref], ref_item["volumes"], ref_present, ref_meta, runtime, target_idx)
     view_offset = int(args.view_offset) if args.view_offset is not None else int(offsets[int(np.argmax(ref_probs))])
 
@@ -239,6 +250,8 @@ def main() -> None:
             "tta_probability": float(exp["tta_probability"]),
             "per_view_probabilities": {str(o): float(p) for o, p in zip(offsets, exp["view_probs"])},
             "explained_view_probability": float(exp["explained_probability"]),
+            "expected_view_probability": float(exp["expected_view_probability"]),
+            "view_probability_consistency_abs_delta": float(exp["view_probability_consistency_abs_delta"]),
             "mask_pixel_fraction": float(mask.mean()),
         }
 
@@ -269,7 +282,7 @@ def main() -> None:
         "cam_layer": args.cam_layer,
         "cam_threshold": float(args.cam_threshold),
         "models": summary,
-        "interpretation": "same source series/sampled slice and TTA offset across models; Grad-CAM is model localization, not lesion segmentation",
+        "interpretation": "same source series/sampled slice and TTA offset across models; deterministic eval-mode probabilities; Grad-CAM is model localization, not lesion segmentation",
     }
     metadata_path = output.with_suffix(".json")
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
