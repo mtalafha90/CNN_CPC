@@ -38,12 +38,12 @@ from .b21_dataset import make_matched_crop_dataset
 from .b21_protocol import (
     B21_EXPECTED_BATCHES,
     B21_FIXED_EPOCHS,
+    B21_SCHEDULER_HORIZON,
     B21_WEAK_HOLDOUT_STUDIES,
     B21_WEAK_TRAIN_STUDIES,
     mode_identity,
 )
 from .budget import RuntimeBudget
-from .constants import TARGETS
 from .data import backfill_series_metadata, gold_mask, load_series_csv, load_train_csv
 from .policy import validate_competition_config
 from .runtime import autocast, make_scaler, resolve_runtime
@@ -66,12 +66,15 @@ def train_matched_crop(
     report_payload = load_b16_report_encoder(report_ssl_checkpoint)
 
     seed = int(config.get("seed", 2026))
-    seed_everything(seed + 21_000_000)
+    # Reuse B20's construction and DataLoader seed offsets. The candidate and
+    # matched control therefore share the historical B20 initialization path.
+    seed_everything(seed + 19_000_000)
     runtime = resolve_runtime(config)
     print(runtime.describe())
     print(
         f"[{experiment}] weak-v2 train only | fixed epoch 2 | encoder frozen | "
-        f"crop_stage={crop_stage} | gold development disabled"
+        f"crop_stage={crop_stage} | gold development disabled | "
+        f"scheduler_horizon={B21_SCHEDULER_HORIZON}"
     )
 
     root = Path(config["data_root"])
@@ -127,7 +130,7 @@ def train_matched_crop(
         shuffle=True,
         drop_last=False,
         collate_fn=collate_variable_series,
-        **runtime.loader_kwargs(seed=seed + 21_100_000),
+        **runtime.loader_kwargs(seed=seed + 19_100_000),
     )
 
     spec = b12_1_model_spec(config, normalize_input=True)
@@ -148,9 +151,11 @@ def train_matched_crop(
         [{"params": head_params, "lr": float(config.get("b7_head_lr", 1e-4))}],
         weight_decay=float(config.get("b7_weight_decay", 1e-4)),
     )
+    # Stop after E2, but preserve B20's five-epoch cosine horizon. This keeps
+    # the first two scheduled learning rates identical to historical B20.
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
-        T_max=B21_FIXED_EPOCHS,
+        T_max=B21_SCHEDULER_HORIZON,
         eta_min=float(config.get("b7_min_lr", 1e-6)),
     )
     scaler = make_scaler(runtime)
@@ -189,6 +194,10 @@ def train_matched_crop(
         "input_normalization": B13_INPUT_NORMALIZATION,
         "encoder_frozen": True,
         "fixed_epochs": B21_FIXED_EPOCHS,
+        "scheduler_horizon_epochs": B21_SCHEDULER_HORIZON,
+        "scheduler_matches_historical_b20_first_two_epochs": True,
+        "seed_offset_model": 19_000_000,
+        "seed_offset_loader": 19_100_000,
         "epoch_selection": "none; epoch 2 predeclared",
         "gold_checkpoint_selection": False,
         "gold_labels_used_for_development": False,
