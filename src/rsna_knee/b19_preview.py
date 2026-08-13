@@ -1,4 +1,8 @@
-"""Preview the frozen B19 joint-focus transform before training."""
+"""Preview the frozen B19 joint-focus transform before training.
+
+The preview filters train_series.csv to the selected expert study before DICOM
+metadata backfill so a quick visual check cannot trigger a whole-dataset scan.
+"""
 from __future__ import annotations
 
 import argparse
@@ -41,8 +45,16 @@ def main() -> None:
     if uid not in set(gold["StudyInstanceUID"]):
         raise ValueError("--uid must identify one of the 58 expert-labelled studies")
 
+    # IMPORTANT: subset first. Metadata repair can inspect DICOM files, and a
+    # preview must never perform repair over the complete train_series surface.
     series = load_series_csv(root / config.get("train_series_csv", "train_series.csv"))
-    series, _ = backfill_series_metadata(series, root, split="train")
+    series = series.loc[series["StudyInstanceUID"].astype(str).eq(uid)].copy()
+    if series.empty:
+        raise ValueError("selected study has no rows in train_series.csv")
+    print({"preview_uid": uid, "series_rows_before_backfill": int(len(series))})
+    series, repair = backfill_series_metadata(series, root, split="train")
+    print({"metadata_repair": repair})
+
     index = build_variable_series_index(series, [uid])
     records = index[uid]
     if not records:
