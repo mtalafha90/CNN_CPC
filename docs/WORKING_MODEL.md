@@ -1,6 +1,6 @@
 # Active working model
 
-> **Decision — 2026-08-13:** B20 remains the active working model. B21 is a controlled optimization candidate and does not replace B20 unless it passes the predeclared development and acceptance protocol.
+> **Decision — 2026-08-14:** B20 remains the active working model. B21-v1 passed the frozen weak-v2 development gate and is now frozen for one full-data refit plus one predeclared gold acceptance comparison. B21 does not replace B20 before that comparison is reviewed.
 
 ## Active model
 
@@ -11,73 +11,93 @@ canonical epoch        2
 implemented geometry   native MRI -> resize 224 -> center crop 90% -> resize 224
 cosine/vignette mask   no
 encoder                frozen historical B16 report-aligned encoder
+canonical gold score   0.667159355531343
 ```
 
-The crop-order audit found that B20's historical crop is applied after the normal 224x224 triplet resize. B20 is preserved unchanged so that its existing checkpoint remains a reproducible working baseline.
+Historical B20 is preserved unchanged.
 
-## Controlled optimization candidate
+## B21 frozen preprocessing decision
 
-B21 fixes the crop ordering without changing the 90% field-of-view fraction:
+B21 changes the spatial ordering to:
 
 ```text
-B20 historical: native MRI -> resize 224 -> crop 90% -> resize 224
-B21 candidate:  native MRI -> crop 90% -> single resize 224
+native MRI -> center crop 90% -> percentile normalization -> single resize 224
 ```
 
-B21 development is deliberately moved away from repeated use of the 58 expert studies.
+The normalization support therefore differs slightly from B20 and is part of the declared B21-v1 intervention. Crop-fraction sweeps remain forbidden under this implementation.
+
+## Completed weak-v2 development gate
+
+A leakage-safe B16 representation was first rebuilt from B15 MRI SSL while excluding both the 623 weak-v2 holdout studies and all 58 gold studies. Matched B20-v2 and B21 arms then trained on the same 2,497 weak-v2 training studies with the same safe encoder, same seeded hierarchy, same optimizer/augmentation, fixed E2 endpoint, and historical five-epoch cosine-scheduler horizon.
+
+Completed result:
 
 ```text
-weak-v2 train studies      2497
-weak-v2 holdout studies     623
-fixed training epochs         2
-scheduler horizon              5  # preserves historical B20 E1/E2 LR trajectory
-expert epoch selection        no
-gold development looks        0
+B20-v2 control macro AUC        0.7298727911
+B21 pre-resize macro AUC        0.7410090411
+raw B21 - control              +0.0111362500
+paired median                  +0.0109814529
+paired 95% CI        [+0.0001624070,+0.0226346590]
+P(B21 > control)                0.9758888435
 ```
 
-### Representation-leakage correction
+This measures agreement with frozen B6 report supervision, not expert truth. The result freezes the B21-v1 preprocessing decision; it does not promote B21 automatically.
 
-The historical B16 report encoder cannot be used for weak-v2 model ranking because B16 trained on all 4,349 non-gold MRI/report pairs, including the 623 weak-v2 holdout studies. The optimization protocol therefore first builds a **weak-v2-safe B16 report encoder** from the already-safe B15 MRI-SSL checkpoint while excluding all 623 weak-v2 holdout UIDs and all 58 gold UIDs.
+## Full-data acceptance stage
+
+The next and only permitted B21-v1 step is:
 
 ```text
-B15 MRI SSL encoder
-  -> weak-v2-safe B16 report alignment on 3,726 studies
-  -> frozen safe encoder
-  -> matched B20-v2 control and B21 candidate
+historical B16 encoder
+        -> frozen
+full 3,120-study B6 surface
+17,475 eligible MRI series
+pre-resize crop fraction 0.90
+fixed epoch 2 endpoint
+scheduler horizon 5
+no gold selection during training
+        -> B21 full-data candidate
 ```
 
-The historical B20 checkpoint also cannot be scored fairly on weak-v2 because it was trained on all 3,120 active B6 studies, including the weak-v2 holdout. Therefore B21 is compared against a newly trained matched B20-v2 control using the same safe encoder, the same 2,497 weak-train studies and the same fixed two-epoch schedule. Crop ordering is the intended difference between those two development arms.
-
-Canonical protocol: [`B21_PRERESIZE_CROP.md`](B21_PRERESIZE_CROP.md).
-
-## Validation state of the current working model
-
-B20 nested epoch-selection audit:
+Canonical candidate path after training:
 
 ```text
-all-58 selected macro AUC           0.6671593555313430
-cross-fitted selected epochs        [2,2,2]
-cross-fitted OOF macro AUC          0.6671593555313430
-measured epoch-selection optimism   0.0
-strict selected epochs              [2,5,2]
-strict OOF macro AUC                0.6351640998170208
-fixed epoch-5 macro AUC             0.6577823350159498
+runs/b21_full_acceptance/b21_full_model.pt
 ```
 
-B18 full-FOV comparator nested audit:
+Canonical protocol: [`B21_FULL_ACCEPTANCE.md`](B21_FULL_ACCEPTANCE.md).
+
+## Predeclared one-look acceptance rule
+
+The acceptance evaluator compares the frozen B21 full-data candidate against historical B20 on the same 58 expert studies with TTA `[-1,0,1]`.
 
 ```text
-historical selected statistic       0.6654496134246369
-post-hoc replay epoch-2 macro AUC   0.6655517376076434
-cross-fitted selected epochs        [2,2,2]
-cross-fitted OOF macro AUC          0.6655517376076434
-measured epoch-selection optimism   0.0
-strict selected epochs              [2,5,2]
-strict OOF macro AUC                0.6475369755138950
-fixed epoch-5 / B17 endpoint        0.6425890152580378
+working-model promotion:
+B21 global 12-target gold macro AUC > 0.667159355531343
+
+stronger scientific superiority statement:
+paired B21-B20 bootstrap 95% CI lower bound > 0
 ```
 
-The B20-vs-B18 cross-fitted difference is approximately `+0.0016076`, which is too small to claim predictive superiority on the repeatedly reused 58-study development surface.
+The evaluator also replays B20 and aborts if the replay differs from the canonical B20 score by more than `0.005`.
+
+Target-level AUCs are descriptive only. They cannot be used for target mixing, crop changes, retuning, or a second B21-v1 development round.
+
+The 58 expert studies were already reused during historical B20 development. Therefore the acceptance comparison remains a governance/development comparison, not pristine independent validation.
+
+## Historical B20/B18 audit context
+
+```text
+B20 cross-fitted epoch selections       [2,2,2]
+B20 cross-fitted OOF macro AUC          0.6671593555313430
+B20 measured epoch-selection optimism   0.0
+
+B18 cross-fitted epoch selections       [2,2,2]
+B18 replay OOF macro AUC                0.6655517376076434
+B18 measured epoch-selection optimism   0.0
+```
+
+The B20-vs-B18 difference is too small to establish predictive superiority on the reused gold surface.
 
 ## Model roles
 
@@ -86,15 +106,15 @@ B17  frozen fixed-epoch reference
 B18  frozen full-FOV comparator
 B19  rejected spatial formulation
 B20  ACTIVE WORKING MODEL
-B21  pre-resize crop optimization candidate; not promoted
+B21  weak-v2-passed frozen candidate; full-data acceptance pending
 ```
 
 ## Governance
 
-- Do not modify the historical B20 checkpoint or reinterpret its preprocessing after the fact.
-- Do not use the historical B16 encoder for weak-v2 B21 ranking; it saw the weak-v2 holdout during report alignment.
-- Build the weak-v2-safe B16 report encoder first and use that exact encoder for both matched development arms.
-- B20-v2 control and B21 must use the same weak-train UIDs, initialization, optimizer, augmentation, frozen encoder, crop fraction, five-epoch LR horizon and fixed E2 endpoint.
-- Robust losses, aggregation changes, ensembling, resolution increases and occlusion-guided retraining are deferred until the crop-order experiment is resolved.
-- If B21 is favorable on weak-v2, freeze it before one predeclared expert acceptance comparison.
-- Until that acceptance step succeeds, B20 remains the working model.
+- Do not modify historical B20.
+- Do not reopen the B21-v1 crop fraction, normalization order, loss, architecture, aggregation, or resolution before the one-look acceptance.
+- Do not perform another weak-v2 tuning round for B21-v1.
+- Train the full-data candidate using the historical B16 encoder so the final B20-vs-B21 comparison preserves the historical representation source.
+- Run the gold acceptance evaluator once after the full-data checkpoint is verified.
+- Do not automatically rewrite the working-model decision from the evaluator; review the frozen global result first.
+- Hidden competition evaluation remains the independent predictive-performance signal.
