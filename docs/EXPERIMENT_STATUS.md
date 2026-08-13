@@ -5,18 +5,17 @@
 **Gold development/selection set:** 58 fully labelled studies  
 **Primary metric:** macro ROC AUC across 12 targets
 
-The 58-study expert-labelled surface has been reused repeatedly and is therefore a **development/model-selection surface, not independent validation**. With B18 it is deliberately consumed for checkpoint selection. The frozen weak-v2 surface measures B6 teacher agreement and is not an expert-validation surface.
+The 58-study expert-labelled surface has been reused repeatedly and is therefore a **development/model-selection surface, not independent validation**. B18--B20 deliberately consume it for one global checkpoint-selection statistic. The frozen weak-v2 surface measures B6 teacher agreement and is not an expert-validation surface.
 
 ## Current headline
 
-- **B13--B17 remain one statistically unresolved high-performing development tier.**
-- B17 (`0.6425890153`) remains the historical fixed-epoch reference checkpoint, not because superiority is established.
-- **B18 is completed.** All five predeclared B17-equivalent frozen-encoder epochs were run and the global 58-study expert-selection rule chose **epoch 2**.
-- B18 selection history: `0.6187157061`, **`0.6654496134`**, `0.6511148368`, `0.6394162186`, `0.6425890153` for epochs 1--5.
-- The selected B18 score `0.6654496134` is **selection-only and not validation evidence**. The numerical difference from the fixed epoch-5 endpoint (`+0.0228605982`) must not be presented as an independent performance gain.
-- Epoch 5 reproduces B17 (`0.6425890153`) to numerical precision, supporting the intended unchanged B17 training trajectory.
-- The selected checkpoint `runs/b18_fisher_selection/b18_model.pt` passed the local 3-study / 15-series inference/schema smoke test.
-- The next genuinely independent performance signal is competition evaluation on a dataset not used for B18 selection.
+- **B18, B19 and B20 are completed five-epoch frozen-encoder experiments.**
+- B18 full-FOV selected epoch 2 at `0.6654496134`.
+- B19 90% crop + cosine vignette selected epoch 3 at `0.6581308356`, but post-hoc Grad-CAM exposed a strong artificial vignette-boundary shortcut; **B19 is rejected as the spatial formulation**.
+- B20 90% crop-only selected epoch 2 at `0.6671593555` and passed the local 3-study / 15-series inference/schema smoke test.
+- The B20-B18 selected-statistic difference is only `+0.0017097421` and is **not independent evidence of superiority** because both use the same reused 58-study development/selection surface.
+- Same-source Grad-CAM on one expert-positive effusion case showed B20 removes B19's synthetic-border shortcut but remains more diffuse than B18; therefore **B18 vs B20 remains unresolved**.
+- The next useful internal analysis is a fixed multi-case CAM audit; the next genuinely independent predictive-performance signal is competition evaluation on data not used for selection.
 
 ## Experiment ladder
 
@@ -45,7 +44,9 @@ The 58-study expert-labelled surface has been reused repeatedly and is therefore
 | B15 | ImageNet -> knee-MRI same-study contrastive SSL -> B13 hierarchy | weak-v2 `0.7319060415`; gold `0.6209002783` | teacher gain, no global gold gain |
 | **B16** | **B15 encoder -> full-report semantic alignment -> full B13/B6 surface** | **`0.6349770242` gold** | unresolved high-performing tier |
 | **B17** | **freeze B16 report-aligned encoder; train hierarchy/head only for five fixed full B6 passes** | **`0.6425890153` gold** | historical fixed-epoch reference; superiority unresolved |
-| **B18** | **same B17 five-epoch training; expert set selects one GLOBAL epoch** | **epoch 2 selected; `0.6654496134` selection statistic only** | **completed; awaiting independent evaluation** |
+| **B18** | **same B17 five-epoch training; expert set selects one GLOBAL epoch; full FOV** | **epoch 2; `0.6654496134` selection only** | completed; B18/B20 unresolved |
+| **B19** | **B18 recipe + 90% crop + cosine vignette** | **epoch 3; `0.6581308356` selection only** | **rejected spatial formulation; artificial border shortcut** |
+| **B20** | **B18 recipe + 90% crop only; no vignette** | **epoch 2; `0.6671593555` selection only** | **completed; B18/B20 unresolved** |
 | FINAL | B17-style frozen encoder + all 58 expert labels in gradients | no gold evaluation permitted | implemented / deferred |
 
 ## Frozen B6 supervision surface
@@ -144,46 +145,43 @@ epoch 4  loss 0.5862506992  selection AUC 0.6394162186
 epoch 5  loss 0.5667051629  selection AUC 0.6425890153
 ```
 
-Frozen constraints all passed:
+Because the expert set selected the checkpoint, `0.6654496134` is **not independent validation evidence**.
+
+## B19/B20 spatial-focus ablation
+
+B19 and B20 preserved the B18 training/selection contract and changed only the spatial input policy.
 
 ```text
-expert labels in gradients            NO
-expert studies                         58
-expert target cells                   696
-expert MRI series                     336
-selection metric                      global 12-target macro AUC only
-per-target epoch selection            forbidden
-per-target selection values logged    no
-selection bootstrap                   none
-encoder                               frozen B16 report-aligned encoder
-encoder SHA                           unchanged
-B6 training surface                   identical B17
-additional generic smoothing          0
-robust loss                           none
-resolution / positions                224 / 16
-TTA                                   [-1,0,1]
-full coverage every epoch             yes
-full series coverage every epoch      yes
+B19: 90% centered crop -> resize -> cosine vignette
+B20: 90% centered crop -> resize
 ```
 
-Selection decision:
+Completed selection histories:
 
 ```text
-selected epoch                        2
-selection statistic                   0.6654496134
-fixed epoch-5/B17 endpoint            0.6425890153
-numerical difference                  +0.0228605982
+              E1         E2         E3         E4         E5
+B18        0.618716   0.665450   0.651115   0.639416   0.642589
+B19        0.580216   0.624272   0.658131   0.636993   0.648569
+B20        0.617730   0.667159   0.649215   0.657004   0.657782
 ```
 
-Because the expert set selected the checkpoint, `0.6654496134` is **not independent validation evidence** and the `+0.0228605982` difference is **not** an independently established B18 gain. Independent competition evaluation is required.
-
-## Local selected-checkpoint smoke test
-
-The selected checkpoint passed local inference/schema validation:
+Post-hoc same-source Grad-CAM on one expert-positive effusion case showed:
 
 ```text
-checkpoint                     runs/b18_fisher_selection/b18_model.pt
-selected epoch                 2
+B18 mask fraction   0.01256
+B19 mask fraction   0.05899
+B20 mask fraction   0.02938
+```
+
+The B19 CAM was dominated by the imposed vignette boundaries. B20 removed that synthetic-boundary shortcut, but B18 was more focal on the inspected case. Therefore B19 is rejected and B18 versus B20 remains unresolved pending broader localization auditing and independent predictive evaluation.
+
+The first comparison also exposed a visualization-only mode bug: direct per-view probabilities were obtained without explicitly setting `model.eval()`, allowing dropout to affect the automatic view bookkeeping. The comparison code now enforces evaluation mode and checks direct-versus-Grad-CAM view-probability consistency. Training, checkpoint selection and submission inference were not affected.
+
+## Local selected-checkpoint smoke tests
+
+B18 and B20 selected checkpoints passed local inference/schema validation:
+
+```text
 test studies                   3
 test series                   15
 series / study                 5 / 5 / 5
@@ -199,15 +197,16 @@ The three-row local test is only a smoke surface and must not be confused with i
 
 ```text
 B16/B17: closed to post-gold retuning
-B13--B17: statistically unresolved development tier
 B18: completed; epoch 2 frozen as selected checkpoint
-B18: expert labels never entered gradients
-B18: selected expert score is not validation evidence
-B18: no target-specific epoch choice or target mixing
-B18: no smoothing/robust-loss/LR/architecture/resolution/TTA tuning from selection curve
+B19: completed and rejected as spatial formulation because of artificial vignette shortcut
+B20: completed; epoch 2 frozen as selected checkpoint
+B18 vs B20: unresolved; do not claim B20 superiority from +0.00171 reused-selection difference
+B18/B19/B20: expert labels never entered gradients
+B18/B19/B20: selected expert scores are not validation evidence
+B18/B19/B20: no target-specific epoch choice or target mixing
 weak-v2: do not regenerate from outcomes
 uncertain/unmentioned: no universal gold-derived pseudo-labels
 FINAL all-data fit: remain deferred until the development/competition-evaluation decision is made
 ```
 
-The next genuinely independent performance signal is competition evaluation on data not used to select B18.
+The next useful internal diagnostic is a pre-specified multi-case CAM audit. The next genuinely independent predictive-performance signal is competition evaluation on data not used to select B18/B20.
