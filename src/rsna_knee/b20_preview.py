@@ -32,33 +32,24 @@ def _dicom_candidates(path: Path) -> list[Path]:
 
 
 def _representative_image(series_dir: Path) -> np.ndarray:
-    """Decode one approximately central DICOM image from a series."""
+    """Decode one filesystem-middle DICOM image from a series.
+
+    This is a preprocessing preview, not an anatomical slice-selection routine.
+    Avoid header-scanning every file in the series: choose the middle candidate
+    from deterministic filename order and decode only that single DICOM.
+    """
     import pydicom
 
     candidates = _dicom_candidates(series_dir)
     if not candidates:
         raise RuntimeError(f"no DICOM candidates in {series_dir}")
 
-    ordered: list[tuple[float, Path]] = []
-    for ordinal, path in enumerate(candidates):
-        try:
-            ds = pydicom.dcmread(
-                str(path),
-                force=True,
-                stop_before_pixels=True,
-                specific_tags=["InstanceNumber"],
-            )
-            key = float(getattr(ds, "InstanceNumber", ordinal))
-        except Exception:
-            key = float(ordinal)
-        ordered.append((key, path))
-    ordered.sort(key=lambda item: item[0])
-
-    path = ordered[len(ordered) // 2][1]
+    path = candidates[len(candidates) // 2]
     print(
         {
             "decoding_representative_dicom": str(path),
             "series_files": len(candidates),
+            "selection": "filesystem_middle_no_header_scan",
         },
         flush=True,
     )
@@ -118,11 +109,7 @@ def _save_montage(
 
     canvas = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(canvas)
-    draw.text(
-        (6, 6),
-        f"B20 crop-only preview | UID={uid}",
-        fill="black",
-    )
+    draw.text((6, 6), f"B20 crop-only preview | UID={uid}", fill="black")
     draw.text(
         (6, 23),
         f"crop_fraction={float(policy['crop_fraction']):.2f} | no vignette / no black mask",
@@ -171,7 +158,6 @@ def main() -> None:
             raise ValueError("no expert-labelled study available for default B20 preview")
         uid = str(expert.iloc[0])
 
-    # Subset before metadata backfill. A preview must never audit all series.
     series = load_series_csv(root / config.get("train_series_csv", "train_series.csv"))
     series = series.loc[series["StudyInstanceUID"].astype(str).eq(uid)].copy()
     if series.empty:
