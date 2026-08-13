@@ -72,6 +72,8 @@ rsna-knee-b17-submit = "rsna_knee.b17_submission:main"
 rsna-knee-b18 = "rsna_knee.b18_fisher_selection:main"
 rsna-knee-b18-submit = "rsna_knee.b18_submission:main"
 rsna-knee-b18-visualize = "rsna_knee.b18_visualize:main"
+rsna-knee-b19 = "rsna_knee.b19_joint_focus:main"
+rsna-knee-b19-submit = "rsna_knee.b19_submission:main"
 rsna-knee-final = "rsna_knee.final_all_data_training:main"
 rsna-knee-final-submit = "rsna_knee.final_all_data_submission:main"
 
