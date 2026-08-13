@@ -144,40 +144,13 @@ expert truth                   1
 common plane                   Sagittal
 common series index            1
 common slice index             0
+common series UID              1.2.826.0.1.3680043.8.498.51148402259712862712353546920527079297
 CAM layer                      28x28
 CAM threshold                  0.65
 ```
 
 The same MRI series, sampled slice, and TTA view were supplied to B18, B19 and
 B20.
-
-Observed CAM-mask fractions in that comparison were:
-
-```text
-B18 full FOV                 0.01256
-B19 crop + cosine            0.05899
-B20 crop only                0.02938
-```
-
-Qualitative interpretation:
-
-- **B19 is rejected as the spatial formulation.** Its strongest CAM regions were
-  dominated by the synthetic top/bottom vignette boundaries, demonstrating an
-  artificial preprocessing shortcut.
-- **B20 removes the B19 synthetic-boundary shortcut.** Its activation follows
-  real image/anatomical structures rather than the imposed cosine frame.
-- **B20 is not clearly superior to B18 for localization on this case.** B18 was
-  more focal, whereas B20 remained more spatially distributed with several
-  peripheral/non-specific hotspots.
-- Therefore the current scientifically defensible localization conclusion is:
-
-```text
-B19: rejected
-B18 vs B20: unresolved
-```
-
-This single-case Grad-CAM audit is diagnostic only and cannot establish global
-localization quality.
 
 ### Visualization bookkeeping correction
 
@@ -187,11 +160,62 @@ placing the model in `eval()` mode, so dropout could remain active until the
 Grad-CAM pass switched the model to evaluation mode. This could make the reported
 automatic view choice disagree with the later Grad-CAM view probability.
 
-The comparison tool was subsequently corrected to enforce deterministic
-`model.eval()` probability passes and now records/checks the direct-versus-Grad-CAM
-view-probability consistency. This issue affects visualization bookkeeping only;
-it does not change B18/B19/B20 training, checkpoint selection, or submission
-inference.
+The shared visualization helper was corrected to enforce `model.eval()` before
+all per-view probability passes and the comparison tool now checks the direct
+view probability against the Grad-CAM forward probability. This issue affected
+visualization bookkeeping only; it did not change B18/B19/B20 training,
+checkpoint selection, or submission inference.
+
+### Canonical corrected deterministic comparison
+
+After the `eval()` fix the comparison was rerun directly under
+`runs/focus_comparison/`. The automatic B18 reference selection chose:
+
+```text
+common TTA view                 +1
+common plane                    Sagittal
+common series index             1
+common sampled slice            0
+```
+
+Corrected probabilities shown on the canonical figure were:
+
+```text
+                         TTA probability    explained view probability
+B18 full FOV                  0.917                    0.919
+B19 crop + cosine             0.897                    0.895
+B20 crop only                 0.815                    0.816
+```
+
+The near equality between the direct explained-view probability and the plotted
+Grad-CAM view probability confirms that the deterministic visualization path is
+now internally consistent. The earlier pre-fix mask fractions/probability values
+should therefore be treated as non-canonical diagnostic output and should not be
+used for quantitative comparison.
+
+Qualitative interpretation of the corrected figure:
+
+- **B19 is rejected as the spatial formulation.** It shows broad, diffuse
+  activation and multiple strong peripheral/border hotspots consistent with the
+  synthetic cosine-vignette shortcut.
+- **B20 removes the B19 synthetic-boundary artifact.** Its activation is tied to
+  real image/anatomical structures rather than a deterministic taper boundary.
+- **B20 is still not clearly superior to B18 on this effusion case.** B18 is
+  more focal and more confident, while B20 remains distributed over several
+  peripheral and joint-adjacent structures.
+- Both B18 and B20 visibly activate around plausible fluid-bearing/anatomical
+  regions, but one single Grad-CAM case is insufficient to establish better
+  localization.
+
+Therefore the current scientifically defensible localization conclusion remains:
+
+```text
+B19: rejected
+B18 vs B20: unresolved
+```
+
+This single-case Grad-CAM audit is diagnostic only and cannot establish global
+localization quality.
 
 ## Current decision
 
