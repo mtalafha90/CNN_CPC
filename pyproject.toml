@@ -15,6 +15,7 @@ dependencies = [
   "PyYAML>=6.0",
   "torch>=2.2",
   "torchvision>=0.17",
+  "matplotlib>=3.8",
 ]
 
 [project.scripts]
@@ -70,6 +71,7 @@ rsna-knee-b17-gold-eval = "rsna_knee.b17_gold_eval:main"
 rsna-knee-b17-submit = "rsna_knee.b17_submission:main"
 rsna-knee-b18 = "rsna_knee.b18_fisher_selection:main"
 rsna-knee-b18-submit = "rsna_knee.b18_submission:main"
+rsna-knee-b18-visualize = "rsna_knee.b18_visualize:main"
 rsna-knee-final = "rsna_knee.final_all_data_training:main"
 rsna-knee-final-submit = "rsna_knee.final_all_data_submission:main"
 
