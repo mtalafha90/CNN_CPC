@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rsna-knee-cnn-cpc"
-version = "0.28.0"
+version = "0.29.0"
 description = "One-GPU nested-validation weakly supervised knee MRI pipeline for the 2026 RSNA AI Challenge"
 requires-python = ">=3.10"
 dependencies = [
@@ -88,6 +88,8 @@ rsna-knee-b20-nested-audit = "rsna_knee.b20_nested_epoch_audit:main"
 rsna-knee-b20-v2-control = "rsna_knee.b21_safe_training:main_control"
 rsna-knee-b21 = "rsna_knee.b21_safe_training:main"
 rsna-knee-b21-weak-eval = "rsna_knee.b21_weak_eval:main"
+rsna-knee-b21-full = "rsna_knee.b21_full_training:main"
+rsna-knee-b21-gold-acceptance = "rsna_knee.b21_accept:main"
 rsna-knee-focus-compare = "rsna_knee.compare_focus_visualize:main"
 rsna-knee-final = "rsna_knee.final_all_data_training:main"
 rsna-knee-final-submit = "rsna_knee.final_all_data_submission:main"
