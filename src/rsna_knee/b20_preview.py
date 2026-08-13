@@ -1,4 +1,9 @@
-"""Preview B20 crop-only preprocessing before training."""
+"""Preview B20 crop-only preprocessing before training.
+
+The preview deliberately filters train_series.csv to one selected study before
+DICOM metadata backfill. This keeps a visual sanity check from accidentally
+scanning the complete training collection.
+"""
 from __future__ import annotations
 
 import argparse
@@ -7,7 +12,6 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import numpy as np
 
 from .b7_weak_supervision import _read_config, make_b7_dataset_config
 from .b12_variable_series import VariableSeriesKneeDataset, build_variable_series_index
@@ -37,8 +41,16 @@ def main() -> None:
     if uid not in set(uids):
         raise ValueError(f"unknown training StudyInstanceUID {uid}")
 
+    # IMPORTANT: subset first. backfill_series_metadata may inspect DICOM files
+    # for rows with incomplete metadata; a preview must never audit every series.
     series = load_series_csv(root / config.get("train_series_csv", "train_series.csv"))
-    series, _ = backfill_series_metadata(series, root, split="train")
+    series = series.loc[series["StudyInstanceUID"].astype(str).eq(uid)].copy()
+    if series.empty:
+        raise ValueError("selected study has no rows in train_series.csv")
+    print({"preview_uid": uid, "series_rows_before_backfill": int(len(series))})
+    series, repair = backfill_series_metadata(series, root, split="train")
+    print({"metadata_repair": repair})
+
     index = build_variable_series_index(series, [uid])
     records = index[uid]
     if not records:
