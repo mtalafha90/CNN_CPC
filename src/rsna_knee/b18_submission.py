@@ -1,4 +1,4 @@
-"""Hidden-test inference for the selected B18 expert-guided checkpoint."""
+"""Submission inference for the selected B18 expert-guided checkpoint."""
 from __future__ import annotations
 
 import argparse
@@ -128,8 +128,11 @@ def generate_b18_submission(
     output.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(output, index=False)
 
+    # Neutral label: this function is used both for the local three-study smoke
+    # surface and for a genuine competition test surface. The manifest must not
+    # imply that hidden competition evaluation occurred merely because inference ran.
     manifest = {
-        "experiment": "B18_hidden_test_submission_inference",
+        "experiment": "B18_submission_inference",
         "variant": B18_VARIANT,
         "checkpoint": str(Path(checkpoint).resolve()),
         "selected_epoch": int(payload.get("selected_epoch", -1)),
