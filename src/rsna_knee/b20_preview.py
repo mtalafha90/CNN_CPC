@@ -1,8 +1,8 @@
 """Preview B20 crop-only preprocessing before training.
 
-The preview deliberately filters train_series.csv to one selected study before
-DICOM metadata backfill. This keeps a visual sanity check from accidentally
-scanning the complete training collection.
+This preview is intentionally lightweight: it decodes only one representative
+DICOM image from at most one sagittal, coronal and axial series. It does not
+instantiate the full B12 study dataset or decode every slice/series in a study.
 """
 from __future__ import annotations
 
@@ -12,12 +12,92 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import torch.nn.functional as F
 
-from .b7_weak_supervision import _read_config, make_b7_dataset_config
-from .b12_variable_series import VariableSeriesKneeDataset, build_variable_series_index
+from .b7_weak_supervision import _read_config
 from .b20_crop_focus import b20_crop_focus_policy
 from .crop_focus import apply_crop_focus
-from .data import backfill_series_metadata, load_series_csv, load_train_csv
+from .data import backfill_series_metadata, gold_mask, load_series_csv, load_train_csv
+from .dicom import DICOM_SUFFIXES, find_series_dir
+
+
+def _dicom_candidates(path: Path) -> list[Path]:
+    return sorted(
+        p for p in path.iterdir()
+        if p.is_file() and p.suffix.lower() in DICOM_SUFFIXES
+    )
+
+
+def _representative_image(series_dir: Path) -> np.ndarray:
+    """Decode one approximately central DICOM image from a series.
+
+    We intentionally avoid decoding the complete volume because B20's preview
+    only needs to demonstrate the in-plane crop transform.
+    """
+    import pydicom
+
+    candidates = _dicom_candidates(series_dir)
+    if not candidates:
+        raise RuntimeError(f"no DICOM candidates in {series_dir}")
+
+    # Header-only reads are cheap and let InstanceNumber choose an approximate
+    # anatomical middle without touching pixel data for every file.
+    ordered: list[tuple[float, Path]] = []
+    for ordinal, path in enumerate(candidates):
+        try:
+            ds = pydicom.dcmread(
+                str(path),
+                force=True,
+                stop_before_pixels=True,
+                specific_tags=["InstanceNumber"],
+            )
+            key = float(getattr(ds, "InstanceNumber", ordinal))
+        except Exception:
+            key = float(ordinal)
+        ordered.append((key, path))
+    ordered.sort(key=lambda item: item[0])
+
+    path = ordered[len(ordered) // 2][1]
+    print(
+        {
+            "decoding_representative_dicom": str(path),
+            "series_files": len(candidates),
+        },
+        flush=True,
+    )
+    ds = pydicom.dcmread(str(path), force=True)
+    arr = np.asarray(ds.pixel_array, dtype=np.float32)
+    if arr.ndim == 3:
+        arr = arr[len(arr) // 2]
+    if arr.ndim != 2:
+        raise RuntimeError(f"unsupported representative pixel shape {arr.shape} in {path}")
+
+    arr = arr * float(getattr(ds, "RescaleSlope", 1.0)) + float(
+        getattr(ds, "RescaleIntercept", 0.0)
+    )
+    if str(getattr(ds, "PhotometricInterpretation", "")).upper() == "MONOCHROME1":
+        arr = arr.max() - arr
+
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        raise RuntimeError(f"representative DICOM has no finite pixels: {path}")
+    lo, hi = np.percentile(finite, [1, 99])
+    arr = np.nan_to_num(arr, nan=float(lo), posinf=float(hi), neginf=float(lo))
+    arr = np.clip(arr, lo, hi)
+    arr = (arr - lo) / max(float(hi - lo), 1e-6)
+    return arr.astype(np.float32, copy=False)
+
+
+def _resize_224(image: np.ndarray) -> torch.Tensor:
+    tensor = torch.from_numpy(image).view(1, 1, image.shape[0], image.shape[1])
+    return F.interpolate(
+        tensor,
+        size=(224, 224),
+        mode="bilinear",
+        align_corners=False,
+    )
 
 
 def main() -> None:
@@ -36,61 +116,74 @@ def main() -> None:
     root = Path(config["data_root"])
 
     train = load_train_csv(root / config.get("train_csv", "train.csv"))
-    uids = train["StudyInstanceUID"].astype(str).tolist()
-    uid = str(args.uid) if args.uid else uids[0]
-    if uid not in set(uids):
-        raise ValueError(f"unknown training StudyInstanceUID {uid}")
+    # Default to an expert-labelled study, matching the B19 preview policy and
+    # avoiding an arbitrary first report-only study that may contain unusual
+    # acquisition files. --uid can still select any training study explicitly.
+    if args.uid:
+        uid = str(args.uid)
+        if uid not in set(train["StudyInstanceUID"].astype(str)):
+            raise ValueError(f"unknown training StudyInstanceUID {uid}")
+    else:
+        expert = train.loc[gold_mask(train), "StudyInstanceUID"].astype(str)
+        if expert.empty:
+            raise ValueError("no expert-labelled study available for default B20 preview")
+        uid = str(expert.iloc[0])
 
-    # IMPORTANT: subset first. backfill_series_metadata may inspect DICOM files
-    # for rows with incomplete metadata; a preview must never audit every series.
+    # Subset before metadata backfill. A preview must never audit all series.
     series = load_series_csv(root / config.get("train_series_csv", "train_series.csv"))
     series = series.loc[series["StudyInstanceUID"].astype(str).eq(uid)].copy()
     if series.empty:
         raise ValueError("selected study has no rows in train_series.csv")
-    print({"preview_uid": uid, "series_rows_before_backfill": int(len(series))})
+    print({"preview_uid": uid, "series_rows_before_backfill": int(len(series))}, flush=True)
     series, repair = backfill_series_metadata(series, root, split="train")
-    print({"metadata_repair": repair})
+    print({"metadata_repair": repair}, flush=True)
 
-    index = build_variable_series_index(series, [uid])
-    records = index[uid]
-    if not records:
-        raise ValueError("selected study has no eligible series")
-
-    ds = VariableSeriesKneeDataset(
-        [uid],
-        index,
-        make_b7_dataset_config(config, root, train=False, tta_offsets=()),
-        train=False,
-    )
-    item = ds[0]
-    volumes = item["volumes"]
-    focused = apply_crop_focus(volumes, policy)
-
-    selected = []
+    selected: list[tuple[str, str]] = []
     for plane in ("Sagittal", "Coronal", "Axial"):
-        candidates = [i for i, record in enumerate(records) if record["plane"] == plane]
-        if candidates:
-            selected.append((plane, candidates[0]))
+        part = series.loc[series["Anatomical_Plane"].eq(plane)]
+        if not part.empty:
+            selected.append((plane, str(part.iloc[0]["SeriesInstanceUID"])))
     if not selected:
         raise RuntimeError("no sagittal/coronal/axial series available for preview")
 
     fig, axes = plt.subplots(2, len(selected), figsize=(5 * len(selected), 8), squeeze=False)
-    for col, (plane, k) in enumerate(selected):
-        s = int(volumes.shape[1] // 2)
-        original = volumes[k, s, 1].numpy()
-        crop = focused[k, s, 1].numpy()
-        axes[0, col].imshow(original, cmap="gray", vmin=0, vmax=1)
+    for col, (plane, series_uid) in enumerate(selected):
+        series_dir = find_series_dir(root, "train", uid, series_uid)
+        if series_dir is None:
+            raise FileNotFoundError(f"missing training series {uid}/{series_uid}")
+        print(
+            {"plane": plane, "series_uid": series_uid, "status": "reading_one_image"},
+            flush=True,
+        )
+        raw = _representative_image(series_dir)
+        original = _resize_224(raw)
+        crop = apply_crop_focus(original, policy)
+        original_np = original[0, 0].numpy()
+        crop_np = crop[0, 0].numpy()
+
+        axes[0, col].imshow(original_np, cmap="gray", vmin=0, vmax=1)
         axes[0, col].set_title(f"{plane} — original")
-        axes[1, col].imshow(crop, cmap="gray", vmin=0, vmax=1)
+        axes[1, col].imshow(crop_np, cmap="gray", vmin=0, vmax=1)
         axes[1, col].set_title(f"{plane} — B20 crop-only")
         for row in range(2):
             axes[row, col].axis("off")
+        print(
+            {
+                "plane": plane,
+                "series_uid": series_uid,
+                "status": "done",
+                "original_mean": float(original_np.mean()),
+                "crop_mean": float(crop_np.mean()),
+            },
+            flush=True,
+        )
+
     fig.suptitle(f"B20 crop-only preview | UID={uid} | policy={policy}", fontsize=11)
     output = Path(args.out)
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=180, bbox_inches="tight")
     plt.close(fig)
-    print(output)
+    print(output, flush=True)
 
 
 if __name__ == "__main__":
