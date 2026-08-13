@@ -138,17 +138,25 @@ def main() -> None:
     root = Path(args.data_root)
     gold, variable_index, _ = _load_gold_surface(configs["b18"], root)
     uid = str(args.uid)
-    matches = gold.index[gold["StudyInstanceUID"].astype(str) == uid].tolist()
-    if not matches:
+
+    # gold retains original train.csv index labels. Use a boolean mask to obtain
+    # a true POSITION before indexing with iloc; an original label can be much
+    # larger than 57 even though gold has only 58 rows.
+    uid_mask = gold["StudyInstanceUID"].astype(str).eq(uid).to_numpy()
+    positions = np.flatnonzero(uid_mask)
+    if positions.size == 0:
         raise ValueError("UID is not on the 58-study expert surface")
-    row_idx = matches[0]
+    if positions.size != 1:
+        raise RuntimeError(f"expert surface contains duplicate UID {uid}")
+    row_pos = int(positions[0])
+
     target_idx = _resolve_target(args.target)
     if target_idx is None:
         raise ValueError("--target is required")
-    truth = float(gold.iloc[row_idx][TARGETS[target_idx]])
+    truth = float(gold.iloc[row_pos][TARGETS[target_idx]])
     if truth <= 0.5:
         raise ValueError(f"requested expert case is not positive for {TARGETS[target_idx]}")
-    truth_row = [float(gold.iloc[row_idx][target]) for target in TARGETS]
+    truth_row = [float(gold.iloc[row_pos][target]) for target in TARGETS]
 
     offsets = tuple(int(x) for x in configs["b18"].get("b7_eval_tta_offsets", [-1, 0, 1]))
     items = {
