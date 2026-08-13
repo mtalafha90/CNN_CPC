@@ -86,6 +86,37 @@ The two arms use the same safe encoder, seeded hierarchy initialization, DataLoa
 
 The run stops after epoch 2 but keeps the historical B20 cosine-scheduler horizon `T_max=5`. This preserves B20's first-two-epoch learning-rate trajectory rather than introducing a new two-epoch schedule.
 
+## Declared normalization-support difference
+
+B21 has one additional, small preprocessing consequence that must be recorded before the first run.
+
+`_normalise_volume` derives its intensity window from the 1st and 99th percentiles of the array it receives. Therefore the two matched arms do **not** derive that window from exactly the same pixel population:
+
+```text
+B20-v2 control:
+full native volume -> percentile normalization -> resize 224 -> crop 90% -> resize 224
+
+B21:
+full native volume -> crop 90% -> percentile normalization on cropped volume -> resize 224
+```
+
+Accordingly, the first B21 experiment should be interpreted as a test of the corrected **pre-resize 90% crop pipeline**, whose intervention includes both:
+
+1. moving the 90% field-of-view restriction upstream of the 224 resize; and
+2. deriving the percentile normalization window from that cropped field of view.
+
+At the frozen `0.90` crop fraction this normalization-support difference is expected to be small because only a thin border is removed and percentile normalization is robust. A separate knee-like phantom simulation supplied during review estimated roughly a `+1.58` low-percentile shift and about a `+1.25%` normalization-range change at `0.90`. These are planning diagnostics from synthetic phantoms, **not measurements on the competition dataset and not performance evidence**.
+
+This does **not** block the first B21 run. It does mean that a future crop-fraction sweep must not reuse this implementation as if crop fraction were the only changing variable. Before testing `0.85`, `0.80`, `0.75`, `0.70`, or another crop fraction, preprocessing must be refactored so both arms derive the normalization window from the same full native volume, then apply the crop after normalization but before the final resize.
+
+For the current B21-v1 experiment:
+
+```text
+crop fraction sweep under current normalization order   FORBIDDEN
+current frozen 0.90 B21 run                            ALLOWED
+normalization-support difference                        DECLARED INTERVENTION
+```
+
 ## What is deliberately not changed
 
 - no robust-loss experiment;
@@ -118,6 +149,19 @@ B20 remains the working model while B21 is under development.
 ```
 
 If B21 is favorable under the predeclared weak-v2 comparison, freeze it first. Only then may one predeclared expert B20-vs-B21 acceptance comparison be performed. No gold result may be used to tune B21 before that freeze.
+
+## Pre-run gates
+
+The following local artifacts must exist before the campaign starts:
+
+```text
+runs/b15_mri_ssl/b15_ssl_encoder.pt
+runs/weak_holdout_v2/
+runs/b6_report_labels_v121/
+runs/b12_variable_series/audit/series_policy.json
+```
+
+The weak-v2-safe B16 report-alignment stage must complete **all four exact full-coverage passes**. `load_b16_v2_report_encoder` is intentionally strict: a truncated, budget-limited, or fewer-than-four-epoch checkpoint is invalid and the matched B20-v2/B21 runs must not start from it.
 
 ## Run order
 
