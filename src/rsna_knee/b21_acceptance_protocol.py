@@ -21,6 +21,7 @@ B21_CROP_FRACTION = 0.90
 
 B20_CANONICAL_GOLD_MACRO_AUC = 0.667159355531343
 B20_CANONICAL_EPOCH = 2
+B20_REPLAY_SANITY_TOLERANCE = 0.005
 PROMOTION_RULE = "candidate_global_macro_auc_gt_canonical_b20"
 SCIENTIFIC_SUPERIORITY_RULE = "paired_95pct_ci_lower_gt_zero"
 
@@ -63,3 +64,16 @@ def scientific_superiority_decision(paired_ci_lower: float) -> bool:
     if not np.isfinite(value):
         raise ValueError("paired CI lower bound must be finite")
     return bool(value > 0.0)
+
+
+def require_b20_replay_sanity(replayed_macro_auc: float) -> float:
+    value = float(replayed_macro_auc)
+    if not np.isfinite(value):
+        raise ValueError("B20 replay macro AUC must be finite")
+    delta = value - B20_CANONICAL_GOLD_MACRO_AUC
+    if abs(delta) > B20_REPLAY_SANITY_TOLERANCE:
+        raise RuntimeError(
+            "historical B20 replay differs too much from its canonical score; "
+            "abort the one-look acceptance decision"
+        )
+    return float(delta)
