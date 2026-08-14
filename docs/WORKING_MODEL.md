@@ -1,6 +1,6 @@
 # Active working model
 
-> **Decision — 2026-08-14:** **B20 remains the active working model.** B21-v1 passed the frozen weak-v2 development gate but failed the predeclared full-data gold acceptance comparison and is not promoted.
+> **Decision — 2026-08-14:** **B20 remains the active working model.** B21-v1 passed the frozen weak-v2 development gate but failed the predeclared full-data gold acceptance comparison and is not promoted. B22 is an exploratory five-epoch duration audit only.
 
 ## Active model
 
@@ -60,13 +60,36 @@ Therefore **B21-v1 is not promoted**.
 
 Canonical acceptance record: [`B21_FULL_ACCEPTANCE.md`](B21_FULL_ACCEPTANCE.md).
 
+## B22 exploratory duration audit
+
+B22 does **not** reopen the B21 promotion decision. It asks only whether the pre-resize crop pipeline has a different downstream training-duration requirement.
+
+Frozen B22 recipe:
+
+```text
+historical B16 frozen encoder
+full 3,120-study B6 surface
+17,475 series
+pre-resize 90% crop
+same B20/B21 architecture and optimizer
+five-epoch cosine trajectory
+save E1, E2, E3, E4, E5
+no gold evaluation during training
+```
+
+Before later epochs are interpreted, B22 E2 must reproduce the previous B21 E2 macro AUC within `0.005`. Historical B20 replay must also pass its canonical sanity check.
+
+The subsequent E1-E5 gold trajectory is explicitly **post-hoc exploratory evidence**. It cannot replace B20, cannot justify target mixing, and cannot trigger another B22 retuning round by itself.
+
+Canonical protocol: [`B22_DURATION_AUDIT.md`](B22_DURATION_AUDIT.md).
+
 ## Interpretation
 
 The B21 experiment demonstrates a meaningful mismatch between the frozen weak-v2 teacher-agreement surface and expert-gold ranking for a near-neighbor preprocessing change. A positive weak-v2 development result did not transfer to the expert-gold global metric.
 
-Accordingly, future optimization should not simply continue to maximize weak-v2 AUC and assume expert performance will follow. The next modelling campaign should first improve or replace the development-selection strategy.
+Accordingly, future optimization should not simply continue to maximize weak-v2 AUC and assume expert performance will follow. B22 is permitted only as a bounded diagnostic of the specific crop-by-training-duration interaction raised after B21; it is not a new independent validation campaign.
 
-Target-level B20/B21 results from the consumed gold look are descriptive only and must not be used for target mixing, crop-fraction retuning, or a second B21-v1 variant.
+Target-level B20/B21/B22 results from reused gold are descriptive only and must not be used for target mixing or iterative retuning.
 
 ## Historical B20/B18 audit context
 
@@ -90,14 +113,18 @@ B18  frozen full-FOV comparator
 B19  rejected spatial formulation
 B20  ACTIVE WORKING MODEL
 B21  weak-v2-passed but gold-acceptance-failed candidate; NOT PROMOTED
+B22  exploratory pre-resize-crop duration audit; NOT A PROMOTION CANDIDATE
 ```
 
 ## Governance
 
 - Keep historical B20 unchanged.
 - Do not run another B21-v1 gold acceptance look.
-- Do not build a target-wise B20/B21 mixture from the 58 expert studies.
+- Do not build a target-wise B20/B21/B22 mixture from the 58 expert studies.
 - Do not reopen B21-v1 crop fraction, normalization order, loss, architecture, aggregation, or resolution based on the consumed gold result.
+- B22 may test only training duration under the frozen B21 preprocessing recipe.
+- B22 E2 must reproduce B21 E2 within the predeclared tolerance before E3-E5 are interpreted.
+- B22 gold trajectory is exploratory only and cannot promote a new working model without independent evidence.
 - Do not treat weak-v2 teacher agreement as a sufficient proxy for expert truth for future near-neighbor model selection.
 - Preserve the B21 artifacts as a negative controlled experiment.
 - Hidden competition evaluation remains the independent predictive-performance signal.
