@@ -1,10 +1,10 @@
 # B21 full-data acceptance protocol
 
-> **Status — 2026-08-14:** WEAK-V2 DEVELOPMENT GATE PASSED / FULL-DATA REFIT IMPLEMENTED / GOLD ACCEPTANCE NOT YET RUN. B20 remains the active working model.
+> **Status — 2026-08-14:** COMPLETE. Weak-v2 gate passed, full-data refit completed, and the single predeclared gold acceptance look was consumed. **B21 was not promoted. B20 remains the active working model.**
 
 ## Frozen weak-v2 result
 
-The leakage-safe matched comparison completed on the frozen 623-study weak-v2 holdout:
+The leakage-safe matched comparison on the frozen 623-study weak-v2 holdout favored B21:
 
 ```text
 B20-v2 control macro AUC        0.7298727911
@@ -16,11 +16,11 @@ P(B21 > control)                0.9758888435
 valid bootstrap reps           4894 / 5000
 ```
 
-This is teacher-agreement evidence, not expert truth. It is sufficient only to freeze the B21-v1 preprocessing decision for the next predeclared step.
+This was teacher-agreement evidence, not expert truth.
 
-## Full-data refit
+## Completed full-data refit
 
-The full-data acceptance candidate uses:
+The frozen full-data B21 candidate used:
 
 ```text
 initializer                    historical B16 report-aligned encoder
@@ -38,65 +38,65 @@ expert checkpoint selection    disabled
 gold labels in gradients       0
 ```
 
-The trainer requires the already-completed favorable weak-v2 `comparison.json` before it will start.
+Both epochs had exact full coverage. The encoder SHA remained
+`b328667cf9dfa9b909ef181c1bcc8975ec42bcd8b9eddad08f908875b73fae96`.
 
-Canonical output:
+Canonical checkpoint:
 
 ```text
 runs/b21_full_acceptance/b21_full_model.pt
 ```
 
-## One-look gold acceptance
+## Completed one-look gold acceptance
 
-The gold evaluator compares the frozen full-data B21 candidate against historical B20 using the same 58 expert studies and matching TTA `[-1,0,1]`.
-
-Predeclared promotion rule:
+The historical B20 replay passed the predefined sanity guard:
 
 ```text
-PROMOTE B21 as working model
-iff B21 global 12-target gold macro AUC > 0.667159355531343
+canonical B20 macro AUC         0.6671593555
+replayed B20 macro AUC          0.6674066371
+replay - canonical             +0.0002472815
+allowed replay tolerance        0.005
 ```
 
-The historical B20 replay is also performed in the same evaluator. The replay must remain within `0.005` of the canonical B20 score or the acceptance decision aborts.
-
-A stronger scientific superiority statement requires:
+The frozen B21 candidate scored:
 
 ```text
-paired B21 - B20 bootstrap 95% CI lower bound > 0
+B21 global macro AUC            0.6573196516
+B21 - canonical B20            -0.0098397039
+B21 - replayed B20             -0.0100869854
 ```
 
-Target-level AUCs are descriptive only and are forbidden for target mixing, retuning, crop adjustment, or promotion decisions.
+Paired bootstrap comparison:
 
-The evaluator refuses to run if its output directory already exists. This is a one-look governance guard, not a claim that the reused 58-study gold surface is independent validation.
-
-## Important limitation
-
-Historical B20 was developed using the same 58-study gold surface, including checkpoint selection and broader modelling decisions. Therefore even this one-look B21 acceptance comparison is **not pristine independent validation**. It is a frozen governance comparison only. Hidden competition evaluation remains the independent predictive signal.
-
-## Commands
-
-Full-data B21 refit:
-
-```bash
-rsna-knee-b21-full \
-  --config configs/b21_full_acceptance.yaml \
-  --data-root "$DATA_ROOT" \
-  --b6-root runs/b6_report_labels_v121 \
-  --series-policy runs/b12_variable_series/audit/series_policy.json \
-  --report-ssl-checkpoint runs/b16_full_report/report_ssl/b16_report_encoder.pt \
-  --weak-v2-comparison runs/b21_preresize_crop/weak_v2_comparison/comparison.json \
-  --out-root runs/b21_full_acceptance
+```text
+median B21 - B20               -0.0095857726
+95% CI               [-0.0328814731,+0.0117052345]
+P(B21 > B20)                    0.1812
+valid bootstrap reps            5000 / 5000
 ```
 
-After verifying the full-data checkpoint, run the one-look acceptance exactly once:
+Predeclared rules therefore give:
 
-```bash
-rsna-knee-b21-gold-acceptance \
-  --config configs/b21_full_acceptance.yaml \
-  --data-root "$DATA_ROOT" \
-  --b20-checkpoint runs/b20_crop_focus/b20_model.pt \
-  --b21-checkpoint runs/b21_full_acceptance/b21_full_model.pt \
-  --out-root runs/b21_full_acceptance/gold_acceptance
+```text
+promotion_rule_passed              false
+scientific_superiority_supported   false
 ```
 
-Do not run a second weak-v2 optimization round or modify B21 based on target-wise weak-v2 results before this frozen acceptance step.
+## Decision
+
+**B21-v1 is rejected for promotion. B20 remains the active working model.**
+
+The result also demonstrates an important development-surface mismatch: B21 improved agreement with the frozen B6 teacher on weak-v2 but did not improve the expert-gold global ranking. Weak-v2 should therefore not be treated as a reliable surrogate for expert-truth model selection for near-neighbor architecture/preprocessing changes.
+
+Target-level AUCs from this one-look comparison are descriptive only and must not be used to build a target-wise B20/B21 mixture, retune crop fraction, or define a second B21-v1 gold-guided variant.
+
+## Governance after completion
+
+- Do not run another B21-v1 gold acceptance look.
+- Do not promote B21-v1.
+- Do not target-mix B20 and B21 from the 58-study result.
+- Preserve `runs/b21_full_acceptance/gold_acceptance/acceptance.json` as the canonical acceptance artifact.
+- Keep B20 unchanged as the working checkpoint.
+- Future optimization should first address the development/validation-surface problem rather than continuing to optimize directly against weak-v2 teacher agreement.
+
+The 58 expert studies were already reused during historical B20 development, so this remains a governance/development comparison rather than pristine independent validation. Hidden competition evaluation remains the independent predictive-performance signal.
