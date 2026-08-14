@@ -18,12 +18,67 @@ coverage             0.3606
 
 Two consequences follow directly.
 
-**Most of the supervision is discarded.**
+**Most of the supervision is discarded — and the discards are where the disease is.**
 
 ```text
 4,349 report studies x 12 targets = 52,188 possible cells
 B6 v1.2.1 actually uses           = 14,123   (27%)
 ```
+
+The `state_truth_audit.csv` export makes the cost exact. Across all 696 gold cells:
+
+```text
+state           n    P(gold=1)   share of cells   share of ALL positives
+positive      168      0.690        24.1%             48.3%
+negated        83      0.036        11.9%              1.2%
+uncertain      29      0.379         4.2%              4.6%
+unmentioned   416      0.264        59.8%             45.8%
+```
+
+B6 discards `uncertain + unmentioned` = **445 of 696 cells (63.9%)**, and those discards contain **121 of the 240 expert positives — 50.4% of all the disease in the gold set**.
+
+The negation rule is the parser's one genuine strength: `P(gold=1 | negated) = 0.036`, so when the report says "no X", it is right 96% of the time. Everything else is weak.
+
+### Silence means different things for different findings
+
+`P(expert positive | B6 says unmentioned)`, by target:
+
+```text
+Effusion           n= 21   0.714
+Synovitis          n= 44   0.386
+ACL                n= 21   0.381
+PF OA              n= 39   0.359
+Medial Meniscus    n= 24   0.333
+Contusion          n= 35   0.257
+Lateral Meniscus   n= 24   0.208
+Fracture           n= 40   0.200
+Medial OA          n= 44   0.182
+Lateral OA         n= 46   0.174
+Baker's            n= 46   0.152
+MCL                n= 32   0.094
+```
+
+A 7.6x spread. This is decisive for policy: a single global rule for `unmentioned` is wrong in both directions. Ignoring it discards half the positives; mapping it to negative would inject 306 false negatives. Neither is the fix — **the fix is to stop landing in that bucket**.
+
+**Effusion is the clearest case of parser failure.** `P(gold=1 | unmentioned) = 0.714` exceeds `P(gold=1 | positive) = 0.645`: for effusion, B6's silence predicts disease *better than its own positive call*. The reports explain why. Effusion is stated plainly in every language in the corpus — "Matige hydrops" (Dutch), "Leve derrame articular" (Spanish), "artmış efüzyon izlenmiştir" (Turkish), "Diz eklemi içi sıvı miktarı normal" (Turkish negation) — and a regex vocabulary that catches the English forms drops the rest into `unmentioned`.
+
+### The failure taxonomy, from the review queue
+
+All 12 sampled review-queue rows failed for one reason: `conflicting_definite_evidence`, collapsed to `uncertain` at confidence `0.20` and therefore discarded. Reading their evidence spans gives five distinct causes:
+
+| # | Cause | Measured example |
+|---|---|---|
+| A | Clinical request read as a finding | `anterior cruciate ligament: intact \|\| acl sprain` — the second span is the *Indication* line |
+| B | Adjacent structure attributed to the target | `acl normal \|\| ganglion cyst adjacent to the proximal part of acl` |
+| C | Attachment-site lesion attributed to the ligament | `acl normal \|\| avulsive fracture of tibia ... at the attachment site of acl` |
+| D | Findings/Impression conflict left unresolved | `the acl as a construct is intact \|\| low-grade partial tear of the acl` |
+| E | Degeneration treated as equivalent to a tear | `muco ïde degeneratie van de voorste kruisband \|\| acl: intact` |
+
+For cause E the gold data points one way: **the ACL `uncertain` bucket is 0/5 gold-positive** — every ACL case the parser hedged on was expert-negative. That is the evidence behind Rule 5's policy that ligament and meniscal degeneration without a tear is `negated`, while chondral degeneration is `positive` for its OA compartment. With n=5 it is a judgement call, not a proof, and the labeller audit is what will test it.
+
+These five causes are precisely what the prompt's Rules 1–5 address, and each is pinned by a regression test in `tests/test_b23_prompt_rules.py` so a later prompt revision cannot silently drop one.
+
+> **Note on the sample export.** Reports in `review_queue.csv` are truncated to 1,600 characters by `_review_queue` (`b6_report_labels.py:520`). That is a display artifact of the review export only — B6 parses the full text, and `train.csv` carries complete reports.
 
 **The models have nearly caught their teacher.** The frozen B6 state-only ranking scores `0.7025` on gold; B20 scores `0.6672`. The downstream model sits at about 95% of its own supervision. Under that constraint, architecture, resolution, crop geometry and training duration are all second-order — B21 and B22 measured exactly that and came back negative.
 
@@ -111,6 +166,17 @@ Freezes a large report-group-safe stratified split with the same discipline as `
 4. Only then freeze the development split.
 5. Only then retrain, with the model held exactly at B20's recipe.
 ```
+
+### The diagnostic that matters most
+
+Beyond the pass/fail gate, the number to read in `candidate_state_truth.csv` is the **`unmentioned` row**. B23 is working if that bucket becomes both *smaller* and *cleaner*:
+
+```text
+B6 v1.2.1     n = 416   P(gold=1) = 0.264
+B23 target    n much lower, P(gold=1) approaching the 0.036 seen for `negated`
+```
+
+A high `P(gold=1 | unmentioned)` means real findings are still being missed rather than read. If B23's `unmentioned` bucket stays large *and* stays around 0.26, the labeller has not solved the problem even if its headline macro AUC improves — and the per-target Effusion row is the single most sensitive indicator, since that is where B6 is measurably anti-informative.
 
 If step 3 fails, B23 is rejected and B6 v1.2.1 stands. The audit is a single predeclared look; it must not be used to iterate on the prompt.
 
