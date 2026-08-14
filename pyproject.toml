@@ -19,6 +19,12 @@ dependencies = [
   "Pillow>=10.0",
 ]
 
+[project.optional-dependencies]
+# Only the B23 report-labelling step needs an LLM client. Everything else --
+# including the B23 labeller audit and the frozen development split -- runs
+# from the exported CSVs with no network access.
+llm = ["anthropic>=0.40"]
+
 [project.scripts]
 rsna-knee = "rsna_knee.cli:main"
 rsna-knee-report-teacher = "rsna_knee.report_teacher_cli:main"
@@ -92,6 +98,9 @@ rsna-knee-b21-full = "rsna_knee.b21_full_training:main"
 rsna-knee-b21-gold-acceptance = "rsna_knee.b21_accept:main"
 rsna-knee-b22-duration = "rsna_knee.b22_duration_training:main"
 rsna-knee-b22-gold-audit = "rsna_knee.b22_gold_audit:main"
+rsna-knee-b23 = "rsna_knee.b23_llm_labels:main"
+rsna-knee-b23-audit = "rsna_knee.b23_labeller_audit:main"
+rsna-knee-b23-split = "rsna_knee.b23_validation_split:main"
 rsna-knee-focus-compare = "rsna_knee.compare_focus_visualize:main"
 rsna-knee-final = "rsna_knee.final_all_data_training:main"
 rsna-knee-final-submit = "rsna_knee.final_all_data_submission:main"

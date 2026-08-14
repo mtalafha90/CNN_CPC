@@ -1,0 +1,47 @@
+# B23 LLM report-labelling and large development split.
+#
+# B23 changes the SUPERVISION SOURCE and the DEVELOPMENT SURFACE. It does not
+# change any training recipe, architecture, resolution or crop policy. Those
+# remain exactly as B20 left them so that a later comparison attributes any
+# movement to the labels rather than to the model.
+#
+# B6 v1.2.1 stays frozen. This is a separately versioned alternative export,
+# not a replacement of the historical supervision used by B7-B22.
+
+data_root: /data/rsna-knee-abnormality-detection
+train_csv: train.csv
+train_series_csv: train_series.csv
+
+seed: 2026
+competition_mode: true
+requested_gpus: 1
+
+# --- Labeller ----------------------------------------------------------------
+# The extraction runs on CPU against an LLM API; no GPU is involved.
+b23_model: claude-sonnet-5
+b23_max_tokens: 4096
+b23_temperature: 0.0
+b23_max_attempts: 3
+
+# Frozen B6-compatible supervision policy. The downstream B7 family reads these
+# exact semantics, so keeping them identical is what makes B23 a drop-in
+# supervision swap rather than a new training recipe.
+b7_min_confidence: 0.75
+b7_positive_target: 0.85
+b7_negative_target: 0.05
+b7_positive_weight: 0.50
+b7_negative_weight: 1.00
+
+# Report silence is not a negative label. B23 keeps uncertain/unmentioned
+# ignored by pinning their confidence to zero, exactly as B6 does. Recovering
+# them is a separate, separately versioned hypothesis.
+b23_unmentioned_is_negative: false
+
+# --- Development split -------------------------------------------------------
+# Sized to make near-neighbour model comparisons measurable. At n=58 the macro
+# AUC standard error is about 0.0250; B22 measured a 0.0439 within-run swing on
+# that surface, which is larger than the entire B13->B20 campaign gain.
+b23_holdout_fraction: 0.20
+b23_holdout_seed: 2026
+b23_holdout_min_class_count: 8
+b23_holdout_search_candidates: 4096
