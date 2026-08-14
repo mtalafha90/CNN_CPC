@@ -45,3 +45,16 @@ def require_failed_b21_acceptance(path: str | Path) -> dict:
     if score >= B20_CANONICAL_GOLD_MACRO_AUC:
         raise ValueError("B21 acceptance record conflicts with the failed-promotion state")
     return payload
+
+
+def require_b22_e2_replay(new_e2_macro_auc: float, prior_b21_e2_macro_auc: float) -> float:
+    new_value = float(new_e2_macro_auc)
+    prior_value = float(prior_b21_e2_macro_auc)
+    if not np.isfinite(new_value) or not np.isfinite(prior_value):
+        raise ValueError("B22 E2 replay values must be finite")
+    delta = new_value - prior_value
+    if abs(delta) > B22_E2_REPLAY_TOLERANCE:
+        raise RuntimeError(
+            "B22 E2 does not reproduce B21 E2 closely enough; duration trajectory is not interpretable"
+        )
+    return float(delta)
