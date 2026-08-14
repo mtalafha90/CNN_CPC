@@ -5,6 +5,8 @@
 ## Current project state — 2026-08-14
 
 > **B20 is the active working model.** B21-v1 corrected the crop ordering and passed a leakage-safe weak-v2 development gate, but failed the predeclared full-data expert acceptance comparison. B22 then showed that extending the B21 formulation from E2 to E5 does not rescue expert performance.
+>
+> **B23 is implemented but not run and not adopted.** It is the first experiment to change the supervision source rather than the model: a local frozen `qwen3:14b` (Ollama, Q4_K_M) replaces the B6 regex report parser. B6 v1.2.1 stays frozen, B20 is untouched, and adoption is gated on a predeclared labeller audit enforced in code.
 
 | Model | Role | Spatial input / experiment | Canonical result | Status |
 |---|---|---|---:|---|
@@ -14,6 +16,7 @@
 | **B20** | **ACTIVE WORKING MODEL** | resize 224 -> 90% crop -> resize 224 | E2 `0.6671593555` | **active** |
 | **B21-v1** | crop-order correction | native 90% crop -> normalization -> resize 224 | weak-v2 `0.7410090411`; gold `0.6573196516` | weak-v2 passed; gold acceptance failed |
 | **B22** | B21 training-duration audit | same B21 preprocessing, E1-E5 | best E2 `0.6574269018` | closed; longer training did not rescue |
+| **B23** | report-labeller substitution | supervision source only; model untouched | not yet run | implemented; not run; not adopted |
 
 The 58 expert-labelled studies are a repeatedly reused **development/model-selection surface, not independent validation**. Hidden competition evaluation remains the independent predictive-performance signal.
 
@@ -122,6 +125,7 @@ The current optimization bottleneck is therefore the **weak-label / development-
 - [`docs/B21_PRERESIZE_CROP.md`](docs/B21_PRERESIZE_CROP.md) — B21 crop-order development and final disposition.
 - [`docs/B21_FULL_ACCEPTANCE.md`](docs/B21_FULL_ACCEPTANCE.md) — completed one-look B21 acceptance result.
 - [`docs/B22_DURATION_AUDIT.md`](docs/B22_DURATION_AUDIT.md) — completed E1-E5 duration audit.
+- [`docs/B23_LLM_REPORT_LABELS.md`](docs/B23_LLM_REPORT_LABELS.md) — local-LLM report labeller, gate and development split.
 - [`docs/VISUALIZATION_GUIDE.md`](docs/VISUALIZATION_GUIDE.md) — visualization commands and interpretation rules.
 - [`docs/VALIDATION.md`](docs/VALIDATION.md) — validation governance.
 
@@ -210,6 +214,9 @@ B19: rejected spatial formulation
 B20: ACTIVE WORKING MODEL; preserve checkpoint/preprocessing exactly
 B21: closed; weak-v2 passed but gold acceptance failed
 B22: closed exploratory duration audit; E2 best, no longer-training rescue
+B23: implemented, not run, not adopted; supervision-source experiment only
+B23 labeller audit: descriptive/post-hoc, NOT confirmatory validation
+B23 must not redefine target semantics; frozen B6 abnormality cases are pinned
 58-study expert surface: reused development surface, not independent validation
 weak-v2: teacher-agreement diagnostic, not a validated expert-truth surrogate
 no target-specific epoch choice or B20/B21/B22 target mixing

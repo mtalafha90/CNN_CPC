@@ -33,6 +33,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .b23_labeller_audit import gate_status, load_labeller_audit
 from .b7_weak_supervision import _read_config, prepare_b7_supervision
 from .b23_llm_labels import B23_VERSION, load_frozen_b23_export
 from .constants import TARGETS
@@ -62,15 +63,31 @@ def freeze_b23_holdout(
     config: dict,
     *,
     b23_root: str | Path,
+    labeller_audit: str | Path,
     out_root: str | Path = "runs/b23_holdout_v1",
     holdout_fraction: float = DEFAULT_HOLDOUT_FRACTION,
     seed: int = DEFAULT_SEED,
     min_class_count: int = DEFAULT_MIN_CLASS_COUNT,
     n_candidates: int = DEFAULT_SEARCH_CANDIDATES,
 ) -> dict:
-    """Freeze the large B23 development split before any model is trained on it."""
+    """Freeze the large B23 development split, gated on the labeller audit.
+
+    The protocol says the split may only be frozen after B23 beats B6 as a
+    labeller. That was previously documentation alone, so nothing stopped the
+    split being frozen before the audit ran or after it failed. The gate is now
+    read from `labeller_audit.json` and enforced here.
+    """
     if not 0.0 < holdout_fraction < 1.0:
         raise ValueError("holdout_fraction must be in (0,1)")
+
+    audit_payload = load_labeller_audit(labeller_audit)
+    gate = gate_status(audit_payload)
+    if not gate["passed"]:
+        raise ValueError(
+            "B23 labeller gate has not passed; refusing to freeze a development "
+            "surface built on labels that are not established as better than B6.\n"
+            + "\n".join(f"  {line}" for line in gate["reasons"])
+        )
 
     root = Path(config["data_root"])
     train = load_train_csv(root / config.get("train_csv", "train.csv"))
@@ -128,6 +145,7 @@ def freeze_b23_holdout(
         "b23_version": B23_VERSION,
         "b23_labeller_policy_version": str(b23_policy.get("version")),
         "b23_cell_coverage": float(b23_audit.get("cell_coverage", float("nan"))),
+        "labeller_gate": gate,
         "holdout_fraction_requested": float(holdout_fraction),
         "seed": int(seed),
         "min_class_count": int(min_class_count),
@@ -205,6 +223,11 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--data-root", default=None)
     parser.add_argument("--b23-root", required=True)
+    parser.add_argument(
+        "--labeller-audit",
+        required=True,
+        help="runs/b23_labeller_audit/labeller_audit.json; the gate must have passed",
+    )
     parser.add_argument("--out-root", default="runs/b23_holdout_v1")
     parser.add_argument("--holdout-fraction", type=float, default=DEFAULT_HOLDOUT_FRACTION)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -218,6 +241,7 @@ def main() -> None:
     payload = freeze_b23_holdout(
         config,
         b23_root=args.b23_root,
+        labeller_audit=args.labeller_audit,
         out_root=args.out_root,
         holdout_fraction=args.holdout_fraction,
         seed=args.seed,

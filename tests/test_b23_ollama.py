@@ -149,14 +149,17 @@ def test_an_unreachable_daemon_says_so_clearly():
         ollama_model_digest("qwen3:14b", "http://127.0.0.1:1")
 
 
-def test_provenance_pins_the_model_blob_digest(fake_ollama):
+def test_provenance_pins_the_installed_model_digest(fake_ollama):
     server = fake_ollama()
     _call, provenance = make_ollama_backend(SYSTEM_PROMPT, host=server.url)
     assert provenance.backend == BACKEND_OLLAMA
     assert provenance.model_id == "qwen3:14b"
-    # The blob digest is the content hash of the exact GGUF bytes used.
     assert provenance.revision == DIGEST
-    assert provenance.weights_sha256 == DIGEST
+    assert provenance.ollama_model_digest == DIGEST
+    # weights_sha256 is reserved for a digest this code computes over weight
+    # shards. Ollama's digest is not documented as a hash of the GGUF tensor
+    # bytes, so claiming it in that field would overstate the guarantee.
+    assert provenance.weights_sha256 is None
     assert provenance.quantisation == "Q4_K_M"
     assert provenance.decoding == DECODING_GREEDY
     assert provenance.reproducible
@@ -216,3 +219,23 @@ def test_the_default_context_window_fits_the_longest_observed_report():
     estimated = estimate_prompt_tokens(SYSTEM_PROMPT, "x" * 2100)
     assert estimated < OLLAMA_DEFAULT_NUM_CTX
     assert estimated * 2 < OLLAMA_DEFAULT_NUM_CTX
+
+
+def test_a_full_json_schema_is_sent_rather_than_generic_json(fake_ollama):
+    from rsna_knee.b23_llm_labels import make_backend
+
+    server = fake_ollama()
+    call, _ = make_backend(backend=BACKEND_OLLAMA, ollama_host=server.url)
+    call("system text", "user text")
+
+    schema = server.chat_bodies[-1]["format"]
+    assert isinstance(schema, dict), "expected a schema, not the string 'json'"
+    findings = schema["properties"]["findings"]
+    # A missing target or an invented state becomes impossible at decode time.
+    assert set(findings["required"]) == set(TARGETS)
+    assert findings["properties"]["ACL"]["properties"]["state"]["enum"] == [
+        "positive",
+        "negated",
+        "uncertain",
+        "unmentioned",
+    ]

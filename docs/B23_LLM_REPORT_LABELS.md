@@ -58,7 +58,7 @@ Baker's            n= 46   0.152
 MCL                n= 32   0.094
 ```
 
-A 7.6x spread. This is decisive for policy: a single global rule for `unmentioned` is wrong in both directions. Ignoring it discards half the positives; mapping it to negative would inject 306 false negatives. Neither is the fix — **the fix is to stop landing in that bucket**.
+A 7.6x spread. This is decisive for policy: a single global rule for `unmentioned` is wrong in both directions. The bucket holds roughly `416 x 0.264 ≈ 110` expert-positive cells and about `306` expert-negative ones, so ignoring it discards ~110 positives — half the disease — while mapping it to negative would mislabel those same ~110 as false negatives. (Mapping it to positive would instead create ~306 false positives.) Neither is the fix — **the fix is to stop landing in that bucket**.
 
 **Effusion is the clearest case of parser failure.** `P(gold=1 | unmentioned) = 0.714` exceeds `P(gold=1 | positive) = 0.645`: for effusion, B6's silence predicts disease *better than its own positive call*. The reports explain why. Effusion is stated plainly in every language in the corpus — "Matige hydrops" (Dutch), "Leve derrame articular" (Spanish), "artmış efüzyon izlenmiştir" (Turkish), "Diz eklemi içi sıvı miktarı normal" (Turkish negation) — and a regex vocabulary that catches the English forms drops the rest into `unmentioned`.
 
@@ -72,15 +72,30 @@ All 12 sampled review-queue rows failed for one reason: `conflicting_definite_ev
 | B | Adjacent structure attributed to the target | `acl normal \|\| ganglion cyst adjacent to the proximal part of acl` |
 | C | Attachment-site lesion attributed to the ligament | `acl normal \|\| avulsive fracture of tibia ... at the attachment site of acl` |
 | D | Findings/Impression conflict left unresolved | `the acl as a construct is intact \|\| low-grade partial tear of the acl` |
-| E | Degeneration treated as equivalent to a tear | `muco ïde degeneratie van de voorste kruisband \|\| acl: intact` |
+| E | An abnormality co-stated with "intact" left unresolved | `muco ïde degeneratie van de voorste kruisband \|\| acl: intact` |
 
-For cause E the gold data points one way: **the ACL `uncertain` bucket is 0/5 gold-positive** — every ACL case the parser hedged on was expert-negative. That is the evidence behind Rule 5's policy that ligament and meniscal degeneration without a tear is `negated`, while chondral degeneration is `positive` for its OA compartment. With n=5 it is a judgement call, not a proof, and the labeller audit is what will test it.
+Cause E is the one that must **not** be fixed by changing what the targets mean. The frozen B6 suite requires all of these to be positive:
 
-These five causes are precisely what the prompt's Rules 1–5 address, and each is pinned by a regression test in `tests/test_b23_prompt_rules.py` so a later prompt revision cannot silently drop one.
+```text
+"ACL: grade 1 sprain is seen with intact fibers."                        -> positive
+"Mucoid degeneration of the ACL without evidence of tear."               -> positive
+"Myxoid degeneration of the posterior horn of the medial meniscus
+ but no definite tear."                                                  -> positive
+```
+
+The test is even named `test_b6_negated_tear_does_not_cancel_other_abnormality`. The 12 targets mean **abnormality of** the structure, not **tear of** it. Rule 5 therefore states that semantics explicitly rather than reversing it — a partial statement of normality never cancels a stated abnormality, and negating a tear never negates the finding.
+
+An earlier draft of Rule 5 got this backwards, reasoning from the ACL `uncertain` bucket being 0/5 gold-positive. That was overfitting to five cases against explicit frozen semantics, and it was unnecessary: those five rows are a mix of causes A–D, which the other rules already resolve. B23 is a parser substitution; if it redefined the pathology, every downstream comparison against B6 would be invalid.
+
+These five causes are what the prompt's Rules 1–5 address, and each is pinned by a regression test in `tests/test_b23_prompt_rules.py` — including a guard that B23 can never again contradict the frozen B6 cases.
 
 > **Note on the sample export.** Reports in `review_queue.csv` are truncated to 1,600 characters by `_review_queue` (`b6_report_labels.py:520`). That is a display artifact of the review export only — B6 parses the full text, and `train.csv` carries complete reports.
 
-**The models have nearly caught their teacher.** The frozen B6 state-only ranking scores `0.7025` on gold; B20 scores `0.6672`. The downstream model sits at about 95% of its own supervision. Under that constraint, architecture, resolution, crop geometry and training duration are all second-order — B21 and B22 measured exactly that and came back negative.
+**The model ranks no better than a crude reading of its own labels.** The frozen B6 state-only baseline scores `0.7025` on gold; B20 scores `0.6672`, i.e. `0.0353` lower.
+
+Two things this does **not** mean, both of which the B6/B15 diagnostic already warned against. It is not "95% of teacher performance" — AUC has no ratio scale, so dividing one by the other is meaningless. And `0.7025` is not a ceiling: a model reading the images can in principle rank better than any transformation of the report states, and nothing here bounds it.
+
+What it does mean is narrower and still useful: a fixed map from four parser states to four constants ranks the expert labels at least as well as the trained pipeline does. That makes supervision quality a more promising lever than another model-side change — which is a claim about where to look next, not about a ceiling. B21 and B22 tested model-side changes against this backdrop and both came back negative.
 
 Regular expressions are a particularly poor fit for this corpus because the reports are multilingual and the decisive signal is negation and compartment scope, both of which vary by language and dictation style.
 

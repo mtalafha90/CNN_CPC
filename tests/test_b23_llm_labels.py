@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from rsna_knee.b23_llm_labels import (
+    B23_DEFINITE_STATE_CONFIDENCE,
     B23_IGNORED_STATE_CONFIDENCE,
     B23_VERSION,
     ExtractionCache,
@@ -115,7 +116,13 @@ def test_uncertain_and_unmentioned_can_never_clear_the_usable_threshold():
     # A confident hedge is still a hedge: it must not become supervision.
     assert parsed["ACL"].usable_confidence() == B23_IGNORED_STATE_CONFIDENCE
     assert parsed["MCL"].usable_confidence() == B23_IGNORED_STATE_CONFIDENCE
-    assert parsed["Effusion"].usable_confidence() == pytest.approx(0.83)
+    # A definite state takes B6's fixed 0.90, NOT the model's own 0.83. B23 must
+    # change the extracted diagnosis and nothing else; letting an uncalibrated
+    # self-report decide which cells become supervision would move two variables.
+    assert parsed["Effusion"].usable_confidence() == pytest.approx(
+        B23_DEFINITE_STATE_CONFIDENCE
+    )
+    assert parsed["Effusion"].confidence == pytest.approx(0.83)  # kept as diagnostic
 
 
 def test_negated_and_unmentioned_receive_different_probabilities():

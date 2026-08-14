@@ -12,9 +12,11 @@ coverage      0.3606
 
 Only 14,123 of the 52,188 possible report cells survive that parser, and about
 a third of the positives it does emit disagree with expert truth. Every model
-from B7 onward is trained on those cells, and the frozen B6 state-only ranking
-scores 0.7025 on gold while B20 scores 0.6672 -- the downstream models sit at
-roughly 95% of their own supervision.
+from B7 onward is trained on those cells, and the frozen B6 state-only baseline
+scores 0.7025 on gold while B20 scores 0.6672 -- a fixed map from four parser
+states to four constants ranks the expert labels slightly better than the
+trained pipeline. That is not a ceiling and not a ratio ("95% of teacher" is
+meaningless for AUC); it is an argument about where to look next.
 
 B23 replaces the parser, not the policy. It keeps the same four states, the
 same export contract and the same "report silence is not a negative" rule, so
@@ -60,6 +62,7 @@ from .b23_local_llm import (
     make_hosted_api_backend,
     make_local_transformers_backend,
     make_local_vllm_backend,
+    build_findings_schema,
     make_ollama_backend,
     strip_thinking,
 )
@@ -85,17 +88,32 @@ B23_NEGATED_PROBABILITY = 0.03
 B23_UNCERTAIN_PROBABILITY = 0.50
 B23_UNMENTIONED_PROBABILITY = 0.50
 B23_IGNORED_STATE_CONFIDENCE = 0.0
+# B6 v1.2.1 gives every definite call a FIXED confidence of 0.90. B23 matches
+# that exactly so the experiment is a parser substitution and nothing else. If
+# the model's own confidence were used for thresholding instead, B23 would
+# change both the extracted diagnosis AND which cells become supervision --
+# two variables at once, with the second governed by an uncalibrated
+# self-report. The model's confidence is still recorded, as a diagnostic
+# column only. Confidence-aware supervision is a separate experiment.
+B23_DEFINITE_STATE_CONFIDENCE = 0.90
 B23_MIN_REPORTED_CONFIDENCE = 0.0
 B23_MAX_REPORTED_CONFIDENCE = 1.0
 
 DEFAULT_MODEL = DEFAULT_LOCAL_MODEL
 DEFAULT_MAX_TOKENS = 2048
 
+# These are ABNORMALITY targets, not tear-only targets. The frozen B6 v1.2.1
+# regression suite fixes this semantics and B23 must match it exactly, because
+# B23 is a parser substitution and not a redefinition of the pathology:
+#   "ACL: grade 1 sprain is seen with intact fibers."          -> positive
+#   "Mucoid degeneration of the ACL without evidence of tear." -> positive
+#   "Myxoid degeneration ... but no definite tear."            -> positive
+# See tests/test_b6_report_labels.py::test_b6_negated_tear_does_not_cancel_other_abnormality
 TARGET_DEFINITIONS: dict[str, str] = {
-    "ACL": "Anterior cruciate ligament tear, rupture, sprain or graft failure.",
-    "MCL": "Medial collateral ligament tear, sprain or injury.",
-    "Medial Meniscus": "Medial meniscus tear, degeneration or maceration.",
-    "Lateral Meniscus": "Lateral meniscus tear, degeneration or maceration.",
+    "ACL": "ANY anterior cruciate ligament abnormality: tear, rupture, sprain of any grade, degeneration (mucoid/myxoid), or graft failure.",
+    "MCL": "ANY medial collateral ligament abnormality: tear, sprain of any grade, degeneration or injury.",
+    "Medial Meniscus": "ANY medial meniscus abnormality: tear, degeneration (myxoid/mucoid/intrasubstance), maceration or extrusion.",
+    "Lateral Meniscus": "ANY lateral meniscus abnormality: tear, degeneration (myxoid/mucoid/intrasubstance), maceration or extrusion.",
     "Medial OA": "Osteoarthritis / cartilage loss / degenerative change in the MEDIAL tibiofemoral compartment.",
     "Lateral OA": "Osteoarthritis / cartilage loss / degenerative change in the LATERAL tibiofemoral compartment.",
     "PF OA": "Osteoarthritis / chondromalacia / cartilage loss in the PATELLOFEMORAL compartment.",
@@ -149,17 +167,20 @@ When the findings section and the impression disagree, follow the impression. Ra
 
 "tear", "rupture", "rotura", "scheur" or "yirtik" applied to the structure makes it positive regardless of grade or extent.
 
-## Rule 5 - degeneration without a tear is not a tear
+## Rule 5 - abnormality, not just "tear"
 
-For ACL, MCL, Medial Meniscus and Lateral Meniscus, treat the following as NEGATED when no tear is described:
+Every target means ANY abnormality of that structure, at any grade. A stated abnormality is POSITIVE even when the report also says the structure is otherwise intact, and even when a tear is explicitly excluded:
 
-- mucoid degeneration, "mucoide degeneratie"
-- "grade 1 injury", "grade 1 sprain", "grade I ligamentous sprain", interstitial signal "in favor of degeneration"
-- grade 2 intrasubstance signal that explicitly does NOT reach the articular surface
+- "ACL: grade 1 sprain is seen with intact fibers." -> ACL positive.
+- "Mucoid degeneration of the ACL without evidence of tear." -> ACL positive.
+- "Mucoide degeneratie van de voorste kruisband ... ACL: intact." -> ACL positive.
+- "Myxoid degeneration of the posterior horn of the medial meniscus but no definite tear." -> Medial Meniscus positive.
+- "Grade I ligamentous sprain of the medial collateral ligament. The MCL complexes are intact." -> MCL positive.
+- "Grade 2 intrasubstance signal not reaching the articular surface." -> meniscus positive (degeneration).
 
-Meniscal signal that DOES extend to the articular surface is a tear -> positive.
+Negating a tear does not negate the finding. Only use "negated" when the report describes NO abnormality of that structure at all.
 
-For the three osteoarthritis targets the rule is reversed: chondromalacia, chondrosis, chondropathy, cartilage thinning, chondral ulcers and marginal osteophytes all count as POSITIVE for their compartment, at any grade.
+For the three osteoarthritis targets the same principle applies: chondromalacia, chondrosis, chondropathy, cartilage thinning, chondral ulcers and marginal osteophytes are all POSITIVE for their compartment, at any grade.
 
 ## Rule 6 - silence is not absence
 
@@ -234,12 +255,13 @@ class TargetExtraction:
     def usable_confidence(self) -> float:
         """Confidence as downstream B7 supervision reads it.
 
-        Uncertain/unmentioned are pinned to zero so the frozen 0.75 usable-cell
-        threshold cannot admit them, matching the B6 v1.2.1 policy. Only a
-        separately versioned successor may relax that.
+        Definite states get B6's fixed 0.90 rather than the model's own number,
+        so B23 changes the extracted diagnosis and nothing else. Uncertain and
+        unmentioned are pinned to zero so the frozen 0.75 usable-cell threshold
+        cannot admit them, matching the B6 v1.2.1 policy.
         """
         if self.state in (STATE_POSITIVE, STATE_NEGATED):
-            return float(self.confidence)
+            return B23_DEFINITE_STATE_CONFIDENCE
         return B23_IGNORED_STATE_CONFIDENCE
 
 
@@ -311,11 +333,39 @@ def empty_report_extraction() -> dict[str, TargetExtraction]:
     }
 
 
+def extraction_cache_key(report_sha1: str, provenance: ModelProvenance | None) -> str:
+    """Cache key covering the report AND the labelling function that read it.
+
+    Keying on the report alone is unsafe: after a prompt edit or a model swap,
+    a stale extraction would be replayed while the export records the NEW
+    provenance, producing a file that misdescribes how its own labels were
+    made. That would quietly defeat the entire provenance system, and it would
+    depend on the operator remembering to pass a fresh cache path.
+
+    The key therefore binds the report to the prompt, the model, its pinned
+    revision, and the decoding configuration.
+    """
+    parts = [str(report_sha1)]
+    if provenance is not None:
+        parts.extend(
+            [
+                str(provenance.prompt_sha256),
+                str(provenance.backend),
+                str(provenance.model_id),
+                str(provenance.revision),
+                str(provenance.decoding),
+                str(provenance.max_new_tokens),
+                str(provenance.seed),
+            ]
+        )
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+
+
 class ExtractionCache:
-    """Append-only JSONL cache keyed by normalised report hash.
+    """Append-only JSONL cache keyed by report AND labelling function.
 
     A 4,349-report job is long enough that an interruption is likely. Keying on
-    the report hash rather than the study UID also collapses the duplicate
+    the report content rather than the study UID also collapses the duplicate
     reports that `add_report_groups` already relies on, so identical text is
     only ever sent once.
     """
@@ -333,7 +383,7 @@ class ExtractionCache:
                         row = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    key = str(row.get("report_sha1", ""))
+                    key = str(row.get("cache_key", "")) or str(row.get("report_sha1", ""))
                     if key:
                         self._entries[key] = row
 
@@ -381,6 +431,7 @@ def make_backend(
             max_new_tokens=max_new_tokens,
             seed=seed,
             think=think,
+            schema=build_findings_schema(TARGETS),
         )
     if backend == BACKEND_LOCAL_TRANSFORMERS:
         return make_local_transformers_backend(
@@ -447,6 +498,7 @@ def build_b23_frame(
     df: pd.DataFrame,
     backend: ReportLabelBackend,
     *,
+    provenance: ModelProvenance | None = None,
     cache: ExtractionCache | None = None,
     max_attempts: int = 3,
     progress_every: int = 100,
@@ -466,12 +518,14 @@ def build_b23_frame(
     for target in TARGETS:
         columns[target] = []
         columns[f"{target}__confidence"] = []
+        columns[f"{target}__model_confidence"] = []
         columns[f"{target}__state"] = []
         columns[f"{target}__evidence"] = []
 
     n_cached = 0
     n_called = 0
-    for position, (report, key) in enumerate(zip(reports.tolist(), hashes.tolist()), start=1):
+    for position, (report, report_sha1) in enumerate(zip(reports.tolist(), hashes.tolist()), start=1):
+        key = extraction_cache_key(report_sha1, provenance)
         row = cache.get(key) if cache is not None else None
         if row is not None:
             extraction = {
@@ -492,7 +546,8 @@ def build_b23_frame(
                 cache.put(
                     key,
                     {
-                        "report_sha1": key,
+                        "cache_key": key,
+                        "report_sha1": report_sha1,
                         "findings": {
                             target: {
                                 "state": item.state,
@@ -507,6 +562,7 @@ def build_b23_frame(
             item = extraction[target]
             columns[target].append(item.probability())
             columns[f"{target}__confidence"].append(item.usable_confidence())
+            columns[f"{target}__model_confidence"].append(float(item.confidence))
             columns[f"{target}__state"].append(item.state)
             columns[f"{target}__evidence"].append(item.evidence)
         if progress_every and position % int(progress_every) == 0:
@@ -516,6 +572,9 @@ def build_b23_frame(
         out[target] = np.asarray(columns[target], dtype=np.float32)
         out[f"{target}__confidence"] = np.asarray(
             columns[f"{target}__confidence"], dtype=np.float32
+        )
+        out[f"{target}__model_confidence"] = np.asarray(
+            columns[f"{target}__model_confidence"], dtype=np.float32
         )
         out[f"{target}__state"] = columns[f"{target}__state"]
         out[f"{target}__evidence"] = columns[f"{target}__evidence"]
@@ -558,6 +617,7 @@ def run_b23_export(
     progress_every: int = 100,
     provenance: ModelProvenance | None = None,
     require_reproducible: bool = True,
+    limit: int | None = None,
 ) -> dict:
     """Produce a B6-compatible export from LLM extractions.
 
@@ -584,6 +644,11 @@ def run_b23_export(
             )
 
     df = load_train_csv(train_csv)
+    if limit is not None:
+        # Smoke-test mode: label a deterministic prefix so the extraction can be
+        # inspected by hand before committing to the full corpus. The export is
+        # marked partial so it can never be mistaken for a complete one.
+        df = df.head(int(limit)).copy()
     out = Path(out_root)
     out.mkdir(parents=True, exist_ok=True)
     cache = ExtractionCache(cache_path or out / "extraction_cache.jsonl")
@@ -591,6 +656,7 @@ def run_b23_export(
     structured = build_b23_frame(
         df,
         backend,
+        provenance=provenance,
         cache=cache,
         max_attempts=max_attempts,
         progress_every=progress_every,
@@ -625,6 +691,8 @@ def run_b23_export(
         "possible_cells_total": possible_total,
         "cell_coverage": float(usable_total / possible_total) if possible_total else 0.0,
         "unique_reports_labelled": int(len(cache)),
+        "partial_smoke_test": limit is not None,
+        "limit": int(limit) if limit is not None else None,
         "external_model_reproducible": bool(provenance.reproducible) if provenance else False,
         "provenance": provenance.to_dict() if provenance else None,
         "targets": per_target,
@@ -637,8 +705,14 @@ def run_b23_export(
         "purpose": "LLM-extracted multilingual report weak labels replacing the B6 regex parser",
         "states": list(B23_STATES),
         "fixed_soft_labels": {
-            STATE_POSITIVE: {"probability": B23_POSITIVE_PROBABILITY, "confidence": "model-reported"},
-            STATE_NEGATED: {"probability": B23_NEGATED_PROBABILITY, "confidence": "model-reported"},
+            STATE_POSITIVE: {
+                "probability": B23_POSITIVE_PROBABILITY,
+                "confidence": B23_DEFINITE_STATE_CONFIDENCE,
+            },
+            STATE_NEGATED: {
+                "probability": B23_NEGATED_PROBABILITY,
+                "confidence": B23_DEFINITE_STATE_CONFIDENCE,
+            },
             STATE_UNCERTAIN: {
                 "probability": B23_UNCERTAIN_PROBABILITY,
                 "confidence": B23_IGNORED_STATE_CONFIDENCE,
@@ -650,6 +724,11 @@ def run_b23_export(
         },
         "gold_usage": "audit only; excluded from training_targets.csv",
         "unmentioned_is_negative": False,
+        "confidence_policy": (
+            "B6-matched fixed 0.90 for definite states; the model's self-reported "
+            "confidence is stored as a diagnostic column only and never thresholds "
+            "supervision"
+        ),
         "supersedes": "none; B6 v1.2.1 remains frozen for historical comparisons",
         "provenance": provenance.to_dict() if provenance else None,
     }
@@ -682,6 +761,11 @@ def load_frozen_b23_export(
         raise ValueError("B23 audit does not certify zero gold rows in training_targets.csv")
     if bool(policy.get("unmentioned_is_negative", False)):
         raise ValueError("B23 must not map unmentioned report states to negative")
+    if bool(audit.get("partial_smoke_test", False)):
+        raise ValueError(
+            "this B23 export is a partial smoke test, not a full labelling run; "
+            "re-run without --limit before using it for training or a split"
+        )
     if require_reproducible and not bool(audit.get("external_model_reproducible", False)):
         raise ValueError(
             "B23 export was not produced by a reproducible openly downloadable "
@@ -741,6 +825,12 @@ def main() -> None:
     parser.add_argument("--progress-every", type=int, default=100)
     parser.add_argument("--cache", default=None)
     parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="label only the first N studies, for a smoke test; marks the export partial",
+    )
+    parser.add_argument(
         "--allow-unreproducible",
         action="store_true",
         help="permit a hosted/unpinned model; the export is then NOT competition-usable",
@@ -779,6 +869,7 @@ def main() -> None:
         progress_every=args.progress_every,
         provenance=provenance,
         require_reproducible=not args.allow_unreproducible,
+        limit=args.limit,
     )
     print(json.dumps({k: v for k, v in audit.items() if k != "targets"}, indent=2))
 

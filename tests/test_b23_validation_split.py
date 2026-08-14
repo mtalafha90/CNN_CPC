@@ -32,6 +32,24 @@ PINNED = ModelProvenance(
 N_REPORT_STUDIES = 160
 
 
+def _write_audit(tmp_path, *, passed=True, name="labeller_audit.json"):
+    """A labeller-audit artifact that either clears or fails the frozen gate."""
+    payload = {
+        "confirmatory": False,
+        "candidate": {
+            "state_only_macro_auc": 0.86 if passed else 0.66,
+            "confusion": {
+                "coverage": 0.88 if passed else 0.30,
+                "specificity": 0.91 if passed else 0.55,
+            },
+        },
+        "paired_bootstrap": {"ci_low": 0.04 if passed else -0.03},
+    }
+    path = tmp_path / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def _response_for(index):
     """Alternate confident positive/negated states so every class is populated."""
     findings = {}
@@ -105,6 +123,7 @@ def test_freeze_b23_holdout_is_report_group_safe_and_excludes_gold(tmp_path):
     payload = freeze_b23_holdout(
         config,
         b23_root=tmp_path / "b23",
+        labeller_audit=_write_audit(tmp_path),
         out_root=tmp_path / "holdout",
         holdout_fraction=0.25,
         n_candidates=256,
@@ -127,7 +146,11 @@ def test_freeze_b23_holdout_is_report_group_safe_and_excludes_gold(tmp_path):
 def test_freeze_b23_holdout_is_deterministic_for_a_fixed_seed(tmp_path):
     config = _build_export(tmp_path)
     kwargs = dict(
-        b23_root=tmp_path / "b23", holdout_fraction=0.25, n_candidates=256, min_class_count=2
+        b23_root=tmp_path / "b23",
+        labeller_audit=_write_audit(tmp_path),
+        holdout_fraction=0.25,
+        n_candidates=256,
+        min_class_count=2,
     )
     first = freeze_b23_holdout(config, out_root=tmp_path / "a", **kwargs)
     second = freeze_b23_holdout(config, out_root=tmp_path / "b", **kwargs)
@@ -139,6 +162,7 @@ def test_load_frozen_b23_holdout_detects_a_tampered_manifest(tmp_path):
     freeze_b23_holdout(
         config,
         b23_root=tmp_path / "b23",
+        labeller_audit=_write_audit(tmp_path),
         out_root=tmp_path / "holdout",
         holdout_fraction=0.25,
         n_candidates=256,
@@ -160,6 +184,7 @@ def test_format_split_reports_the_resolution_gain(tmp_path):
     payload = freeze_b23_holdout(
         config,
         b23_root=tmp_path / "b23",
+        labeller_audit=_write_audit(tmp_path),
         out_root=tmp_path / "holdout",
         holdout_fraction=0.25,
         n_candidates=256,
@@ -168,3 +193,50 @@ def test_format_split_reports_the_resolution_gain(tmp_path):
     text = format_split(payload)
     assert "expected macro-AUC SE" in text
     assert "not expert truth" in text
+
+
+def test_the_split_refuses_to_freeze_when_the_labeller_gate_failed(tmp_path):
+    config = _build_export(tmp_path)
+    failing = _write_audit(tmp_path, passed=False, name="failed_audit.json")
+    with pytest.raises(ValueError, match="labeller gate has not passed"):
+        freeze_b23_holdout(
+            config,
+            b23_root=tmp_path / "b23",
+            labeller_audit=failing,
+            out_root=tmp_path / "holdout",
+            holdout_fraction=0.25,
+            n_candidates=256,
+            min_class_count=2,
+        )
+    assert not (tmp_path / "holdout" / "manifest.csv").exists()
+
+
+def test_the_split_refuses_to_freeze_without_an_audit_at_all(tmp_path):
+    config = _build_export(tmp_path)
+    with pytest.raises(FileNotFoundError):
+        freeze_b23_holdout(
+            config,
+            b23_root=tmp_path / "b23",
+            labeller_audit=tmp_path / "never_ran.json",
+            out_root=tmp_path / "holdout",
+            holdout_fraction=0.25,
+            n_candidates=256,
+            min_class_count=2,
+        )
+
+
+def test_the_frozen_split_records_the_gate_it_passed(tmp_path):
+    config = _build_export(tmp_path)
+    payload = freeze_b23_holdout(
+        config,
+        b23_root=tmp_path / "b23",
+        labeller_audit=_write_audit(tmp_path),
+        out_root=tmp_path / "holdout",
+        holdout_fraction=0.25,
+        n_candidates=256,
+        min_class_count=2,
+    )
+    gate = payload["labeller_gate"]
+    assert gate["passed"] is True
+    assert gate["reasons"] == []
+    assert "descriptive" in gate["evidence_type"]

@@ -198,3 +198,58 @@ def test_an_unreproducible_export_cannot_be_loaded_for_training(tmp_path):
         load_frozen_b23_export(out)
     frame, _policy, _audit = load_frozen_b23_export(out, require_reproducible=False)
     assert len(frame) == 3
+
+
+def test_a_partial_smoke_test_export_can_never_be_used_for_training(tmp_path):
+    out = tmp_path / "smoke"
+    audit = run_b23_export(
+        _train_csv(tmp_path),
+        _backend,
+        out_root=out,
+        progress_every=0,
+        provenance=_provenance(),
+        limit=2,
+    )
+    assert audit["partial_smoke_test"] is True
+    assert audit["n_studies"] == 2
+    with pytest.raises(ValueError, match="partial smoke test"):
+        load_frozen_b23_export(out)
+
+
+def test_the_cache_key_binds_the_report_to_the_labelling_function():
+    from rsna_knee.b23_llm_labels import extraction_cache_key
+
+    base = extraction_cache_key("report-sha", _provenance())
+    assert base == extraction_cache_key("report-sha", _provenance())
+    # A different report, prompt, model, revision or decoding is a different key,
+    # so a stale extraction can never be replayed under new provenance.
+    assert base != extraction_cache_key("other-report", _provenance())
+    assert base != extraction_cache_key("report-sha", _provenance(prompt_sha256="9" * 64))
+    assert base != extraction_cache_key("report-sha", _provenance(model_id="qwen3:8b"))
+    assert base != extraction_cache_key("report-sha", _provenance(revision="9" * 40))
+    assert base != extraction_cache_key("report-sha", _provenance(max_new_tokens=4096))
+
+
+def test_a_prompt_change_forces_re_extraction_rather_than_a_stale_replay(tmp_path):
+    """The failure this prevents: an export that misdescribes its own labels."""
+    calls = {"n": 0}
+
+    def _counting(system, user):
+        calls["n"] += 1
+        return _backend(system, user)
+
+    train = _train_csv(tmp_path)
+    cache = tmp_path / "cache.jsonl"
+    run_b23_export(
+        train, _counting, out_root=tmp_path / "a", progress_every=0,
+        cache_path=cache, provenance=_provenance(),
+    )
+    first = calls["n"]
+    assert first > 0
+
+    # Same cache file, same reports, but the prompt changed.
+    run_b23_export(
+        train, _counting, out_root=tmp_path / "b", progress_every=0,
+        cache_path=cache, provenance=_provenance(prompt_sha256="0" * 64),
+    )
+    assert calls["n"] == first * 2, "a prompt change must re-extract, not replay"

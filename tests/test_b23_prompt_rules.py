@@ -76,26 +76,62 @@ def test_rule_4_treats_partial_and_bundle_tears_as_positive():
         assert word in PROMPT
 
 
-# --- Rule 5: degeneration is not a tear --------------------------------------
-# B6 review queue: "muco ide degeneratie van de voorste kruisband || acl: intact"
-# and "grade i ligamentous sprain of the medial collateral ligament || the mcl
-# complexes are intact". ACL's hedged bucket was 0/5 gold-positive.
-def test_rule_5_states_the_degeneration_policy_for_ligaments_and_menisci():
-    assert "mucoid degeneration" in PROMPT
-    assert "grade 1 sprain" in PROMPT
-    assert "articular surface" in PROMPT
+# --- Rule 5: the targets mean ABNORMALITY, not "tear" ------------------------
+# B23 is a parser substitution, so it must not redefine the pathology. These are
+# the exact cases frozen in tests/test_b6_report_labels.py; if the prompt ever
+# contradicts them again, B23 would be changing the label semantics rather than
+# improving extraction, and every downstream comparison to B6 would be invalid.
+FROZEN_B6_POSITIVE_CASES = [
+    "acl: grade 1 sprain is seen with intact fibers.",
+    "mucoid degeneration of the acl without evidence of tear.",
+    "myxoid degeneration of the posterior horn of the medial meniscus but no definite tear.",
+]
 
 
-def test_rule_5_reverses_the_policy_for_osteoarthritis_targets():
-    assert "the rule is reversed" in PROMPT
+def test_rule_5_defines_the_targets_as_abnormality_not_tear():
+    assert 'abnormality, not just "tear"' in PROMPT
+    assert "negating a tear does not negate the finding" in PROMPT
+    for target in ("ACL", "MCL", "Medial Meniscus", "Lateral Meniscus"):
+        assert TARGET_DEFINITIONS[target].lower().startswith("any ")
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "grade 1 sprain is seen with intact fibers",
+        "mucoid degeneration of the acl without evidence of tear",
+        "myxoid degeneration of the posterior horn of the medial meniscus but no definite tear",
+        "grade i ligamentous sprain of the medial collateral ligament",
+    ],
+)
+def test_rule_5_teaches_the_frozen_b6_positive_cases_as_positive(phrase):
+    assert phrase in PROMPT
+    # Each is shown in the prompt with an explicit "-> ... positive" verdict.
+    tail = PROMPT[PROMPT.index(phrase) : PROMPT.index(phrase) + 400]
+    assert "positive" in tail
+
+
+def test_b23_does_not_contradict_the_frozen_b6_regression_suite():
+    """Guard against silently redefining the pathology.
+
+    The B6 suite requires each of these to be POSITIVE. The prompt must never
+    tell the labeller to negate them.
+    """
+    for case in FROZEN_B6_POSITIVE_CASES:
+        assert "negated" not in PROMPT[PROMPT.index(case.rstrip(".")) :][:200]
+
+
+def test_rule_5_keeps_osteoarthritis_degeneration_positive_too():
+    assert "the same principle applies" in PROMPT
     for word in ("chondromalacia", "chondrosis", "chondropathy", "osteophytes"):
         assert word in PROMPT
 
 
 # --- Rule 6: silence is not absence ------------------------------------------
-# This is the frozen repository policy and must never be weakened: B6's
-# unmentioned bucket is 416 of 696 gold cells and only 26.4% gold-positive, so
-# mapping it to negative would inject 306 false negatives.
+# This is the frozen repository policy and must never be weakened. B6's
+# unmentioned bucket is 416 of 696 gold cells at 26.4% gold-positive: about 110
+# expert-positive and 306 expert-negative. Mapping the bucket to negative would
+# turn those ~110 positives into false negatives.
 def test_rule_6_forbids_inferring_absence_from_silence():
     assert "never infer absence from silence" in PROMPT
     assert "silence is not absence" in PROMPT

@@ -1,4 +1,18 @@
-"""B23 labeller audit: measure the labeller, not a model.
+"""B23 labeller audit: a DESCRIPTIVE, POST-HOC labeller comparison.
+
+**This is not a confirmatory test, and its interval is not an independence
+claim.** The B23 prompt was written from `state_truth_audit.csv`, which
+aggregates all 58 expert studies, so the labeller has already seen aggregate
+information about every case it is scored on. A paired CI excluding zero
+therefore cannot restore independence; it can only say that the two labellers
+differ on a surface both were tuned against. Report it as a development
+diagnostic and never as validation.
+
+What the audit is still good for is large, structural differences -- coverage
+going from 36% to 85%, or specificity moving off 0.61 -- which are far bigger
+than the optimism the reuse can manufacture. Read it for those, not for a
+two-point macro-AUC edge.
+
 
 The 58 expert-labelled studies cannot rank near-neighbour MRI models -- the B22
 duration trajectory moved 0.0439 within a single run in which nothing but the
@@ -21,9 +35,9 @@ The state-only scores are the frozen diagnostic values already used by the
 B6/B15 gold diagnostic, so the B23 number is directly comparable to the B6
 state-only baseline of 0.7025.
 
-Auditing a labeller against gold is legitimate. Selecting an MRI model against
-gold is what has been exhausted. Do not use this audit to pick a downstream
-checkpoint.
+Auditing a labeller against gold is more defensible than selecting an MRI model
+against it, because the margin over a 0.6061-specificity regex is large. It is
+still not independent. Do not use this audit to pick a downstream checkpoint.
 """
 from __future__ import annotations
 
@@ -209,6 +223,13 @@ def audit_labeller(
     cand_macro, cand_per_target = macro_auc_from_arrays(truth, cand_scores)
 
     payload: dict = {
+        "interpretation": (
+            "DESCRIPTIVE / POST-HOC. The B23 prompt was designed using aggregate "
+            "information from all 58 expert studies, so this comparison is a "
+            "development diagnostic, not confirmatory validation, and the paired "
+            "interval is not an independence claim."
+        ),
+        "confirmatory": False,
         "n_gold_studies": int(len(uids)),
         "n_gold_cells": int(np.isfinite(truth).sum()),
         "min_confidence": float(min_confidence),
@@ -253,9 +274,64 @@ def audit_labeller(
     return payload
 
 
+# Predeclared adoption thresholds, taken from the measured frozen B6 baseline.
+B6_STATE_ONLY_MACRO_AUC = 0.7025
+B6_COVERAGE = 0.3606
+B6_SPECIFICITY = 0.6061
+
+
+def load_labeller_audit(path: str | Path) -> dict:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if "candidate" not in payload:
+        raise ValueError(f"{path} is not a B23 labeller audit payload")
+    return payload
+
+
+def gate_status(payload: dict) -> dict:
+    """Evaluate the predeclared B23 adoption gate against an audit payload.
+
+    Every criterion must hold. The macro-AUC interval is included because it was
+    predeclared, but the structural criteria -- coverage and specificity -- are
+    the ones that carry the weight, since the prompt was written with aggregate
+    knowledge of these same 58 studies and a small AUC edge could be optimism.
+    """
+    candidate = payload.get("candidate") or {}
+    confusion = candidate.get("confusion") or {}
+    boot = payload.get("paired_bootstrap") or {}
+    reasons: list[str] = []
+
+    macro = float(candidate.get("state_only_macro_auc", float("nan")))
+    coverage = float(confusion.get("coverage", float("nan")))
+    specificity = float(confusion.get("specificity", float("nan")))
+    ci_low = float(boot.get("ci_low", float("nan")))
+
+    if not (macro > B6_STATE_ONLY_MACRO_AUC):
+        reasons.append(f"state-only macro AUC {macro:.4f} <= B6 {B6_STATE_ONLY_MACRO_AUC}")
+    if not (coverage > B6_COVERAGE):
+        reasons.append(f"coverage {coverage:.4f} <= B6 {B6_COVERAGE}")
+    if not (specificity > B6_SPECIFICITY):
+        reasons.append(f"specificity {specificity:.4f} <= B6 {B6_SPECIFICITY}")
+    if not (ci_low > 0.0):
+        reasons.append(
+            "paired 95% CI does not exclude zero "
+            f"(low={ci_low:.4f}); run the audit with --baseline to produce it"
+        )
+
+    return {
+        "passed": not reasons,
+        "reasons": reasons,
+        "state_only_macro_auc": macro,
+        "coverage": coverage,
+        "specificity": specificity,
+        "paired_ci_low": ci_low,
+        "evidence_type": "descriptive/post-hoc; not confirmatory validation",
+    }
+
+
 def format_audit(payload: dict) -> str:
     lines = [
-        "B23 labeller audit (expert gold, labeller-level only)",
+        "B23 labeller audit -- DESCRIPTIVE / POST-HOC, not confirmatory",
+        "  the prompt was designed from these same 58 studies in aggregate",
         f"  gold studies {payload['n_gold_studies']} | gold cells {payload['n_gold_cells']}",
         "",
     ]

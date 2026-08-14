@@ -20,9 +20,13 @@ the same weights with faster batched decoding. `hosted_api` remains available
 for development only and is explicitly marked non-reproducible, so an export
 produced with it cannot be certified for competition use.
 
-For Ollama the provenance pin is the model blob's own SHA-256 digest, reported
-by `/api/tags`. That is a stronger guarantee than a hub revision, because it is
-a content hash of the exact GGUF bytes that produced the labels.
+For Ollama the provenance pin is the model digest reported by `/api/tags`. That
+digest identifies the installed model in Ollama's own content-addressed store
+and changes when the model is re-pulled or re-quantised, which is what is needed
+here. It is recorded as `ollama_model_digest`: Ollama does not document it as an
+independently computed SHA-256 of the underlying GGUF tensor bytes, so B23 does
+not claim that. `weights_sha256` stays reserved for a digest this code computes
+itself over weight shards.
 
 Determinism is enforced by greedy decoding rather than a temperature setting:
 `do_sample=False` removes the sampler entirely, so the run does not depend on
@@ -50,6 +54,9 @@ OLLAMA_DEFAULT_HOST = "http://localhost:11434"
 OLLAMA_DEFAULT_NUM_CTX = 8192
 
 DECODING_GREEDY = "greedy"
+
+# Duplicated from b23_llm_labels to keep this module import-cycle free.
+B23_STATE_NAMES = ("positive", "negated", "uncertain", "unmentioned")
 
 # Openly downloadable instruction-tuned checkpoints suitable for multilingual
 # structured extraction. The corpus contains at least English, Spanish, Dutch
@@ -111,7 +118,12 @@ class ModelProvenance:
     seed: int
     prompt_sha256: str
     openly_downloadable: bool
+    # Computed by this code over weight shards. Only set for the transformers
+    # and vLLM paths, where the shards are on disk and can actually be hashed.
     weights_sha256: str | None = None
+    # Ollama's own model identifier from /api/tags. Pins which installed model
+    # ran, but is not a documented hash of the GGUF tensor bytes.
+    ollama_model_digest: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -139,6 +151,8 @@ class ModelProvenance:
         ]
         if self.weights_sha256:
             lines.append(f"  weights SHA-256 {self.weights_sha256}")
+        if self.ollama_model_digest:
+            lines.append(f"  ollama digest  {self.ollama_model_digest}")
         return "\n".join(lines)
 
 
@@ -193,10 +207,14 @@ def _ollama_request(host: str, path: str, payload: dict | None = None, *, timeou
 def ollama_model_digest(model: str, host: str = OLLAMA_DEFAULT_HOST) -> tuple[str, str]:
     """Return the (digest, quantisation) of a locally installed Ollama model.
 
-    The digest is the content hash of the model blob, so it identifies the exact
-    bytes used. A model that is not installed is an error rather than a silent
-    pull, because an unnoticed pull could substitute different weights midway
-    through a labelling run.
+    The digest is Ollama's own identifier for the installed model, taken from
+    `/api/tags`. It changes when the model is re-pulled or re-quantised, which
+    is what pins provenance. It is NOT documented as a SHA-256 over the GGUF
+    tensor bytes, so it is recorded as `ollama_model_digest` rather than as a
+    weights hash.
+
+    A model that is not installed is an error rather than a silent pull: an
+    unnoticed pull could substitute different weights midway through a run.
     """
     payload = _ollama_request(host, "/api/tags", timeout=30.0)
     installed = {str(entry.get("name", "")): entry for entry in payload.get("models", [])}
@@ -244,6 +262,36 @@ def estimate_prompt_tokens(system: str, user: str) -> int:
     return int((len(str(system)) + len(str(user))) / 3) + 64
 
 
+def build_findings_schema(targets) -> dict:
+    """Exact JSON Schema for the 12-target extraction.
+
+    Ollama accepts a schema in `format`, not only the string "json". Since the
+    schema is known exactly, constraining the decoder is strictly better than
+    asking for generic JSON and rejecting malformed structures afterwards: a
+    missing target or an invented state becomes impossible rather than a retry.
+    """
+    cell = {
+        "type": "object",
+        "properties": {
+            "state": {"type": "string", "enum": list(B23_STATE_NAMES)},
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "evidence": {"type": "string"},
+        },
+        "required": ["state", "confidence", "evidence"],
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "findings": {
+                "type": "object",
+                "properties": {str(target): cell for target in targets},
+                "required": [str(target) for target in targets],
+            }
+        },
+        "required": ["findings"],
+    }
+
+
 def make_ollama_backend(
     system_prompt: str,
     *,
@@ -254,6 +302,7 @@ def make_ollama_backend(
     seed: int = 2026,
     think: bool = False,
     timeout: float = 600.0,
+    schema: dict | None = None,
 ):
     """Default local backend: an installed Ollama model, greedy, JSON-formatted.
 
@@ -274,7 +323,7 @@ def make_ollama_backend(
         seed=int(seed),
         prompt_sha256=prompt_sha256(system_prompt),
         openly_downloadable=looks_openly_downloadable(model),
-        weights_sha256=digest,
+        ollama_model_digest=digest,
     )
 
     options = {
@@ -301,7 +350,9 @@ def make_ollama_backend(
                 {"role": "user", "content": user},
             ],
             "stream": False,
-            "format": "json",  # constrain the decoder to emit valid JSON
+            # A full JSON Schema when we have one, so a missing target or an
+            # invented state is impossible rather than a retry.
+            "format": schema if schema is not None else "json",
             "options": options,
             "think": bool(think),
         }

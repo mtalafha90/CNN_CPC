@@ -138,7 +138,24 @@ B19  rejected spatial formulation
 B20  ACTIVE WORKING MODEL
 B21  pre-resize crop candidate; weak-v2 passed, gold acceptance failed; NOT PROMOTED
 B22  five-epoch B21 duration audit; E2 best, no longer-training rescue; CLOSED
+B23  local-LLM report-labeller experiment (qwen3:14b / Ollama)
+     IMPLEMENTED / NOT YET RUN / NOT YET ADOPTED
 ```
+
+B23 is the first experiment in the campaign that changes the supervision source
+rather than the model. It leaves B20 completely untouched: no architecture,
+resolution, crop or schedule change, and B6 v1.2.1 stays frozen as the
+historical supervision for B7-B22. Adoption is gated on a predeclared labeller
+audit that B23 must pass before its development split may be frozen, and that
+gate is enforced in `freeze_b23_holdout` rather than in documentation.
+
+The labeller audit is **descriptive, not confirmatory**: the B23 prompt was
+written using aggregate information from all 58 expert studies, so a paired
+interval there cannot restore independence. Read it for the structural
+differences -- coverage and specificity -- which are far larger than the
+optimism that reuse can manufacture.
+
+See [`B23_LLM_REPORT_LABELS.md`](B23_LLM_REPORT_LABELS.md).
 
 ## Current optimization priority
 
