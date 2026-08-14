@@ -20,10 +20,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Only the B23 report-labelling step needs an LLM client. Everything else --
-# including the B23 labeller audit and the frozen development split -- runs
-# from the exported CSVs with no network access.
-llm = ["anthropic>=0.40"]
+# Only the B23 report-labelling step needs an LLM. Everything else -- including
+# the B23 labeller audit and the frozen development split -- runs from the
+# exported CSVs with no model and no network.
+#
+# `local-llm` is the competition path: an openly downloadable checkpoint run
+# locally, pinned to an exact revision. `hosted-llm` is development only and
+# cannot produce a certifiable export.
+local-llm = ["transformers>=4.45", "accelerate>=0.34", "huggingface-hub>=0.25"]
+local-llm-4bit = ["transformers>=4.45", "accelerate>=0.34", "huggingface-hub>=0.25", "bitsandbytes>=0.43"]
+local-llm-fast = ["vllm>=0.6"]
+hosted-llm = ["anthropic>=0.40"]
 
 [project.scripts]
 rsna-knee = "rsna_knee.cli:main"

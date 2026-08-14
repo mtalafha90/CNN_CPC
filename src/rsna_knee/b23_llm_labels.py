@@ -21,10 +21,18 @@ same export contract and the same "report silence is not a negative" rule, so
 the resulting export is a drop-in alternative supervision source rather than a
 new training recipe. B6 v1.2.1 remains frozen for every historical comparison.
 
+Labels are produced by an **openly downloadable checkpoint executed locally**,
+not by a hosted API. Competition reproducibility requires the label-generating
+function to be identifiable and re-runnable, and the weights served behind a
+hosted model name can change without notice. Every export therefore carries a
+`ModelProvenance` record pinning repo id, commit revision, dtype, quantisation
+and greedy decoding, plus a SHA-256 of the prompt, and `run_b23_export` refuses
+to certify an export whose provenance is not reproducible.
+
 The labeller is deliberately backend-injectable: `run_b23_export` accepts any
 callable implementing `ReportLabelBackend`, so the extraction contract can be
-tested exactly without network access, and a cached run can resume after an
-interruption without re-billing completed reports.
+tested exactly without a GPU or a model download, and a cached run can resume
+after an interruption without recomputing completed reports.
 """
 from __future__ import annotations
 
@@ -40,6 +48,16 @@ from typing import Callable, Iterable, Protocol
 import numpy as np
 import pandas as pd
 
+from .b23_local_llm import (
+    BACKEND_LOCAL_TRANSFORMERS,
+    BACKEND_LOCAL_VLLM,
+    DEFAULT_LOCAL_MODEL,
+    ModelProvenance,
+    hash_local_weights,
+    make_hosted_api_backend,
+    make_local_transformers_backend,
+    make_local_vllm_backend,
+)
 from .constants import TARGETS
 from .data import gold_mask, load_train_csv, normalize_report, report_hash
 
@@ -65,9 +83,8 @@ B23_IGNORED_STATE_CONFIDENCE = 0.0
 B23_MIN_REPORTED_CONFIDENCE = 0.0
 B23_MAX_REPORTED_CONFIDENCE = 1.0
 
-DEFAULT_MODEL = "claude-sonnet-5"
-DEFAULT_MAX_TOKENS = 4096
-DEFAULT_TEMPERATURE = 0.0
+DEFAULT_MODEL = DEFAULT_LOCAL_MODEL
+DEFAULT_MAX_TOKENS = 2048
 
 TARGET_DEFINITIONS: dict[str, str] = {
     "ACL": "Anterior cruciate ligament tear, rupture, sprain or graft failure.",
@@ -326,42 +343,54 @@ class ExtractionCache:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def make_anthropic_backend(
+def make_backend(
     *,
-    model: str = DEFAULT_MODEL,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
-    temperature: float = DEFAULT_TEMPERATURE,
-    api_key: str | None = None,
-) -> ReportLabelBackend:
-    """Build an Anthropic-backed extraction callable.
+    backend: str = BACKEND_LOCAL_TRANSFORMERS,
+    model_id: str = DEFAULT_MODEL,
+    revision: str | None = None,
+    dtype: str = "bfloat16",
+    quantisation: str = "none",
+    max_new_tokens: int = DEFAULT_MAX_TOKENS,
+    seed: int = 2026,
+    weights_path: str | Path | None = None,
+) -> tuple[ReportLabelBackend, ModelProvenance]:
+    """Build a labelling backend together with its provenance record.
 
-    Imported lazily so the module stays usable -- and testable -- without the
-    SDK installed or any network access.
+    The default is a locally executed, openly downloadable checkpoint, because
+    only that can be pinned to an exact artefact. Passing `weights_path`
+    additionally digests the downloaded shards, which proves which bytes
+    produced the labels even if the hub repository is later re-tagged.
     """
-    try:
-        import anthropic
-    except ImportError as exc:  # pragma: no cover - environment dependent
-        raise RuntimeError(
-            "B23 Anthropic backend requires the 'anthropic' package: pip install anthropic"
-        ) from exc
-
-    key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        raise RuntimeError("B23 Anthropic backend requires ANTHROPIC_API_KEY")
-    client = anthropic.Anthropic(api_key=key)
-
-    def _call(system: str, user: str) -> str:
-        response = client.messages.create(
-            model=model,
-            max_tokens=int(max_tokens),
-            temperature=float(temperature),
-            system=system,
-            messages=[{"role": "user", "content": user}],
+    weights_sha = hash_local_weights(weights_path) if weights_path else None
+    if backend == BACKEND_LOCAL_TRANSFORMERS:
+        return make_local_transformers_backend(
+            SYSTEM_PROMPT,
+            model_id=model_id,
+            revision=revision,
+            dtype=dtype,
+            quantisation=quantisation,
+            max_new_tokens=max_new_tokens,
+            seed=seed,
+            weights_sha256=weights_sha,
         )
-        parts = [block.text for block in response.content if getattr(block, "type", "") == "text"]
-        return "".join(parts)
-
-    return _call
+    if backend == BACKEND_LOCAL_VLLM:
+        return make_local_vllm_backend(
+            SYSTEM_PROMPT,
+            model_id=model_id,
+            revision=revision,
+            dtype=dtype,
+            quantisation=quantisation,
+            max_new_tokens=max_new_tokens,
+            seed=seed,
+            weights_sha256=weights_sha,
+        )
+    if backend == "hosted_api":
+        return make_hosted_api_backend(
+            SYSTEM_PROMPT, model_id=model_id, max_new_tokens=max_new_tokens
+        )
+    raise ValueError(
+        "backend must be one of: local_transformers, local_vllm, hosted_api"
+    )
 
 
 def extract_report(
@@ -507,10 +536,32 @@ def run_b23_export(
     cache_path: str | Path | None = None,
     max_attempts: int = 3,
     progress_every: int = 100,
+    provenance: ModelProvenance | None = None,
+    require_reproducible: bool = True,
 ) -> dict:
-    """Produce a B6-compatible export from LLM extractions."""
+    """Produce a B6-compatible export from LLM extractions.
+
+    `provenance` pins the exact labelling function. When `require_reproducible`
+    is set -- the default, and what competition use needs -- an export whose
+    provenance is missing or not reproducible is refused rather than written,
+    because unreproducible labels cannot be defended later.
+    """
     if not 0.0 <= min_confidence <= 1.0:
         raise ValueError("min_confidence must be in [0,1]")
+    if require_reproducible:
+        if provenance is None:
+            raise ValueError(
+                "a reproducible B23 export requires ModelProvenance; "
+                "pass require_reproducible=False only for offline testing"
+            )
+        if not provenance.reproducible:
+            raise ValueError(
+                "B23 provenance is not reproducible "
+                f"(backend={provenance.backend!r}, model={provenance.model_id!r}, "
+                f"revision={provenance.revision!r}). Competition labels must come "
+                "from an openly downloadable checkpoint pinned to an exact revision "
+                "and decoded greedily."
+            )
 
     df = load_train_csv(train_csv)
     out = Path(out_root)
@@ -554,6 +605,8 @@ def run_b23_export(
         "possible_cells_total": possible_total,
         "cell_coverage": float(usable_total / possible_total) if possible_total else 0.0,
         "unique_reports_labelled": int(len(cache)),
+        "external_model_reproducible": bool(provenance.reproducible) if provenance else False,
+        "provenance": provenance.to_dict() if provenance else None,
         "targets": per_target,
     }
     (out / "audit.json").write_text(json.dumps(audit, indent=2), encoding="utf-8")
@@ -578,13 +631,21 @@ def run_b23_export(
         "gold_usage": "audit only; excluded from training_targets.csv",
         "unmentioned_is_negative": False,
         "supersedes": "none; B6 v1.2.1 remains frozen for historical comparisons",
+        "provenance": provenance.to_dict() if provenance else None,
     }
     (out / "policy.json").write_text(json.dumps(policy, indent=2), encoding="utf-8")
     return audit
 
 
-def load_frozen_b23_export(b23_root: str | Path) -> tuple[pd.DataFrame, dict, dict]:
-    """Load a completed B23 export with the same guarantees B7 demands of B6."""
+def load_frozen_b23_export(
+    b23_root: str | Path, *, require_reproducible: bool = True
+) -> tuple[pd.DataFrame, dict, dict]:
+    """Load a completed B23 export with the same guarantees B7 demands of B6.
+
+    Also refuses, by default, an export that was not produced by a pinned,
+    openly downloadable, locally executed checkpoint -- so an unreproducible
+    development export cannot reach training by accident.
+    """
     root = Path(b23_root)
     targets_path = root / "training_targets.csv"
     policy_path = root / "policy.json"
@@ -601,6 +662,11 @@ def load_frozen_b23_export(b23_root: str | Path) -> tuple[pd.DataFrame, dict, di
         raise ValueError("B23 audit does not certify zero gold rows in training_targets.csv")
     if bool(policy.get("unmentioned_is_negative", False)):
         raise ValueError("B23 must not map unmentioned report states to negative")
+    if require_reproducible and not bool(audit.get("external_model_reproducible", False)):
+        raise ValueError(
+            "B23 export was not produced by a reproducible openly downloadable "
+            "local checkpoint; refusing to use it for competition training"
+        )
 
     frame = pd.read_csv(targets_path)
     if "StudyInstanceUID" not in frame.columns:
@@ -612,23 +678,62 @@ def load_frozen_b23_export(b23_root: str | Path) -> tuple[pd.DataFrame, dict, di
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="B23 LLM multilingual report labeller")
+    parser = argparse.ArgumentParser(
+        description="B23 multilingual report labeller (local open-weights LLM)"
+    )
     parser.add_argument("--train-csv", required=True)
     parser.add_argument("--out-root", default="runs/b23_llm_report_labels")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
-    parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
+    parser.add_argument(
+        "--backend",
+        default=BACKEND_LOCAL_TRANSFORMERS,
+        choices=[BACKEND_LOCAL_TRANSFORMERS, BACKEND_LOCAL_VLLM, "hosted_api"],
+        help="local_transformers (reference), local_vllm (faster), hosted_api (dev only)",
+    )
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="hub repo id of an open checkpoint")
+    parser.add_argument(
+        "--revision",
+        default=None,
+        help="exact commit SHA to pin; resolved from the hub when omitted",
+    )
+    parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--quantisation", default="none", choices=["none", "8bit", "4bit"])
+    parser.add_argument(
+        "--weights-path",
+        default=None,
+        help="local checkpoint directory to digest, proving which bytes made the labels",
+    )
+    parser.add_argument("--max-new-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--min-confidence", type=float, default=0.75)
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--progress-every", type=int, default=100)
     parser.add_argument("--cache", default=None)
+    parser.add_argument(
+        "--allow-unreproducible",
+        action="store_true",
+        help="permit a hosted/unpinned model; the export is then NOT competition-usable",
+    )
     args = parser.parse_args()
 
-    backend = make_anthropic_backend(
-        model=args.model,
-        max_tokens=args.max_tokens,
-        temperature=args.temperature,
+    backend, provenance = make_backend(
+        backend=args.backend,
+        model_id=args.model,
+        revision=args.revision,
+        dtype=args.dtype,
+        quantisation=args.quantisation,
+        max_new_tokens=args.max_new_tokens,
+        seed=args.seed,
+        weights_path=args.weights_path,
     )
+    print("[B23] labelling provenance")
+    print(provenance.describe())
+    if not provenance.reproducible and not args.allow_unreproducible:
+        raise SystemExit(
+            "[B23] refusing to run: this backend cannot be pinned to an exact artefact.\n"
+            "      Use --backend local_transformers with an openly downloadable model,\n"
+            "      or pass --allow-unreproducible for a development-only export."
+        )
+
     audit = run_b23_export(
         args.train_csv,
         backend,
@@ -637,8 +742,10 @@ def main() -> None:
         cache_path=args.cache,
         max_attempts=args.max_attempts,
         progress_every=args.progress_every,
+        provenance=provenance,
+        require_reproducible=not args.allow_unreproducible,
     )
-    print(json.dumps(audit, indent=2))
+    print(json.dumps({k: v for k, v in audit.items() if k != "targets"}, indent=2))
 
 
 if __name__ == "__main__":  # pragma: no cover

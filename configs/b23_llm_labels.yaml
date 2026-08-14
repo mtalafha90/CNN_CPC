@@ -17,11 +17,23 @@ competition_mode: true
 requested_gpus: 1
 
 # --- Labeller ----------------------------------------------------------------
-# The extraction runs on CPU against an LLM API; no GPU is involved.
-b23_model: claude-sonnet-5
-b23_max_tokens: 4096
-b23_temperature: 0.0
+# Competition reproducibility requires an identifiable, re-runnable labelling
+# function, so B23 uses an openly downloadable checkpoint executed locally and
+# pinned to an exact hub revision. A hosted API cannot satisfy this: the weights
+# behind a model name can change without notice.
+#
+# Qwen2.5 is Apache-2.0 with no acceptance gate, and is strong on the Spanish,
+# Dutch and Turkish this corpus contains. Raise the size first if the labeller
+# audit is marginal.
+b23_backend: local_transformers      # local_transformers | local_vllm
+b23_model: Qwen/Qwen2.5-14B-Instruct
+b23_revision: null                   # resolved from the hub and pinned into the export
+b23_dtype: bfloat16
+b23_quantisation: none               # none | 8bit | 4bit
+b23_max_new_tokens: 2048
+b23_decoding: greedy                 # do_sample=False; no RNG dependence
 b23_max_attempts: 3
+b23_require_reproducible: true       # refuse to certify an unpinned export
 
 # Frozen B6-compatible supervision policy. The downstream B7 family reads these
 # exact semantics, so keeping them identical is what makes B23 a drop-in

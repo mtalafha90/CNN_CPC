@@ -13,7 +13,21 @@ from rsna_knee.b23_validation_split import (
     load_frozen_b23_holdout,
     manifest_sha256,
 )
+from rsna_knee.b23_local_llm import BACKEND_LOCAL_TRANSFORMERS, DECODING_GREEDY, ModelProvenance
 from rsna_knee.constants import TARGETS
+
+PINNED = ModelProvenance(
+    backend=BACKEND_LOCAL_TRANSFORMERS,
+    model_id="Qwen/Qwen2.5-14B-Instruct",
+    revision="a" * 40,
+    dtype="bfloat16",
+    quantisation="none",
+    decoding=DECODING_GREEDY,
+    max_new_tokens=2048,
+    seed=2026,
+    prompt_sha256="b" * 64,
+    openly_downloadable=True,
+)
 
 N_REPORT_STUDIES = 160
 
@@ -53,7 +67,11 @@ def _build_export(tmp_path):
         return _response_for(0)
 
     run_b23_export(
-        data_root / "train.csv", _backend, out_root=tmp_path / "b23", progress_every=0
+        data_root / "train.csv",
+        _backend,
+        out_root=tmp_path / "b23",
+        progress_every=0,
+        provenance=PINNED,
     )
     return {"data_root": str(data_root), "train_csv": "train.csv"}
 

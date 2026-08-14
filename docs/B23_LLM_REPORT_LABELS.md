@@ -193,9 +193,62 @@ B21   weak-v2 +0.0111  ->  gold -0.0101
 
 Two for two in the unhelpful direction. That is exactly why the labeller audit comes first: the split is only worth trusting if the labeller it is built from has been shown to agree with expert truth substantially better than the regex. A large surface built on a bad labeller measures the wrong thing precisely.
 
+## Reproducibility: openly downloadable weights, run locally
+
+The labeller must be an artefact a third party can obtain and re-run, not a service. A hosted API fails that on its own terms: the weights served behind a model name can change without notice, so labels generated today may not be reproducible later and the model cannot be identified precisely.
+
+B23 therefore runs an **openly downloadable checkpoint locally**:
+
+```text
+competition Report column
+  -> local frozen open-weights LLM (repo id + commit revision + dtype + greedy)
+  -> structured labels
+  -> MRI model training
+```
+
+Every export carries a `ModelProvenance` record:
+
+```text
+backend          local_transformers | local_vllm
+model_id         e.g. Qwen/Qwen2.5-14B-Instruct
+revision         exact hub commit SHA, resolved and pinned
+dtype            bfloat16
+quantisation     none | 8bit | 4bit
+decoding         greedy
+max_new_tokens   2048
+prompt_sha256    SHA-256 of the exact system prompt
+weights_sha256   optional digest of the downloaded shards
+```
+
+Determinism comes from greedy decoding (`do_sample=False`) rather than a temperature setting, so the run does not depend on RNG state or on how a particular library seeds it. The prompt is hashed because it is half the labelling function — a revised prompt is a different labeller even on identical weights. `weights_sha256` is optional but decisive: it proves which bytes produced the labels even if a hub repository is later re-tagged.
+
+`run_b23_export` **refuses to write a certifiable export** unless provenance is present and reproducible, and `load_frozen_b23_export` **refuses to load one** into training. A development-only escape hatch exists (`require_reproducible=False`, `--allow-unreproducible`) but such an export is permanently marked `external_model_reproducible: false` and cannot reach a training run by accident.
+
+### Choosing a checkpoint
+
+Licence status matters for the "publicly and equally accessible" standard, so it is recorded rather than assumed:
+
+| Family | Licence | Gate |
+|---|---|---|
+| Qwen2.5 Instruct | Apache-2.0 | none |
+| Mistral / Mixtral Instruct | Apache-2.0 | none |
+| Llama 3.1 / 3.3 Instruct | Llama Community Licence | click-through |
+| Gemma 2 / 3 Instruct | Gemma Terms of Use | click-through |
+
+The Apache-2.0 families are the cleanest fit because they carry no acceptance gate at all. The default is `Qwen/Qwen2.5-14B-Instruct`: Apache-2.0, genuinely strong on the Spanish, Dutch and Turkish that this corpus contains, and comfortable on a single 24 GB card in 4-bit.
+
+```text
+Qwen/Qwen2.5-7B-Instruct     ~16 GB bf16, ~6 GB 4-bit   fastest, weakest
+Qwen/Qwen2.5-14B-Instruct    ~30 GB bf16, ~10 GB 4-bit  default
+Qwen/Qwen2.5-32B-Instruct    ~65 GB bf16, ~20 GB 4-bit  strong
+Qwen/Qwen2.5-72B-Instruct    ~145 GB bf16, ~42 GB 4-bit strongest
+```
+
+Scale is the first thing to raise if the labeller audit comes back marginal — this task is extraction under explicit rules, which is exactly where a larger instruct model pulls ahead. Because the cache is keyed by report hash, a re-run with different weights needs a fresh `--cache` path or it will replay the old extractions.
+
 ## Competition-rule note
 
-B23 uses an external model to generate **training labels only**. Inference remains MRI-only, so no external model is present at submission time. The repository's reading of the External Data and Tools rules — that publicly and equally accessible external models are permitted absent a specific prohibition — is what B13 and B15 already rely on for ImageNet weights. The B23 audit records `external_models: true` so this is never implicit.
+B23 uses an external model to generate **training labels only**. Inference remains MRI-only, so no external model is present at submission time. The repository's reading of the External Data and Tools rules — that publicly and equally accessible external models are permitted absent a specific prohibition — is what B13 and B15 already rely on for ImageNet weights. The audit records `external_models: true` and the full provenance block, so nothing here is implicit.
 
 **Confirm this against the current rules text before running.** It is load-bearing.
 
@@ -204,16 +257,23 @@ B23 uses an external model to generate **training labels only**. Inference remai
 ```bash
 cd /media/talafha/Disk_1/CNN_CPC
 conda activate rsna-knee
-pip install -e '.[llm]'
+pip install -e '.[local-llm]'          # add local-llm-4bit for a 24 GB card
+                                       # or local-llm-fast for vLLM throughput
 
 export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
-export ANTHROPIC_API_KEY=...
 
-# 1. Label all 4,407 studies. Resumable; safe to interrupt.
+# 1. Label all 4,407 studies with a pinned local checkpoint.
+#    Resumable and safe to interrupt; the cache is keyed by report hash.
 rsna-knee-b23 \
   --train-csv "$DATA_ROOT/train.csv" \
   --out-root runs/b23_llm_report_labels \
-  --model claude-sonnet-5
+  --backend local_transformers \
+  --model Qwen/Qwen2.5-14B-Instruct \
+  --quantisation 4bit \
+  --weights-path ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-14B-Instruct/snapshots/<sha>
+
+# For the full corpus, vLLM is substantially faster on the same weights:
+#   --backend local_vllm --model Qwen/Qwen2.5-14B-Instruct
 
 # 2. THE GATE. Compare against frozen B6 on expert gold.
 rsna-knee-b23-audit \
@@ -230,7 +290,7 @@ rsna-knee-b23-split \
   --out-root runs/b23_holdout_v1
 ```
 
-Step 1 is CPU-only and costs API calls rather than GPU hours. Steps 2 and 3 need neither.
+Step 1 needs the GPU but no network beyond the initial weight download, and no training. Steps 2 and 3 need neither GPU nor network. The whole of B23 leaves the B20 checkpoint untouched.
 
 ## Artifacts
 
@@ -255,6 +315,8 @@ runs/b23_holdout_v1/
 ## Explicitly prohibited
 
 ```text
+producing competition labels with a hosted or unpinned model
+changing the prompt or the checkpoint without a new version and a new audit
 iterating the prompt against the labeller audit result
 using the B23 holdout to select a downstream checkpoint before the labeller audit passes
 mapping unmentioned report states to negative

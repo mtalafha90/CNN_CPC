@@ -15,7 +15,26 @@ from rsna_knee.b23_llm_labels import (
     parse_extraction_response,
     run_b23_export,
 )
+from rsna_knee.b23_local_llm import BACKEND_LOCAL_TRANSFORMERS, DECODING_GREEDY, ModelProvenance
 from rsna_knee.constants import TARGETS
+
+
+def _pinned_provenance(**overrides):
+    """A provenance record standing in for a real pinned local checkpoint."""
+    fields = dict(
+        backend=BACKEND_LOCAL_TRANSFORMERS,
+        model_id="Qwen/Qwen2.5-14B-Instruct",
+        revision="a" * 40,
+        dtype="bfloat16",
+        quantisation="none",
+        decoding=DECODING_GREEDY,
+        max_new_tokens=2048,
+        seed=2026,
+        prompt_sha256="b" * 64,
+        openly_downloadable=True,
+    )
+    fields.update(overrides)
+    return ModelProvenance(**fields)
 
 
 def _response(overrides=None, default_state="unmentioned", default_confidence=0.0):
@@ -181,7 +200,11 @@ def test_run_b23_export_excludes_gold_and_round_trips(tmp_path):
     )
 
     audit = run_b23_export(
-        train_csv, backend, out_root=tmp_path / "export", progress_every=0
+        train_csv,
+        backend,
+        out_root=tmp_path / "export",
+        progress_every=0,
+        provenance=_pinned_provenance(),
     )
     assert audit["b23_version"] == B23_VERSION
     assert audit["gold_rows_in_training_targets"] == 0
@@ -207,7 +230,13 @@ def test_run_b23_export_reuses_cache_for_identical_reports(tmp_path):
         calls["n"] += 1
         return _response()
 
-    run_b23_export(train_csv, _counting, out_root=tmp_path / "export", progress_every=0)
+    run_b23_export(
+        train_csv,
+        _counting,
+        out_root=tmp_path / "export",
+        progress_every=0,
+        provenance=_pinned_provenance(),
+    )
     # Five studies share one report hash, so the backend is hit exactly once.
     assert calls["n"] == 1
 
@@ -216,7 +245,13 @@ def test_load_frozen_b23_export_rejects_unmentioned_as_negative(tmp_path):
     train_csv = tmp_path / "train.csv"
     _train_frame().to_csv(train_csv, index=False)
     out = tmp_path / "export"
-    run_b23_export(train_csv, _stub_backend(_response()), out_root=out, progress_every=0)
+    run_b23_export(
+        train_csv,
+        _stub_backend(_response()),
+        out_root=out,
+        progress_every=0,
+        provenance=_pinned_provenance(),
+    )
 
     policy = json.loads((out / "policy.json").read_text(encoding="utf-8"))
     policy["unmentioned_is_negative"] = True
