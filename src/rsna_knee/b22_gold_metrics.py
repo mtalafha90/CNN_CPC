@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +8,7 @@ from .b21_acceptance_protocol import require_b20_replay_sanity
 from .b22_duration_protocol import (
     B22_E2_REPLAY_TOLERANCE,
     B22_GOLD_AUDIT_VARIANT,
+    require_b22_e2_replay,
     require_failed_b21_acceptance,
 )
 from .evaluation import bootstrap_macro_auc, compare_runs
@@ -48,11 +48,7 @@ def build_b22_gold_trajectory(
         raise ValueError("B22 trajectory audit requires epoch 2")
     prior_e2 = float(prior["b21_candidate"]["macro_auc"])
     new_e2 = float(epochs["2"]["macro_auc"])
-    e2_delta = new_e2 - prior_e2
-    if abs(e2_delta) > B22_E2_REPLAY_TOLERANCE:
-        raise RuntimeError(
-            "B22 E2 does not reproduce B21 E2 closely enough; duration trajectory is not interpretable"
-        )
+    e2_delta = require_b22_e2_replay(new_e2, prior_e2)
 
     best_epoch = max(epochs, key=lambda key: epochs[key]["macro_auc"])
     return {
