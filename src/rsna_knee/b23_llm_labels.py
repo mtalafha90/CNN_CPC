@@ -50,6 +50,9 @@ import pandas as pd
 
 from .b23_local_llm import (
     BACKEND_LOCAL_TRANSFORMERS,
+    BACKEND_OLLAMA,
+    OLLAMA_DEFAULT_HOST,
+    OLLAMA_DEFAULT_NUM_CTX,
     BACKEND_LOCAL_VLLM,
     DEFAULT_LOCAL_MODEL,
     ModelProvenance,
@@ -57,6 +60,8 @@ from .b23_local_llm import (
     make_hosted_api_backend,
     make_local_transformers_backend,
     make_local_vllm_backend,
+    make_ollama_backend,
+    strip_thinking,
 )
 from .constants import TARGETS
 from .data import gold_mask, load_train_csv, normalize_report, report_hash
@@ -253,7 +258,9 @@ def parse_extraction_response(text: str) -> dict[str, TargetExtraction]:
     failure here is deliberate -- a silently defaulted label is far more
     expensive than a retried request.
     """
-    stripped = text.strip()
+    # Reasoning models (Qwen3 and family) prefix a <think> block. Strip it here
+    # as well as in the backend so no backend can leak one into the parse.
+    stripped = strip_thinking(text)
     if stripped.startswith("```"):
         # Tolerate a fenced block even though the prompt forbids one.
         stripped = stripped.split("\n", 1)[-1] if "\n" in stripped else ""
@@ -345,7 +352,7 @@ class ExtractionCache:
 
 def make_backend(
     *,
-    backend: str = BACKEND_LOCAL_TRANSFORMERS,
+    backend: str = BACKEND_OLLAMA,
     model_id: str = DEFAULT_MODEL,
     revision: str | None = None,
     dtype: str = "bfloat16",
@@ -353,6 +360,9 @@ def make_backend(
     max_new_tokens: int = DEFAULT_MAX_TOKENS,
     seed: int = 2026,
     weights_path: str | Path | None = None,
+    ollama_host: str = OLLAMA_DEFAULT_HOST,
+    num_ctx: int = OLLAMA_DEFAULT_NUM_CTX,
+    think: bool = False,
 ) -> tuple[ReportLabelBackend, ModelProvenance]:
     """Build a labelling backend together with its provenance record.
 
@@ -362,6 +372,16 @@ def make_backend(
     produced the labels even if the hub repository is later re-tagged.
     """
     weights_sha = hash_local_weights(weights_path) if weights_path else None
+    if backend == BACKEND_OLLAMA:
+        return make_ollama_backend(
+            SYSTEM_PROMPT,
+            model=model_id,
+            host=ollama_host,
+            num_ctx=num_ctx,
+            max_new_tokens=max_new_tokens,
+            seed=seed,
+            think=think,
+        )
     if backend == BACKEND_LOCAL_TRANSFORMERS:
         return make_local_transformers_backend(
             SYSTEM_PROMPT,
@@ -389,7 +409,7 @@ def make_backend(
             SYSTEM_PROMPT, model_id=model_id, max_new_tokens=max_new_tokens
         )
     raise ValueError(
-        "backend must be one of: local_transformers, local_vllm, hosted_api"
+        "backend must be one of: ollama, local_transformers, local_vllm, hosted_api"
     )
 
 
@@ -685,9 +705,21 @@ def main() -> None:
     parser.add_argument("--out-root", default="runs/b23_llm_report_labels")
     parser.add_argument(
         "--backend",
-        default=BACKEND_LOCAL_TRANSFORMERS,
-        choices=[BACKEND_LOCAL_TRANSFORMERS, BACKEND_LOCAL_VLLM, "hosted_api"],
-        help="local_transformers (reference), local_vllm (faster), hosted_api (dev only)",
+        default=BACKEND_OLLAMA,
+        choices=[BACKEND_OLLAMA, BACKEND_LOCAL_TRANSFORMERS, BACKEND_LOCAL_VLLM, "hosted_api"],
+        help="ollama (default), local_transformers, local_vllm, hosted_api (dev only)",
+    )
+    parser.add_argument("--ollama-host", default=OLLAMA_DEFAULT_HOST)
+    parser.add_argument(
+        "--num-ctx",
+        type=int,
+        default=OLLAMA_DEFAULT_NUM_CTX,
+        help="Ollama context window; too small silently truncates the report",
+    )
+    parser.add_argument(
+        "--think",
+        action="store_true",
+        help="enable Qwen3 reasoning mode (slower; off by default for extraction)",
     )
     parser.add_argument("--model", default=DEFAULT_MODEL, help="hub repo id of an open checkpoint")
     parser.add_argument(
@@ -724,6 +756,9 @@ def main() -> None:
         max_new_tokens=args.max_new_tokens,
         seed=args.seed,
         weights_path=args.weights_path,
+        ollama_host=args.ollama_host,
+        num_ctx=args.num_ctx,
+        think=args.think,
     )
     print("[B23] labelling provenance")
     print(provenance.describe())

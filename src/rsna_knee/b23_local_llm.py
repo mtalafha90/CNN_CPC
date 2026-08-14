@@ -14,11 +14,15 @@ competition Report column
   -> MRI model training
 ```
 
-Three backends are provided. `local_transformers` is the reference path.
-`local_vllm` is the same weights with faster batched decoding for the full
-4,349-report corpus. `hosted_api` remains available for development only and is
-explicitly marked non-reproducible, so an export produced with it cannot be
-certified for competition use.
+Four backends are provided. `ollama` is the default and the easiest to run on a
+single laptop GPU. `local_transformers` is the reference path. `local_vllm` is
+the same weights with faster batched decoding. `hosted_api` remains available
+for development only and is explicitly marked non-reproducible, so an export
+produced with it cannot be certified for competition use.
+
+For Ollama the provenance pin is the model blob's own SHA-256 digest, reported
+by `/api/tags`. That is a stronger guarantee than a hub revision, because it is
+a content hash of the exact GGUF bytes that produced the labels.
 
 Determinism is enforced by greedy decoding rather than a temperature setting:
 `do_sample=False` removes the sampler entirely, so the run does not depend on
@@ -32,10 +36,18 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+BACKEND_OLLAMA = "ollama"
 BACKEND_LOCAL_TRANSFORMERS = "local_transformers"
 BACKEND_LOCAL_VLLM = "local_vllm"
 BACKEND_HOSTED_API = "hosted_api"
-REPRODUCIBLE_BACKENDS = (BACKEND_LOCAL_TRANSFORMERS, BACKEND_LOCAL_VLLM)
+REPRODUCIBLE_BACKENDS = (BACKEND_OLLAMA, BACKEND_LOCAL_TRANSFORMERS, BACKEND_LOCAL_VLLM)
+
+OLLAMA_DEFAULT_HOST = "http://localhost:11434"
+# Ollama defaults to a small context window and silently truncates anything
+# longer. A ~6k-character system prompt plus a radiology report up to ~2.1k
+# characters lands around 2.5-3k tokens, so the default would quietly cut the
+# report in half and corrupt the labels invisibly. Set it explicitly.
+OLLAMA_DEFAULT_NUM_CTX = 8192
 
 DECODING_GREEDY = "greedy"
 
@@ -53,16 +65,36 @@ DECODING_GREEDY = "greedy"
 # The Apache-2.0 families are the cleanest fit because they carry no acceptance
 # gate at all. The default is the largest Qwen2.5 that fits comfortably on a
 # single 24 GB card in 4-bit; override for a larger card.
-DEFAULT_LOCAL_MODEL = "Qwen/Qwen2.5-14B-Instruct"
+# Default targets a 16 GB laptop card (e.g. RTX A4500 Laptop). Qwen3-14B at
+# Q4_K_M is ~9.3 GB, leaving ~6.7 GB for the KV cache at num_ctx 8192.
+DEFAULT_LOCAL_MODEL = "qwen3:14b"
 SUGGESTED_LOCAL_MODELS = {
-    "Qwen/Qwen2.5-7B-Instruct": "~16 GB bf16, ~6 GB 4-bit; fastest, weakest",
-    "Qwen/Qwen2.5-14B-Instruct": "~30 GB bf16, ~10 GB 4-bit; default",
-    "Qwen/Qwen2.5-32B-Instruct": "~65 GB bf16, ~20 GB 4-bit; strong",
-    "Qwen/Qwen2.5-72B-Instruct": "~145 GB bf16, ~42 GB 4-bit; strongest",
-    "mistralai/Mistral-7B-Instruct-v0.3": "Apache-2.0 alternative family",
+    "qwen3:8b": "Ollama Q4_K_M ~5.2 GB; fits 8 GB cards",
+    "qwen3:14b": "Ollama Q4_K_M ~9.3 GB; default, fits 16 GB cards",
+    "qwen3:32b": "Ollama Q4_K_M ~20 GB; needs 24 GB+",
+    "Qwen/Qwen2.5-14B-Instruct": "transformers path, ~10 GB 4-bit",
+    "Qwen/Qwen2.5-32B-Instruct": "transformers path, ~20 GB 4-bit",
 }
 
+# Hub-style identifiers (transformers/vLLM).
 OPEN_LICENCE_PREFIXES = ("qwen/", "mistralai/", "meta-llama/", "google/gemma", "microsoft/phi")
+# Ollama-style identifiers are `family:tag`, e.g. `qwen3:14b`. Only families
+# whose weights are publicly downloadable are accepted.
+OPEN_OLLAMA_FAMILIES = (
+    "qwen3",
+    "qwen2.5",
+    "qwen2",
+    "mistral",
+    "mixtral",
+    "llama3",
+    "llama3.1",
+    "llama3.2",
+    "llama3.3",
+    "gemma2",
+    "gemma3",
+    "phi3",
+    "phi4",
+)
 
 
 @dataclass(frozen=True)
@@ -125,7 +157,164 @@ def looks_openly_downloadable(model_id: str) -> bool:
     lowered = str(model_id).strip().lower()
     if not lowered:
         return False
-    return any(lowered.startswith(prefix) for prefix in OPEN_LICENCE_PREFIXES)
+    if any(lowered.startswith(prefix) for prefix in OPEN_LICENCE_PREFIXES):
+        return True
+    # Ollama-style `family:tag`; the family alone must identify the weights.
+    family = lowered.split(":", 1)[0]
+    return family in OPEN_OLLAMA_FAMILIES
+
+
+def _ollama_request(host: str, path: str, payload: dict | None = None, *, timeout: float = 600.0):
+    """Call the local Ollama HTTP API without going through any proxy.
+
+    Uses the standard library so the Ollama path adds no dependency, and builds
+    an opener with proxies explicitly disabled: a machine with HTTPS_PROXY set
+    would otherwise try to tunnel a localhost call through it.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = f"{str(host).rstrip('/')}{path}"
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(
+        url, data=data, headers={"Content-Type": "application/json"},
+        method="POST" if data is not None else "GET",
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"cannot reach Ollama at {host}: {exc}. Is `ollama serve` running?"
+        ) from exc
+
+
+def ollama_model_digest(model: str, host: str = OLLAMA_DEFAULT_HOST) -> tuple[str, str]:
+    """Return the (digest, quantisation) of a locally installed Ollama model.
+
+    The digest is the content hash of the model blob, so it identifies the exact
+    bytes used. A model that is not installed is an error rather than a silent
+    pull, because an unnoticed pull could substitute different weights midway
+    through a labelling run.
+    """
+    payload = _ollama_request(host, "/api/tags", timeout=30.0)
+    installed = {str(entry.get("name", "")): entry for entry in payload.get("models", [])}
+    entry = installed.get(str(model))
+    if entry is None and ":" not in str(model):
+        entry = installed.get(f"{model}:latest")
+    if entry is None:
+        available = ", ".join(sorted(installed)) or "none"
+        raise RuntimeError(
+            f"Ollama model {model!r} is not installed (available: {available}). "
+            f"Run: ollama pull {model}"
+        )
+    digest = str(entry.get("digest", "")).replace("sha256:", "")
+    quantisation = str((entry.get("details") or {}).get("quantization_level", "unknown"))
+    if not digest:
+        raise RuntimeError(f"Ollama did not report a digest for {model!r}")
+    return digest, quantisation
+
+
+def strip_thinking(text: str) -> str:
+    """Remove a reasoning model's <think> block from a completion.
+
+    Qwen3 is a hybrid reasoning model and emits <think>...</think> before its
+    answer unless thinking is disabled. The JSON parser must never see it. This
+    is applied unconditionally because it is harmless for non-reasoning models
+    and silent corruption otherwise.
+    """
+    import re
+
+    cleaned = re.sub(r"<think>.*?</think>", "", str(text), flags=re.DOTALL | re.IGNORECASE)
+    # An unterminated block means the answer was cut off mid-reasoning.
+    if "<think>" in cleaned.lower():
+        cleaned = re.sub(r"<think>.*", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    return cleaned.strip()
+
+
+def estimate_prompt_tokens(system: str, user: str) -> int:
+    """Rough token estimate for a context-window guard.
+
+    Deliberately conservative -- roughly 3 characters per token rather than the
+    usual 4 -- because non-Latin scripts and clinical abbreviations tokenise
+    worse than prose, and the failure being guarded against is silent
+    truncation of the report.
+    """
+    return int((len(str(system)) + len(str(user))) / 3) + 64
+
+
+def make_ollama_backend(
+    system_prompt: str,
+    *,
+    model: str = DEFAULT_LOCAL_MODEL,
+    host: str = OLLAMA_DEFAULT_HOST,
+    num_ctx: int = OLLAMA_DEFAULT_NUM_CTX,
+    max_new_tokens: int = 2048,
+    seed: int = 2026,
+    think: bool = False,
+    timeout: float = 600.0,
+):
+    """Default local backend: an installed Ollama model, greedy, JSON-formatted.
+
+    `think=False` disables Qwen3's reasoning mode. Reasoning costs tokens and
+    latency on what is an extraction task with explicit rules, and the answer
+    still has to be plain JSON. The completion is stripped of any <think> block
+    regardless, so a build that ignores the flag cannot corrupt the parse.
+    """
+    digest, quantisation = ollama_model_digest(model, host)
+    provenance = ModelProvenance(
+        backend=BACKEND_OLLAMA,
+        model_id=str(model),
+        revision=digest,
+        dtype="gguf",
+        quantisation=quantisation,
+        decoding=DECODING_GREEDY,
+        max_new_tokens=int(max_new_tokens),
+        seed=int(seed),
+        prompt_sha256=prompt_sha256(system_prompt),
+        openly_downloadable=looks_openly_downloadable(model),
+        weights_sha256=digest,
+    )
+
+    options = {
+        "temperature": 0.0,  # Ollama's spelling of greedy decoding
+        "top_p": 1.0,
+        "top_k": 0,
+        "seed": int(seed),
+        "num_ctx": int(num_ctx),
+        "num_predict": int(max_new_tokens),
+    }
+
+    def _call(system: str, user: str) -> str:
+        estimated = estimate_prompt_tokens(system, user)
+        if estimated > int(num_ctx):
+            raise RuntimeError(
+                f"prompt is about {estimated} tokens but num_ctx is {num_ctx}; Ollama "
+                "would silently truncate the report and corrupt the labels. "
+                "Raise --num-ctx."
+            )
+        body = {
+            "model": str(model),
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": False,
+            "format": "json",  # constrain the decoder to emit valid JSON
+            "options": options,
+            "think": bool(think),
+        }
+        try:
+            payload = _ollama_request(host, "/api/chat", body, timeout=timeout)
+        except RuntimeError:
+            # Older builds reject the unknown `think` field; retry without it.
+            body.pop("think", None)
+            payload = _ollama_request(host, "/api/chat", body, timeout=timeout)
+        content = (payload.get("message") or {}).get("content", "")
+        return strip_thinking(content)
+
+    return _call, provenance
 
 
 def resolve_revision(model_id: str, revision: str | None = None) -> str:

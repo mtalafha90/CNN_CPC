@@ -209,16 +209,18 @@ competition Report column
 Every export carries a `ModelProvenance` record:
 
 ```text
-backend          local_transformers | local_vllm
-model_id         e.g. Qwen/Qwen2.5-14B-Instruct
-revision         exact hub commit SHA, resolved and pinned
-dtype            bfloat16
-quantisation     none | 8bit | 4bit
+backend          ollama | local_transformers | local_vllm
+model_id         e.g. qwen3:14b
+revision         Ollama blob digest, or the exact hub commit SHA
+dtype            gguf | bfloat16
+quantisation     Q4_K_M | none | 8bit | 4bit
 decoding         greedy
 max_new_tokens   2048
 prompt_sha256    SHA-256 of the exact system prompt
-weights_sha256   optional digest of the downloaded shards
+weights_sha256   content hash of the exact weights
 ```
+
+For the Ollama path the pin is the **model blob's own SHA-256 digest**, read from `/api/tags`. That is a stronger guarantee than a hub revision: it is a content hash of the exact GGUF bytes that produced the labels, so a re-tagged or re-quantised model can never masquerade as the one that ran.
 
 Determinism comes from greedy decoding (`do_sample=False`) rather than a temperature setting, so the run does not depend on RNG state or on how a particular library seeds it. The prompt is hashed because it is half the labelling function — a revised prompt is a different labeller even on identical weights. `weights_sha256` is optional but decisive: it proves which bytes produced the labels even if a hub repository is later re-tagged.
 
@@ -230,21 +232,29 @@ Licence status matters for the "publicly and equally accessible" standard, so it
 
 | Family | Licence | Gate |
 |---|---|---|
+| Qwen3 | Apache-2.0 | none |
 | Qwen2.5 Instruct | Apache-2.0 | none |
 | Mistral / Mixtral Instruct | Apache-2.0 | none |
 | Llama 3.1 / 3.3 Instruct | Llama Community Licence | click-through |
 | Gemma 2 / 3 Instruct | Gemma Terms of Use | click-through |
 
-The Apache-2.0 families are the cleanest fit because they carry no acceptance gate at all. The default is `Qwen/Qwen2.5-14B-Instruct`: Apache-2.0, genuinely strong on the Spanish, Dutch and Turkish that this corpus contains, and comfortable on a single 24 GB card in 4-bit.
+The default is **`qwen3:14b`**, sized for a 16 GB laptop card such as the RTX A4500 Laptop:
 
 ```text
-Qwen/Qwen2.5-7B-Instruct     ~16 GB bf16, ~6 GB 4-bit   fastest, weakest
-Qwen/Qwen2.5-14B-Instruct    ~30 GB bf16, ~10 GB 4-bit  default
-Qwen/Qwen2.5-32B-Instruct    ~65 GB bf16, ~20 GB 4-bit  strong
-Qwen/Qwen2.5-72B-Instruct    ~145 GB bf16, ~42 GB 4-bit strongest
+qwen3:8b     Ollama Q4_K_M ~5.2 GB   fits 8 GB cards
+qwen3:14b    Ollama Q4_K_M ~9.3 GB   default; ~6.7 GB headroom on a 16 GB card
+qwen3:32b    Ollama Q4_K_M ~20 GB    needs 24 GB+
 ```
 
+Qwen3-14B is 14.8B parameters, Apache-2.0 with no acceptance gate, and was built for strong multilingual coverage — which is the deciding factor here, since the corpus contains Spanish, Dutch and Turkish alongside English, and the B6 failure analysis shows the multilingual gap is where the labels are being lost.
+
 Scale is the first thing to raise if the labeller audit comes back marginal — this task is extraction under explicit rules, which is exactly where a larger instruct model pulls ahead. Because the cache is keyed by report hash, a re-run with different weights needs a fresh `--cache` path or it will replay the old extractions.
+
+### Two Qwen3-specific traps, both handled
+
+**Reasoning blocks.** Qwen3 is a hybrid reasoning model and emits `<think>...</think>` before its answer unless thinking is disabled. That would break JSON parsing outright. B23 sends `think: false` and *also* strips any `<think>` block in both the backend and the parser, so a daemon build that ignores the flag cannot corrupt the parse. An unterminated block — the model running out of tokens mid-reasoning — is removed entirely rather than partially.
+
+**Silent context truncation.** Ollama truncates anything past `num_ctx` without warning. The system prompt is ~5,900 characters and the longest sampled report ~2,100, which is roughly 2,700 tokens on a conservative estimate. A default window would cut the report in half and corrupt the labels *invisibly* — the worst failure mode available, because it produces plausible output. B23 sets `num_ctx: 8192` explicitly and estimates prompt length before each call, raising rather than truncating.
 
 ## Competition-rule note
 
@@ -257,23 +267,25 @@ B23 uses an external model to generate **training labels only**. Inference remai
 ```bash
 cd /media/talafha/Disk_1/CNN_CPC
 conda activate rsna-knee
-pip install -e '.[local-llm]'          # add local-llm-4bit for a 24 GB card
-                                       # or local-llm-fast for vLLM throughput
+# The Ollama path needs no extra Python dependency at all -- the backend uses
+# the standard library against the local daemon.
+ollama pull qwen3:14b
+ollama serve            # if not already running as a service
 
 export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
 
-# 1. Label all 4,407 studies with a pinned local checkpoint.
+# 1. Label all 4,407 studies with the pinned local model.
 #    Resumable and safe to interrupt; the cache is keyed by report hash.
 rsna-knee-b23 \
   --train-csv "$DATA_ROOT/train.csv" \
   --out-root runs/b23_llm_report_labels \
-  --backend local_transformers \
-  --model Qwen/Qwen2.5-14B-Instruct \
-  --quantisation 4bit \
-  --weights-path ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-14B-Instruct/snapshots/<sha>
+  --backend ollama \
+  --model qwen3:14b \
+  --num-ctx 8192
 
-# For the full corpus, vLLM is substantially faster on the same weights:
-#   --backend local_vllm --model Qwen/Qwen2.5-14B-Instruct
+# Alternative paths for a larger machine:
+#   --backend local_transformers --model Qwen/Qwen2.5-32B-Instruct --quantisation 4bit
+#   --backend local_vllm --model Qwen/Qwen2.5-32B-Instruct
 
 # 2. THE GATE. Compare against frozen B6 on expert gold.
 rsna-knee-b23-audit \

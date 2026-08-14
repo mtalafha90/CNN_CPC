@@ -25,15 +25,25 @@ requested_gpus: 1
 # Qwen2.5 is Apache-2.0 with no acceptance gate, and is strong on the Spanish,
 # Dutch and Turkish this corpus contains. Raise the size first if the labeller
 # audit is marginal.
-b23_backend: local_transformers      # local_transformers | local_vllm
-b23_model: Qwen/Qwen2.5-14B-Instruct
-b23_revision: null                   # resolved from the hub and pinned into the export
-b23_dtype: bfloat16
-b23_quantisation: none               # none | 8bit | 4bit
+# Sized for a 16 GB laptop card (RTX A4500 Laptop). Qwen3-14B at Q4_K_M is
+# ~9.3 GB, leaving ~6.7 GB for the KV cache at num_ctx 8192. Drop to qwen3:8b
+# (~5.2 GB) on a smaller card.
+b23_backend: ollama                  # ollama | local_transformers | local_vllm
+b23_model: qwen3:14b
+b23_ollama_host: http://localhost:11434
+b23_dtype: gguf
+b23_quantisation: Q4_K_M             # reported by the daemon, recorded in provenance
 b23_max_new_tokens: 2048
-b23_decoding: greedy                 # do_sample=False; no RNG dependence
+b23_decoding: greedy                 # temperature 0, top_k 0; no RNG dependence
+b23_think: false                     # Qwen3 reasoning mode off for extraction
 b23_max_attempts: 3
 b23_require_reproducible: true       # refuse to certify an unpinned export
+
+# Ollama defaults to a small context window and TRUNCATES silently past it. The
+# system prompt is ~5.9k characters and the longest sampled report ~2.1k, so a
+# default window would cut the report in half and corrupt labels invisibly.
+# The backend estimates prompt length and refuses rather than truncating.
+b23_num_ctx: 8192
 
 # Frozen B6-compatible supervision policy. The downstream B7 family reads these
 # exact semantics, so keeping them identical is what makes B23 a drop-in
