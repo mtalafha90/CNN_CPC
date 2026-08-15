@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import time
 from pathlib import Path
 
 import numpy as np
@@ -166,6 +167,7 @@ def train_b24(
     history = []
     for epoch in range(1, B24_FIXED_EPOCHS + 1):
         model.train()
+        epoch_started = time.monotonic()
         loss_sum, steps, seen_series, seen_cells = 0.0, 0, 0, 0
         for batch in loader:
             volumes = batch["volumes"].to(runtime.device, non_blocking=True)
@@ -190,6 +192,7 @@ def train_b24(
             seen_cells += int((weight > 0).sum().item())
         scheduler.step()
 
+        epoch_seconds = time.monotonic() - epoch_started
         full_coverage = steps == expected_batches and seen_series == expected_series
         history.append(
             {
@@ -201,11 +204,19 @@ def train_b24(
                 "expected_series_instances": expected_series,
                 "supervision_cells_seen": seen_cells,
                 "head_lr": float(optimizer.param_groups[0]["lr"]),
+                # Persisted so a later run can be budgeted from a measured
+                # rate rather than an estimate.
+                "epoch_seconds": round(float(epoch_seconds), 1),
+                "seconds_per_study": round(float(epoch_seconds / max(len(study_uids), 1)), 4),
                 "full_coverage": bool(full_coverage),
                 "budget_limited": bool(budget.exhausted()),
             }
         )
-        print(f"[B24:{mode}] epoch {epoch} loss {loss_sum / max(steps, 1):.10f} coverage={full_coverage}")
+        print(
+            f"[B24:{mode}] epoch {epoch} loss {loss_sum / max(steps, 1):.10f} "
+            f"coverage={full_coverage} | {epoch_seconds / 60:.1f} min "
+            f"({epoch_seconds / max(len(study_uids), 1):.3f} s/study)"
+        )
         if not full_coverage:
             raise RuntimeError(f"B24 epoch {epoch} did not achieve exact full coverage")
 

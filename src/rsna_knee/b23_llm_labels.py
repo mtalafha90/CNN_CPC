@@ -516,6 +516,22 @@ def extract_report(
     )
 
 
+def observed_seconds_per_report(cache: ExtractionCache) -> float | None:
+    """Median wall-clock seconds per extraction, from entries that recorded it.
+
+    Median rather than mean because a single stalled request should not skew a
+    budget estimate. Returns None when nothing timed has been written yet.
+    """
+    timings = [
+        float(row["seconds"])
+        for row in cache._entries.values()
+        if isinstance(row.get("seconds"), (int, float))
+    ]
+    if not timings:
+        return None
+    return float(np.median(np.asarray(timings, dtype=np.float64)))
+
+
 def build_b23_frame(
     df: pd.DataFrame,
     backend: ReportLabelBackend,
@@ -560,9 +576,11 @@ def build_b23_frame(
             }
             n_cached += 1
         else:
+            started = time.monotonic()
             extraction, _meta = extract_report(
                 report, backend, max_attempts=max_attempts, sleep=sleep
             )
+            elapsed = time.monotonic() - started
             n_called += 1
             if cache is not None:
                 cache.put(
@@ -570,6 +588,10 @@ def build_b23_frame(
                     {
                         "cache_key": key,
                         "report_sha1": report_sha1,
+                        # Wall-clock cost of this extraction. Persisted so
+                        # throughput can be measured from a completed run
+                        # rather than guessed when planning a time budget.
+                        "seconds": round(float(elapsed), 3),
                         "findings": {
                             target: {
                                 "state": item.state,
@@ -588,7 +610,14 @@ def build_b23_frame(
             columns[f"{target}__state"].append(item.state)
             columns[f"{target}__evidence"].append(item.evidence)
         if progress_every and position % int(progress_every) == 0:
-            print(f"[B23] {position}/{len(reports)} studies | cached={n_cached} called={n_called}")
+            rate = observed_seconds_per_report(cache) if cache is not None else None
+            pace = f" | {rate:.1f}s/report" if rate else ""
+            remaining = len(reports) - position
+            eta = f" | eta {remaining * rate / 3600:.1f}h" if rate else ""
+            print(
+                f"[B23] {position}/{len(reports)} studies | cached={n_cached} "
+                f"called={n_called}{pace}{eta}"
+            )
 
     for target in TARGETS:
         out[target] = np.asarray(columns[target], dtype=np.float32)

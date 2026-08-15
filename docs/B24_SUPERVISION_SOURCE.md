@@ -90,6 +90,39 @@ arms started from the same encoder    -> enforced in b24_eval
 one gold look only                    -> enforced in accept_b24
 ```
 
+## The nine-hour constraint
+
+`RuntimeBudget` already refuses any session of 9 hours or more, so a run is always shorter. Labelling and training compete for the same GPU and the same window, and at full scale they do not both fit — which is why the extraction cache is resumable and why a partly finished run can be salvaged into a pilot.
+
+**Nothing here is estimated.** Wall time was not recorded anywhere before this, so `rsna-knee-b24-plan` works only from measured rates: seconds per report from the extraction cache, seconds per study-epoch from a completed training history. If a rate has not been measured it says `NOT MEASURED` and refuses to recommend anything.
+
+```bash
+rsna-knee-b24-plan --session-hours 8.5 \
+  --cache runs/b23_llm_report_labels/extraction_cache.jsonl \
+  --training-history runs/b24_supervision/b6_control/history.json
+```
+
+It costs the window as two arms x two epochs plus a cross-labeller evaluation pass, and reports which of three shapes fits:
+
+```text
+pilot_end_to_end     train both arms on the studies already labelled
+labelling_only       spend the window on reports; resumable across sessions
+full_scale_training  labelling already complete; train at full size
+```
+
+`full_scale_training` also reports `max_studies_that_fit`, so when a full run does not fit you learn how large a run would.
+
+### Getting the two rates
+
+Labelling is measured automatically — every extraction now records its own wall time in the cache, and the progress line prints a live `s/report` and ETA. Twenty reports is enough to calibrate:
+
+```bash
+rsna-knee-b23 --train-csv "$DATA_ROOT/train.csv" --out-root runs/b23_calibrate \
+  --backend ollama --model qwen3:14b --num-ctx 16384 --max-new-tokens 4096 --limit 20
+```
+
+Training is measured from the first completed arm: each epoch records `epoch_seconds` and `seconds_per_study` in `history.json`, and prints them as it goes. Run the control arm first, then plan the rest of the session from its actual rate.
+
 ## Running the full pipeline
 
 ```bash
