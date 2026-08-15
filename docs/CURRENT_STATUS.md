@@ -7,17 +7,19 @@
 **Canonical B20 epoch:** `2`  
 **Primary metric:** macro ROC AUC across 12 targets
 
-> **B20 remains the active working model.** The new B23/B24X results are scientifically important, but they are exploratory and do not promote or replace B20.
+> **B20 remains the active working model.** B23/B24X/B25X results are development evidence about supervision quality and mechanism. None of them has a valid promotion path.
 
 ## Current headline
 
-- **B20 remains active and unchanged.** Canonical expert macro AUC: `0.6671593555` at epoch 2.
-- **B23-v1 has now been run on a pilot and audited.** It substantially improved state-only macro AUC and coverage relative to B6, but **failed its frozen formal gate because specificity was lower than B6**.
-- Because the B23 formal gate failed, **no canonical B23 development holdout was frozen** and **formal B24 is blocked/not run**.
-- A separate **B24X exploratory matched pilot** was therefore run with no gold evaluation and no promotion path.
-- On the frozen 623-study B6 weak-v2 holdout, the B23/Qwen-supervised B24X arm strongly outperformed the B6-supervised matched control: `0.7116126450` versus `0.6148488366`, paired delta `+0.0967638083`, 95% CI `[+0.0612014772,+0.1316174812]`, `P(B23>B6)=1.0000`.
-- This is **teacher-agreement evidence, not expert truth**. It is especially interesting because the evaluation surface is labelled by B6 and therefore structurally favors the B6-supervised control.
-- A **B24X-Density** ablation has also completed training. It preserves all 3,045 B6 cells and adds only the 2,844 B23 cells where B6 was silent, for 5,889 supervised cells total, with zero B6 overrides and zero B6 drops. **Its frozen weak-v2 evaluation is pending.**
+- **B20 remains active and unchanged.** Canonical reused-expert macro AUC: `0.6671593555` at epoch 2.
+- **B23-v1 formal gate FAILED** because specificity `0.5678` did not exceed B6 `0.6061`; no canonical B23 holdout exists and formal B24 remains blocked/not run.
+- **B24X pilot completed:** B23/Qwen supervision improved frozen weak-v2 from `0.6148488366` to `0.7116126450` on the matched 692-study pilot.
+- **B24X-Density completed:** preserving all B6 cells and adding only B23-silent-cell supervision reached `0.7147994969`, slightly above full B23 `0.7116126450`; the B23-vs-Density interval crossed zero. This showed that almost all of the B24X gain came from supervision recovery rather than replacing B6 decisions.
+- **B25X completed on the full 2,497-study weak-v2 training surface** using the ChatGPT-created hybrid cache as an explicitly mixed/unknown-provenance exploratory source.
+- B25X frozen weak-v2: `B6=0.6723718048`, `Hybrid=0.7268784872`, `B6+Hybrid-fill=0.7308472686`.
+- The B25X macro gain is **overwhelmingly a Synovitis effect**. Excluding Synovitis, the 11-target macro changes are `Hybrid-B6=-0.0028167951` and `Fill-B6=+0.0023982627`.
+- Synovitis diagnosis: B6 training had only `13` negatives versus `322` positives; Hybrid-fill added `136` negatives and `66` positives. The Synovitis weak-v2 AUC rose from `0.2370` to `0.9123` for Fill and remained `0.8874–0.9610` under leave-one-negative-out checks.
+- The current plan is **not** to move to DINOv2 or soft-dense labels. The next phase will develop the current B20-family working model, using the B25X class-coverage finding as a diagnostic.
 
 ## Experiment state
 
@@ -26,205 +28,161 @@
 | **B20** | active historical knee-focused model | expert macro AUC `0.6671593555` | **ACTIVE WORKING MODEL** |
 | B21 | pre-resize crop correction | weak-v2 improved; expert acceptance failed | closed / not promoted |
 | B22 | B21 duration audit E1-E5 | E2 best; longer training did not rescue | closed |
-| **B23-v1** | local LLM report labeller | state-only AUC `0.8125164416`; coverage `0.6365`; specificity `0.5678` | **formal gate FAILED** |
-| **B24 formal** | matched B6-vs-B23 supervision experiment | not run | **blocked by failed B23 gate** |
-| **B24X** | exploratory matched B6-vs-B23 pilot | weak-v2 `0.6148488366 -> 0.7116126450` | completed exploratory evidence; no gold/no promotion |
-| **B24X-Density** | isolate added-label density from changed B23 decisions | trained on 5,889 cells | training complete; weak-v2 evaluation pending |
+| **B23-v1** | local Qwen report labeller | state-only AUC `0.8125164416`; specificity `0.5678` | **formal gate FAILED** |
+| **B24 formal** | matched B6-vs-B23 supervision | not run | **blocked by B23 gate** |
+| **B24X** | matched B6-vs-B23 pilot | `0.6148488366 -> 0.7116126450` weak-v2 | exploratory complete |
+| **B24X-Density** | B6 preserved + B23-only missing cells | `0.7147994969` weak-v2 | exploratory complete |
+| **B25X** | full matched B6 / Hybrid / B6+Hybrid-fill | `0.6723718048 / 0.7268784872 / 0.7308472686` | exploratory complete; mechanism diagnosed |
 
-## B23-v1 pilot and formal labeller audit
-
-The pilot export contained:
-
-```text
-structured rows                 1290
-training/non-gold rows          1232
-gold studies available            58 / 58
-gold rows used for training         0
-usable pilot cells              9321 / 14784 = 63.0%
-```
-
-The 58-study labeller audit was descriptive/post-hoc because the expert surface has already influenced development. It therefore does not restore independence, but it does enforce the predeclared B23 gate.
+## B24X-Density final result
 
 ```text
-                         B6 v1.2.1          B23/Qwen
-state-only macro AUC     0.7024597743        0.8125164416
-sensitivity              0.9748              0.9855
-specificity              0.6061              0.5678
-PPV                      0.6905              0.6667
-NPV                      0.9639              0.9781
-coverage                 0.3606              0.6365
-usable gold cells        251                 443
+B6 control       0.6148488366
+Density          0.7147994969
+Full B23         0.7116126450
+
+Density - B6       +0.0999506603
+Full B23 - B6      +0.0967638083
+Full B23 - Density -0.0031868519
+
+B6 -> Density
+median             +0.0998800219
+95% CI             [+0.0642300469,+0.1348991590]
+P(Density > B6)     1.0000
+
+B23 - Density
+median             -0.0031277652
+95% CI             [-0.0099855349,+0.0034718378]
+P(B23 > Density)    0.1799
 ```
 
-Paired state-only macro-AUC difference:
+Interpretation: the point-estimate gain is explained almost entirely by **adding supervision where B6 was silent**. There is no evidence that B23 replacements/drops are required.
+
+## B25X full matched hybrid experiment
+
+### Training surface
 
 ```text
-raw B23 - B6             +0.1100566673
-paired median            +0.1095402088
-paired 95% CI            [+0.0680786389,+0.1531882641]
-P(B23 > B6)              1.0000
+shared studies              2497
+possible cells             29964
+B6 usable cells            11248  (37.5%)
+
+Pure Hybrid
+usable cells               20001  (66.8%)
+added                       9542
+dropped                      789
+disagreements               1120 / 10459 = 10.7%
+
+B6 + Hybrid-fill
+usable cells               20790  (69.4%)
+B6 cells preserved         11248
+Hybrid-only cells added     9542
+B6 cells dropped               0
+B6 cells overridden            0
 ```
 
-The formal gate nevertheless failed because:
+All arms used the same 2,497 studies/order, frozen weak-v2-safe B16-v2 encoder, B20 post-resize crop and fixed E2 endpoint. The 623-study weak-v2 holdout and all 58 expert-gold studies were excluded from gradients.
+
+### Training
 
 ```text
-B23 specificity          0.5678
-required > B6            0.6061
+Control: E1 0.7601064120 | E2 0.6592396402 | 45m50s
+Fill:    E1 0.6799390770 | E2 0.5913315904 | 46m43s
+Hybrid:  E1 0.6557762888 | E2 0.5718413529 | 46m03s
 ```
 
-Consequences:
+### Frozen weak-v2 result
 
 ```text
-B23 adopted formally                  no
-canonical B23 holdout frozen          no
-formal B24 allowed                    no
-B20 replaced                          no
+B6 control          0.6723718048
+Pure Hybrid         0.7268784872
+B6 + Hybrid-fill    0.7308472686
+
+Hybrid - B6
+raw                 +0.0545066824
+median              +0.0557034913
+95% CI              [+0.0269870416,+0.0750180195]
+P(>0)                1.0000
+
+Fill - B6
+raw                 +0.0584754637
+median              +0.0591551676
+95% CI              [+0.0301804537,+0.0814020218]
+P(>0)                1.0000
+
+Hybrid - Fill
+raw                 -0.0039687813
+median              -0.0039491728
+95% CI              [-0.0137571379,+0.0058102163]
+P(Hybrid > Fill)     0.2037
 ```
 
-## B24X exploratory matched pilot
+Fill has the best 12-target point estimate while preserving every B6 decision. The Hybrid-vs-Fill interval crosses zero.
 
-B24X was created only to answer a narrower exploratory question after the formal B23 gate failed: **does the denser B23 report supervision produce a better MRI learner when downstream exposure is matched?**
+## B25X Synovitis diagnosis
 
-The two arms used the same 692 studies in exactly the same order, the same frozen weak-v2-safe B16-v2 encoder, the same 90% post-resize crop, the same architecture, optimizer, scheduler horizon, augmentations and fixed epoch-2 endpoint. Gold studies and the frozen weak-v2 holdout were excluded from gradients.
-
-Matched supervision surface:
+Per-target analysis showed that the full macro gain is dominated by Synovitis:
 
 ```text
-shared studies                         692
-possible cells                        8304
-B6 usable cells                       3045  (36.7%)
-B23 usable cells                      5697  (68.6%)
-B23-only added cells                  2844
-B6 cells dropped by B23                192
-cells where both committed           2853
-disagreements where both committed     70  (2.5%)
+Synovitis AUC
+B6       0.2370
+Hybrid   0.9221
+Fill     0.9123
 ```
 
-Training completed with exact coverage:
+Excluding Synovitis:
 
 ```text
-B6 control
-E1 loss 0.8581187165
-E2 loss 0.7132374823
+11-target macro
+B6       0.7119498792
+Hybrid   0.7091330840
+Fill     0.7143481419
 
-B23/Qwen candidate
-E1 loss 0.7599072829
-E2 loss 0.6096711156
+Hybrid - B6   -0.0028167951
+Fill - B6     +0.0023982627
 ```
 
-The loss values are not directly comparable because the supervision masks differ; frozen holdout AUC is the meaningful comparison.
-
-### Frozen weak-v2 evaluation
-
-Leakage check:
+Training-label audit:
 
 ```text
-B24X training studies        692
-weak-v2 holdout studies      623
-train/holdout overlap          0
+B6 Synovitis                  322 positive / 13 negative
+Hybrid-only additions          66 positive / 136 negative
+Final Fill                    388 positive / 149 negative
 ```
 
-Result:
+Frozen weak-v2 Synovitis has only `77` positives and `4` negatives. Nevertheless, the effect is not controlled by one lucky negative:
 
 ```text
-B6 control macro AUC       0.6148488366  [0.5856757959,0.6451316589]
-B23/Qwen macro AUC         0.7116126450  [0.6785972089,0.7435358854]
-raw B23 - B6              +0.0967638083
-paired median             +0.0963512743
-paired 95% CI             [+0.0612014772,+0.1316174812]
-P(B23 > B6)                1.0000
-valid bootstrap            4913 / 5000
+leave-one-negative-out AUC range
+B6       0.177489 -- 0.259740
+Hybrid   0.900433 -- 0.978355
+Fill     0.887446 -- 0.961039
 ```
 
-Interpretation: this is strong **exploratory cross-teacher evidence** that richer B23 supervision improved MRI learning on this matched pilot. However, weak-v2 is labelled by B6, not by experts. It is a development/teacher-agreement surface and cannot promote a model.
+The current interpretation is therefore narrow: **Hybrid-fill repaired a severe negative-class coverage failure for Synovitis. Across the other eleven targets, the net effect is approximately neutral.**
 
-### Per-target weak-v2 AUC
+## Current scientific position
 
-| Target | B6 | B23 | Delta |
-|---|---:|---:|---:|
-| Synovitis | 0.5292 | 0.8636 | +0.3344 |
-| PF OA | 0.4492 | 0.7297 | +0.2804 |
-| Lateral Meniscus | 0.4658 | 0.6830 | +0.2172 |
-| ACL | 0.4840 | 0.6519 | +0.1678 |
-| Contusion | 0.4596 | 0.6093 | +0.1497 |
-| Medial Meniscus | 0.6399 | 0.7123 | +0.0724 |
-| MCL | 0.6182 | 0.6610 | +0.0427 |
-| Medial OA | 0.7170 | 0.7260 | +0.0091 |
-| Lateral OA | 0.7082 | 0.6946 | -0.0137 |
-| Effusion | 0.7736 | 0.7594 | -0.0142 |
-| Baker's | 0.7829 | 0.7645 | -0.0184 |
-| Fracture | 0.7504 | 0.6842 | -0.0663 |
-
-The target pattern shows that simple supervision count alone cannot explain every effect. For example, Fracture gained many B23 labels but lost weak-v2 AUC. This motivates the density-only ablation rather than target-wise tuning.
-
-## B24X-Density ablation
-
-The density arm tests only the contribution of **filling B6-silent cells**:
-
-```text
-if B6 is committed:   keep B6 target and weight exactly
-if B6 is silent:      use B23 target/weight if B23 is committed
-otherwise:            remain unsupervised
-```
-
-Frozen surface:
-
-```text
-shared studies                 692
-B6 cells preserved            3045
-B23-only cells added           2844
-final supervised cells         5889
-B6 cells dropped                  0
-B6 labels overridden              0
-```
-
-Training completed with exact coverage:
-
-```text
-E1 loss 0.7647414911
-E2 loss 0.6197285242
-checkpoint  runs/b24x_density/density/b24x_density_model.pt
-```
-
-**Current status:** density training is complete; frozen weak-v2 evaluation is the next step. No gold evaluation is permitted for this exploratory arm.
-
-## Scientific position
-
-The campaign now supports four distinct conclusions:
-
-1. **More downstream epochs are not the answer.** B22 showed that weak-training loss can continue falling while expert ranking worsens.
-2. **B23-v1 is not formally admissible under its own predeclared gate.** Its specificity is lower than B6, so formal B24 remains blocked.
-3. **Nevertheless, B23 supervision contains useful learning signal.** In the exploratory matched B24X pilot it improved B6-teacher agreement by almost `0.10` macro AUC despite the evaluation surface favoring B6.
-4. **We still do not know whether the gain is mainly label density or changed semantics.** B24X-Density is designed to answer exactly that question without using gold.
+1. More downstream epochs are not the next lever under the current recipe.
+2. B23-v1 remains formally rejected by its own specificity gate.
+3. B24X/B24X-Density show that recovering B6-silent supervision can be useful, and that replacing B6 decisions is unnecessary on the measured development surface.
+4. B25X scales that finding to 2,497 studies but shows that the aggregate gain is highly target-specific, dominated by Synovitis class coverage.
+5. B20 remains the active working model. The next phase should improve the current B20-family model rather than switching architecture wholesale.
+6. No DINOv2 or soft-dense-label branch is currently planned.
 
 ## Governance
 
 ```text
 B20 remains ACTIVE WORKING MODEL
 B23-v1 formal gate FAILED
-no B23 formal development split exists
 formal B24 has NOT been run
-B24X is exploratory only
-B24X gold acceptance is PROHIBITED
-B24X model promotion is PROHIBITED
-B24X-Density gold evaluation is PROHIBITED
+B24X/B24X-Density/B25X are exploratory only
+no B24X/B25X gold acceptance
+no B24X/B25X promotion
 weak-v2 measures B6 teacher agreement, not expert truth
 58-study expert surface is reused/post-hoc, not independent validation
 hidden competition evaluation remains the independent predictive signal
-no target-wise model mixing from the B24X per-target table
 ```
-
-## Immediate next step
-
-Evaluate the trained B24X-Density checkpoint on the same frozen 623-study weak-v2 holdout while reusing the already saved B6 and full-B23 predictions. Compare:
-
-```text
-B6       = 0.6148488366
-Density  = pending
-Full B23 = 0.7116126450
-```
-
-This will estimate how much of the full B23 point-estimate gain is captured by added supervision density alone.
 
 ## Canonical records
 
@@ -232,5 +190,6 @@ This will estimate how much of the full B23 point-estimate gain is captured by a
 - [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md) — experiment ledger.
 - [`B23_LLM_REPORT_LABELS.md`](B23_LLM_REPORT_LABELS.md) — B23 protocol/background.
 - [`B24_SUPERVISION_SOURCE.md`](B24_SUPERVISION_SOURCE.md) — formal B24 protocol.
-- [`B24X_EXPLORATORY_SUPERVISION.md`](B24X_EXPLORATORY_SUPERVISION.md) — exploratory B24X/B24X-Density record.
+- [`B24X_EXPLORATORY_SUPERVISION.md`](B24X_EXPLORATORY_SUPERVISION.md) — B24X/B24X-Density record.
+- [`B25X_HYBRID_SUPERVISION.md`](B25X_HYBRID_SUPERVISION.md) — full hybrid experiment and Synovitis mechanism audit.
 - [`VALIDATION.md`](VALIDATION.md) — validation governance.
