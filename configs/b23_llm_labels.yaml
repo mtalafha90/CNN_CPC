@@ -33,7 +33,7 @@ b23_model: qwen3:14b
 b23_ollama_host: http://localhost:11434
 b23_dtype: gguf
 b23_quantisation: Q4_K_M             # reported by the daemon, recorded in provenance
-b23_max_new_tokens: 2048
+b23_max_new_tokens: 4096            # output budget; see note below
 b23_decoding: greedy                 # temperature 0, top_k 0; no RNG dependence
 b23_think: false                     # Qwen3 reasoning mode off for extraction
 b23_max_attempts: 3
@@ -43,7 +43,15 @@ b23_require_reproducible: true       # refuse to certify an unpinned export
 # system prompt is ~5.9k characters and the longest sampled report ~2.1k, so a
 # default window would cut the report in half and corrupt labels invisibly.
 # The backend estimates prompt length and refuses rather than truncating.
-b23_num_ctx: 8192
+b23_num_ctx: 16384
+
+# The context window must hold the prompt AND the answer. Twelve targets, each
+# with a state, a confidence and a verbatim evidence span, pretty-printed by
+# Ollama: non-English spans tokenise poorly (Turkish and Dutch diacritics can
+# cost a token per character), so 2048 output tokens truncated the JSON
+# mid-string. The backend now detects done_reason == "length", escalates the
+# budget, and refuses to start when prompt + output would exceed num_ctx.
+# Evidence spans are also capped at 120 characters, which is the real fix.
 
 # Frozen B6-compatible supervision policy. The downstream B7 family reads these
 # exact semantics, so keeping them identical is what makes B23 a drop-in

@@ -31,6 +31,22 @@ from rsna_knee.constants import TARGETS
 DIGEST = "f" * 64
 
 
+def _long_evidence_json():
+    """Twelve verbose verbatim spans -- what actually overflows the budget."""
+    return json.dumps(
+        {
+            "findings": {
+                target: {
+                    "state": "positive",
+                    "confidence": 0.9,
+                    "evidence": "Bulgular: " + ("efüzyon izlenmiştir " * 20),
+                }
+                for target in TARGETS
+            }
+        }
+    )
+
+
 def _findings_json():
     return json.dumps(
         {
@@ -45,10 +61,19 @@ def _findings_json():
 class _FakeOllama(HTTPServer):
     """Minimal stand-in for `ollama serve`."""
 
-    def __init__(self, *, installed=("qwen3:14b",), completion=None, reject_think=False):
+    def __init__(
+        self,
+        *,
+        installed=("qwen3:14b",),
+        completion=None,
+        reject_think=False,
+        truncate_below=None,
+    ):
         self.installed = list(installed)
         self.completion = completion if completion is not None else _findings_json()
         self.reject_think = reject_think
+        # Emulate hitting the output limit unless num_predict reaches this value.
+        self.truncate_below = truncate_below
         self.chat_bodies: list[dict] = []
         super().__init__(("127.0.0.1", 0), _FakeHandler)
 
@@ -95,7 +120,25 @@ class _FakeHandler(BaseHTTPRequestHandler):
                 self._send({"error": "unknown field think"}, status=400)
                 return
             self.server.chat_bodies.append(body)
-            self._send({"message": {"role": "assistant", "content": self.server.completion}})
+            limit = self.server.truncate_below
+            num_predict = (body.get("options") or {}).get("num_predict", 0)
+            if limit is not None and num_predict < limit:
+                # Grammar-constrained decoding emits valid JSON right up to the
+                # token limit, so a cut-off answer ends mid-string.
+                cut = self.server.completion[:2064]
+                self._send(
+                    {
+                        "message": {"role": "assistant", "content": cut},
+                        "done_reason": "length",
+                    }
+                )
+                return
+            self._send(
+                {
+                    "message": {"role": "assistant", "content": self.server.completion},
+                    "done_reason": "stop",
+                }
+            )
         else:
             self._send({"error": "not found"}, status=404)
 
@@ -208,7 +251,7 @@ def test_context_guard_refuses_rather_than_letting_ollama_truncate(fake_ollama):
     server = fake_ollama()
     # 512 tokens cannot hold the ~2k-token system prompt plus a report.
     call, _ = make_ollama_backend(SYSTEM_PROMPT, host=server.url, num_ctx=512)
-    with pytest.raises(RuntimeError, match="would silently truncate"):
+    with pytest.raises(RuntimeError, match="exceed num_ctx"):
         call(SYSTEM_PROMPT, "a knee MRI report " * 200)
     assert server.chat_bodies == []  # nothing was sent
 
@@ -239,3 +282,66 @@ def test_a_full_json_schema_is_sent_rather_than_generic_json(fake_ollama):
         "uncertain",
         "unmentioned",
     ]
+
+
+# --- Truncated completions ---------------------------------------------------
+# Reproduces the observed failure: three identical
+# "Unterminated string starting at: line 61 column 19 (char 2064)" errors.
+
+
+def test_a_truncated_completion_escalates_the_budget_instead_of_failing(fake_ollama):
+    server = fake_ollama(truncate_below=4096, completion=_long_evidence_json())
+    call, _ = make_ollama_backend(
+        SYSTEM_PROMPT, host=server.url, max_new_tokens=2048, num_ctx=16384
+    )
+    out = call("system text", "user text")
+
+    assert set(parse_extraction_response(out)) == set(TARGETS)
+    budgets = [(b.get("options") or {}).get("num_predict") for b in server.chat_bodies]
+    assert budgets == [2048, 4096], "expected one escalation, not a blind repeat"
+
+
+def test_truncation_that_cannot_be_escalated_reports_the_real_cause(fake_ollama):
+    from rsna_knee.b23_local_llm import TruncatedCompletionError
+
+    # num_ctx leaves no room to double the budget.
+    server = fake_ollama(truncate_below=99999, completion=_long_evidence_json())
+    call, _ = make_ollama_backend(
+        SYSTEM_PROMPT, host=server.url, max_new_tokens=2048, num_ctx=5000
+    )
+    with pytest.raises(TruncatedCompletionError, match="output limit"):
+        call("system text", "user text")
+
+
+def test_extract_report_does_not_retry_a_deterministic_truncation(fake_ollama):
+    from rsna_knee.b23_llm_labels import extract_report
+    from rsna_knee.b23_local_llm import TruncatedCompletionError
+
+    server = fake_ollama(truncate_below=99999, completion=_long_evidence_json())
+    call, _ = make_ollama_backend(
+        SYSTEM_PROMPT, host=server.url, max_new_tokens=2048, num_ctx=5000
+    )
+    with pytest.raises(TruncatedCompletionError):
+        extract_report("a knee report", call, max_attempts=3, sleep=lambda _s: None)
+    # Greedy decoding is deterministic: one attempt, not three identical ones.
+    assert len(server.chat_bodies) == 1
+
+
+def test_the_context_guard_accounts_for_the_output_budget_too(fake_ollama):
+    server = fake_ollama()
+    # Prompt ~2k tokens + 4096 output cannot fit a 4096 window.
+    call, _ = make_ollama_backend(
+        SYSTEM_PROMPT, host=server.url, max_new_tokens=4096, num_ctx=4096
+    )
+    with pytest.raises(RuntimeError, match="together exceed num_ctx"):
+        call(SYSTEM_PROMPT, "a knee MRI report")
+    assert server.chat_bodies == []
+
+
+def test_evidence_spans_are_capped_so_the_output_cannot_overflow():
+    from rsna_knee.b23_local_llm import EVIDENCE_MAX_CHARS
+
+    parsed = parse_extraction_response(_long_evidence_json())
+    for target in TARGETS:
+        assert len(parsed[target].evidence) <= EVIDENCE_MAX_CHARS + 3
+    assert "under 120 characters" in SYSTEM_PROMPT

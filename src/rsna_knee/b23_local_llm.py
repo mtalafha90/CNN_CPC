@@ -52,6 +52,16 @@ OLLAMA_DEFAULT_HOST = "http://localhost:11434"
 # characters lands around 2.5-3k tokens, so the default would quietly cut the
 # report in half and corrupt the labels invisibly. Set it explicitly.
 OLLAMA_DEFAULT_NUM_CTX = 8192
+# Output budget. Twelve targets, each with a state, a confidence and a verbatim
+# evidence span, pretty-printed by Ollama. Non-English spans tokenise poorly --
+# Turkish and Dutch diacritics can cost a token per character -- so 2048 was not
+# enough and produced completions cut off mid-string.
+OLLAMA_DEFAULT_NUM_PREDICT = 4096
+# Hard ceiling for automatic escalation after a truncated completion.
+OLLAMA_MAX_NUM_PREDICT = 16384
+# Verbatim evidence is the bulk of the output. Capping it is the real fix for
+# truncation; the cap is stated in the prompt and enforced after parsing.
+EVIDENCE_MAX_CHARS = 120
 
 DECODING_GREEDY = "greedy"
 
@@ -178,6 +188,16 @@ def looks_openly_downloadable(model_id: str) -> bool:
     return family in OPEN_OLLAMA_FAMILIES
 
 
+class TruncatedCompletionError(RuntimeError):
+    """The model hit its output-token budget before finishing the JSON.
+
+    Worth its own type because the fix is specific -- raise num_predict or
+    shorten the requested output -- and because retrying it unchanged is
+    guaranteed to fail: greedy decoding is deterministic, so an identical
+    request produces an identical truncation.
+    """
+
+
 def _ollama_request(host: str, path: str, payload: dict | None = None, *, timeout: float = 600.0):
     """Call the local Ollama HTTP API without going through any proxy.
 
@@ -298,7 +318,7 @@ def make_ollama_backend(
     model: str = DEFAULT_LOCAL_MODEL,
     host: str = OLLAMA_DEFAULT_HOST,
     num_ctx: int = OLLAMA_DEFAULT_NUM_CTX,
-    max_new_tokens: int = 2048,
+    max_new_tokens: int = OLLAMA_DEFAULT_NUM_PREDICT,
     seed: int = 2026,
     think: bool = False,
     timeout: float = 600.0,
@@ -335,14 +355,9 @@ def make_ollama_backend(
         "num_predict": int(max_new_tokens),
     }
 
-    def _call(system: str, user: str) -> str:
-        estimated = estimate_prompt_tokens(system, user)
-        if estimated > int(num_ctx):
-            raise RuntimeError(
-                f"prompt is about {estimated} tokens but num_ctx is {num_ctx}; Ollama "
-                "would silently truncate the report and corrupt the labels. "
-                "Raise --num-ctx."
-            )
+    def _post(system: str, user: str, num_predict: int) -> dict:
+        call_options = dict(options)
+        call_options["num_predict"] = int(num_predict)
         body = {
             "model": str(model),
             "messages": [
@@ -353,17 +368,56 @@ def make_ollama_backend(
             # A full JSON Schema when we have one, so a missing target or an
             # invented state is impossible rather than a retry.
             "format": schema if schema is not None else "json",
-            "options": options,
+            "options": call_options,
             "think": bool(think),
         }
         try:
-            payload = _ollama_request(host, "/api/chat", body, timeout=timeout)
+            return _ollama_request(host, "/api/chat", body, timeout=timeout)
         except RuntimeError:
             # Older builds reject the unknown `think` field; retry without it.
             body.pop("think", None)
-            payload = _ollama_request(host, "/api/chat", body, timeout=timeout)
-        content = (payload.get("message") or {}).get("content", "")
-        return strip_thinking(content)
+            return _ollama_request(host, "/api/chat", body, timeout=timeout)
+
+    def _call(system: str, user: str) -> str:
+        # The context window must hold the prompt AND the generated answer.
+        # Checking the prompt alone let a large num_predict silently collide
+        # with num_ctx.
+        prompt_tokens = estimate_prompt_tokens(system, user)
+        budget = int(max_new_tokens)
+        if prompt_tokens + budget > int(num_ctx):
+            raise RuntimeError(
+                f"prompt is about {prompt_tokens} tokens and the output budget is "
+                f"{budget}, which together exceed num_ctx={num_ctx}. Ollama would "
+                "truncate the report or the answer. Raise --num-ctx."
+            )
+
+        last_reason = ""
+        while True:
+            payload = _post(system, user, budget)
+            message = payload.get("message") or {}
+            # Newer builds put reasoning in its own field; older ones inline a
+            # <think> block in the content. Handle both.
+            content = strip_thinking(message.get("content", ""))
+            last_reason = str(payload.get("done_reason", ""))
+            if last_reason != "length":
+                return content
+
+            # Truncated. Retrying unchanged cannot help -- greedy decoding is
+            # deterministic -- so escalate the budget instead, while it still
+            # fits the context window.
+            doubled = min(budget * 2, OLLAMA_MAX_NUM_PREDICT)
+            if doubled <= budget or prompt_tokens + doubled > int(num_ctx):
+                raise TruncatedCompletionError(
+                    f"model stopped at the output limit (done_reason={last_reason!r}) "
+                    f"with num_predict={budget} and num_ctx={num_ctx}; the JSON is "
+                    "incomplete. Raise --max-new-tokens and --num-ctx together, or "
+                    "shorten the requested evidence spans."
+                )
+            print(
+                f"[B23] completion truncated at num_predict={budget}; "
+                f"retrying at {doubled}"
+            )
+            budget = doubled
 
     return _call, provenance
 

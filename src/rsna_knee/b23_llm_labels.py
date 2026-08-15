@@ -53,8 +53,11 @@ import pandas as pd
 from .b23_local_llm import (
     BACKEND_LOCAL_TRANSFORMERS,
     BACKEND_OLLAMA,
+    EVIDENCE_MAX_CHARS,
     OLLAMA_DEFAULT_HOST,
     OLLAMA_DEFAULT_NUM_CTX,
+    OLLAMA_DEFAULT_NUM_PREDICT,
+    TruncatedCompletionError,
     BACKEND_LOCAL_VLLM,
     DEFAULT_LOCAL_MODEL,
     ModelProvenance,
@@ -100,7 +103,7 @@ B23_MIN_REPORTED_CONFIDENCE = 0.0
 B23_MAX_REPORTED_CONFIDENCE = 1.0
 
 DEFAULT_MODEL = DEFAULT_LOCAL_MODEL
-DEFAULT_MAX_TOKENS = 2048
+DEFAULT_MAX_TOKENS = OLLAMA_DEFAULT_NUM_PREDICT
 
 # These are ABNORMALITY targets, not tear-only targets. The frozen B6 v1.2.1
 # regression suite fixes this semantics and B23 must match it exactly, because
@@ -219,6 +222,8 @@ Report a calibrated confidence in [0,1] for each finding: how certain you are th
 
 Also give a short verbatim `evidence` span copied from the report (in its original language) that justifies the state. Use an empty string when the state is "unmentioned".
 
+**Keep every `evidence` span under 120 characters.** Quote the shortest phrase that settles the question, not the whole sentence and never a whole paragraph. Twelve long spans overflow the output budget and truncate the answer.
+
 Return ONLY a JSON object, no prose and no code fences, with exactly this shape:
 
 {"findings": {"<target name>": {"state": "...", "confidence": 0.0, "evidence": "..."}, ...}}
@@ -321,6 +326,10 @@ def parse_extraction_response(text: str) -> dict[str, TargetExtraction]:
         if not B23_MIN_REPORTED_CONFIDENCE <= confidence <= B23_MAX_REPORTED_CONFIDENCE:
             raise ValueError(f"target {target!r} confidence {confidence} outside [0,1]")
         evidence = str(cell.get("evidence", "") or "")
+        if len(evidence) > EVIDENCE_MAX_CHARS:
+            # Truncate rather than reject: the span is an audit aid, not
+            # supervision, so an over-long quote is not worth failing a report.
+            evidence = evidence[:EVIDENCE_MAX_CHARS].rstrip() + "..."
         out[target] = TargetExtraction(state=state, confidence=confidence, evidence=evidence)
     return out
 
@@ -482,7 +491,15 @@ def extract_report(
     user = build_user_prompt(report)
     errors: list[str] = []
     for attempt in range(1, int(max_attempts) + 1):
-        raw = backend(SYSTEM_PROMPT, user)
+        try:
+            raw = backend(SYSTEM_PROMPT, user)
+        except TruncatedCompletionError:
+            # The backend already escalated its output budget as far as the
+            # context window allows. Greedy decoding is deterministic, so
+            # repeating the identical request would repeat the identical
+            # truncation -- fail now with the specific cause intact rather
+            # than burying it under identical retries.
+            raise
         try:
             extraction = parse_extraction_response(raw)
         except ValueError as exc:
@@ -491,7 +508,12 @@ def extract_report(
                 sleep(float(sleep_seconds) * attempt)
             continue
         return extraction, {"attempts": attempt, "empty_report": False, "raw": raw}
-    raise RuntimeError("B23 extraction failed after retries: " + " | ".join(errors))
+    raise RuntimeError(
+        "B23 extraction failed after retries: "
+        + " | ".join(errors)
+        + "\n(If every attempt reports the same parse error, the decoding is "
+        "deterministic and retrying cannot help -- check num_predict/num_ctx.)"
+    )
 
 
 def build_b23_frame(
