@@ -57,13 +57,23 @@ def test_b15_ssl_pool_excludes_all_gold_and_v2_holdout():
     assert stats["excluded_v2_holdout_studies"] == 623
 
 
+def _config_path(name: str) -> Path:
+    """Locate a legacy config relative to this file, not the working directory.
+
+    The repository moved `configs/` under `developments/` during the clean-
+    structure reorganisation and these two tests broke on a hard-coded relative
+    path. Anchoring on __file__ makes them survive the next move as well.
+    """
+    return Path(__file__).resolve().parent.parent / "configs" / name
+
+
 def test_downstream_config_freezes_b13_recipe():
-    config = yaml.safe_load(Path("configs/b15_mri_ssl.yaml").read_text())
+    config = yaml.safe_load(_config_path("b15_mri_ssl.yaml").read_text())
     require_v2_downstream_contract(config)
 
 
 def test_downstream_contract_rejects_architecture_drift():
-    config = yaml.safe_load(Path("configs/b15_mri_ssl.yaml").read_text())
+    config = yaml.safe_load(_config_path("b15_mri_ssl.yaml").read_text())
     config["b7_n_slices"] = 24
     with pytest.raises(ValueError, match="b7_n_slices"):
         require_v2_downstream_contract(config)
