@@ -1,0 +1,93 @@
+# B24 — supervision source as the only variable.
+#
+# Two arms, identical in every respect except which labeller produced the
+# training cells:
+#   b6_control     B6 v1.2.1 regex supervision
+#   b23_candidate  B23 local-LLM supervision (qwen3:14b, Ollama)
+#
+# Both arms train on the SAME studies, so the batch sequence, optimiser
+# trajectory and series exposure are identical. What differs is which cells
+# inside those studies carry supervision, and what state each carries — which
+# is precisely the B23 hypothesis, since B6 discards 64% of the cells.
+#
+# The encoder is the weak-v2-safe B16-v2 checkpoint, not the historical B16.
+# That is not a recipe change: historical B16 trained on all 4,349 report
+# studies including the weak-v2 holdout, so a model built on it may not be
+# scored there. B24 is scored on both weak surfaces, so it needs the safe one.
+
+data_root: /data/rsna-knee-abnormality-detection
+train_csv: train.csv
+train_series_csv: train_series.csv
+
+seed: 2026
+competition_mode: true
+requested_gpus: 1
+allow_external_pretrained: true
+pretrained: true
+
+device: auto
+precision: auto
+runtime_budget_hours: 8.5
+runtime_reserve_minutes: 10
+
+num_workers: null
+persistent_workers: true
+prefetch_factor: 2
+multiprocessing_context: spawn
+series_cache_mb_per_worker: 256
+strict_dicom: false
+strict_dicom_inference: true
+
+# Unchanged B20 hierarchy.
+b12_use_physical_scale: false
+b12_1_series_pool_heads: 8
+b7_n_slices: 16
+b7_image_size: 224
+b7_triplet_gap: 1
+b7_batch_size: 2
+b7_encoder_batch_size: 24
+b7_gradient_checkpointing: true
+b7_dropout: 0.25
+b7_transformer_layers: 2
+b7_transformer_heads: 8
+b7_transformer_ff_mult: 2.0
+b7_pathology_layers: 1
+
+# Unchanged B20 frozen-encoder recipe. Epoch 2 is fixed IN ADVANCE, so there is
+# no checkpoint selection and therefore no selection optimism to audit.
+b7_epochs: 2
+b7_encoder_lr: 0.0
+b7_head_lr: 0.0001
+b7_min_lr: 0.000001
+b7_weight_decay: 0.0001
+b7_grad_clip: 1.0
+b17_encoder_frozen: true
+b17_label_smoothing: 0.0
+b17_robust_loss: none
+b18_expert_selection: false
+
+# B24-v1 freezes the matched-study surface.
+b24_surface: matched
+b24_crop_fraction: 0.90
+
+# Frozen supervision semantics, identical for both arms. Only the SOURCE of the
+# states differs; the mapping from state to target and weight does not.
+b7_min_confidence: 0.75
+b7_positive_target: 0.85
+b7_negative_target: 0.05
+b7_positive_weight: 0.50
+b7_negative_weight: 1.00
+
+# Frozen augmentation and evaluation surface.
+b7_noise_std: 0.02
+b7_slice_dropout: 0.08
+b7_train_gap_choices: [1, 2]
+b7_center_jitter: 2
+b7_rotation_deg: 5.0
+b7_translate_frac: 0.03
+b7_scale_jitter: 0.05
+b7_gamma_jitter: 0.12
+b7_bias_field_strength: 0.08
+b7_eval_tta_offsets: [-1, 0, 1]
+b7_eval_batch_size: 2
+b7_n_bootstrap: 5000

@@ -140,7 +140,22 @@ B21  pre-resize crop candidate; weak-v2 passed, gold acceptance failed; NOT PROM
 B22  five-epoch B21 duration audit; E2 best, no longer-training rescue; CLOSED
 B23  local-LLM report-labeller experiment (qwen3:14b / Ollama)
      IMPLEMENTED / NOT YET RUN / NOT YET ADOPTED
+B24  matched two-arm B6-vs-B23 supervision comparison
+     IMPLEMENTED / NOT YET RUN / NOT YET ADOPTED
 ```
+
+B24 is the experiment B23 exists to enable. Two arms share the identical B20
+recipe -- frozen weak-v2-safe encoder, 90% post-resize crop, 224, fixed epoch 2
+set in advance -- and the same studies in the same order, so the batch sequence
+and optimiser trajectory are identical. Only the supervision cells differ.
+
+Both arms are scored on both weak surfaces, because each surface favours the
+arm trained by its own labeller; only B24 also winning on B6's own weak-v2
+surface is informative. The decision comes from one predeclared gold look with
+a 0.95 probability-of-superiority threshold, chosen so that a difference smaller
+than the 58-study surface can resolve cannot promote anything.
+
+See [`B24_SUPERVISION_SOURCE.md`](B24_SUPERVISION_SOURCE.md).
 
 B23 is the first experiment in the campaign that changes the supervision source
 rather than the model. It leaves B20 completely untouched: no architecture,

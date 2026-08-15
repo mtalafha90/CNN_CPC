@@ -17,6 +17,7 @@
 | **B21-v1** | crop-order correction | native 90% crop -> normalization -> resize 224 | weak-v2 `0.7410090411`; gold `0.6573196516` | weak-v2 passed; gold acceptance failed |
 | **B22** | B21 training-duration audit | same B21 preprocessing, E1-E5 | best E2 `0.6574269018` | closed; longer training did not rescue |
 | **B23** | report-labeller substitution | supervision source only; model untouched | not yet run | implemented; not run; not adopted |
+| **B24** | B6 vs B23 supervision, matched arms | B20 recipe, fixed E2, labels are the only variable | not yet run | implemented; not run; not adopted |
 
 The 58 expert-labelled studies are a repeatedly reused **development/model-selection surface, not independent validation**. Hidden competition evaluation remains the independent predictive-performance signal.
 
@@ -126,6 +127,7 @@ The current optimization bottleneck is therefore the **weak-label / development-
 - [`docs/B21_FULL_ACCEPTANCE.md`](docs/B21_FULL_ACCEPTANCE.md) — completed one-look B21 acceptance result.
 - [`docs/B22_DURATION_AUDIT.md`](docs/B22_DURATION_AUDIT.md) — completed E1-E5 duration audit.
 - [`docs/B23_LLM_REPORT_LABELS.md`](docs/B23_LLM_REPORT_LABELS.md) — local-LLM report labeller, gate and development split.
+- [`docs/B24_SUPERVISION_SOURCE.md`](docs/B24_SUPERVISION_SOURCE.md) — matched B6-vs-B23 supervision experiment and the full pipeline.
 - [`docs/VISUALIZATION_GUIDE.md`](docs/VISUALIZATION_GUIDE.md) — visualization commands and interpretation rules.
 - [`docs/VALIDATION.md`](docs/VALIDATION.md) — validation governance.
 
@@ -215,6 +217,8 @@ B20: ACTIVE WORKING MODEL; preserve checkpoint/preprocessing exactly
 B21: closed; weak-v2 passed but gold acceptance failed
 B22: closed exploratory duration audit; E2 best, no longer-training rescue
 B23: implemented, not run, not adopted; supervision-source experiment only
+B24: implemented, not run, not adopted; matched two-arm B6-vs-B23 comparison
+B24 gold acceptance: ONE predeclared look; median > 0 AND P(B24>B20) >= 0.95
 B23 labeller audit: descriptive/post-hoc, NOT confirmatory validation
 B23 must not redefine target semantics; frozen B6 abnormality cases are pinned
 58-study expert surface: reused development surface, not independent validation
