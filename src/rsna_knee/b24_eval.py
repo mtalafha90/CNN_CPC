@@ -26,7 +26,6 @@ from .b12_training import _load_series_policy
 from .b12_variable_series import audit_variable_series_surface, collate_variable_series
 from .b12_1_gold_eval import predict_b12_1
 from .b12_1_hierarchical import build_b12_1_model
-from .b13_training import B13_INPUT_NORMALIZATION
 from .b15_ssl import load_frozen_v2_manifest
 from .b21_dataset import make_matched_crop_dataset
 from .b23_llm_labels import load_frozen_b23_export
@@ -53,10 +52,12 @@ def _predict(model, uids, config, root, series_policy_path, runtime):
     series = load_series_csv(root / config.get("train_series_csv", "train_series.csv"))
     series, _ = backfill_series_metadata(series, root, split="train")
     _summary, index = audit_variable_series_surface(series, uids)
+    offsets = tuple(int(x) for x in config.get("b7_eval_tta_offsets", (-1, 0, 1)))
     dataset_config = make_b7_dataset_config(
         config,
-        normalization=B13_INPUT_NORMALIZATION,
-        offsets=tuple(config.get("b7_eval_tta_offsets", (-1, 0, 1))),
+        root,
+        train=False,
+        tta_offsets=offsets,
     )
     ds = make_matched_crop_dataset(
         "control",
