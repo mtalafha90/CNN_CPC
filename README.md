@@ -64,7 +64,7 @@ python -m training.train \
   --data-root /path/to/rsna-knee-abnormality-detection \
   --b6-root runs/b6_report_labels_v121 \
   --series-policy runs/b12_variable_series/audit/series_policy.json \
-  --report-ssl-checkpoint runs/b16_v2_safe_report/report_ssl/b16_v2_report_encoder.pt \
+  --report-ssl-checkpoint runs/b16_full_report/report_ssl/b16_report_encoder.pt \
   --out-root runs/current_model
 ```
 
