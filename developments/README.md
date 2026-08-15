@@ -10,6 +10,7 @@ It contains the B0--B26.2 experiment lineage, historical configurations, documen
 developments/
   configs/                  historical experiment configurations
   docs/                     experiment records and scientific notes
+  policies/                 frozen development-quality approvals
   src/rsna_knee/            complete historical implementation
   scripts/                  exploratory/run scripts
   tests/                    historical unit/regression tests
@@ -30,9 +31,16 @@ The current targeted-supervision records are:
 ```text
 docs/B26_TARGETED_FILL.md
 docs/B26_2_DETERMINISTIC_GATE.md
+policies/b26_2_quality_approval.json
 ```
 
-B26-v1 raw extraction is complete but failed its first manual negative-label quality audit. B26.1 reduced the raw 631 proposed Synovitis fill cells to 281 same-polarity candidates, but its fresh audit still achieved only 60% accepted negation precision (36/60), so B26.1 is also not approved for training. B26.2 is now the next frozen step: a deterministic precision-first evidence whitelist over the completed B26.1 output. It can only remove proposals and remains blocked from training until a new fresh manual audit passes. B20 remains the active working model throughout.
+B26-v1 raw extraction failed its first manual negative-label quality audit. B26.1 reduced the raw 631 proposed Synovitis fill cells to 281 same-polarity candidates, but its fresh audit still achieved only 60% accepted negation precision (36/60), so B26.1 is not approved for training. B26.2 then applied a deterministic precision-first evidence whitelist and retained 171 cells (76 positive, 95 negated). Its third fresh semantic review excluded all 160 previously reviewed UIDs and found 70/70 supported calls (20/20 positive, 50/50 negated) under the frozen B26.2 semantics. B26.2 is therefore approved for a controlled fixed-E2 B20-family training experiment only; B20 remains the active working model and no promotion has occurred.
+
+The fixed-E2 trainer is:
+
+```text
+src/rsna_knee/b26_2_training.py
+```
 
 For old commands from this archive, the implementation remains importable with:
 
