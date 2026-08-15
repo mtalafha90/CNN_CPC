@@ -25,7 +25,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--report-ssl-checkpoint",
-        default="runs/b16_v2_safe_report/report_ssl/b16_v2_report_encoder.pt",
+        default="runs/b16_full_report/report_ssl/b16_report_encoder.pt",
     )
     parser.add_argument("--out-root", default="runs/current_model")
     args = parser.parse_args()
