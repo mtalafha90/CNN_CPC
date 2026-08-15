@@ -212,7 +212,8 @@ def test_a_partial_smoke_test_export_can_never_be_used_for_training(tmp_path):
     )
     assert audit["partial_smoke_test"] is True
     assert audit["n_studies"] == 2
-    with pytest.raises(ValueError, match="partial smoke test"):
+    assert audit["scope"] == "smoke"
+    with pytest.raises(ValueError, match="throwaway smoke test"):
         load_frozen_b23_export(out)
 
 

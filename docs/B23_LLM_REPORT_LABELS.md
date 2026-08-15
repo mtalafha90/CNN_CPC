@@ -321,6 +321,49 @@ rsna-knee-b23-split \
 
 Step 1 needs the GPU but no network beyond the initial weight download, and no training. Steps 2 and 3 need neither GPU nor network. The whole of B23 leaves the B20 checkpoint untouched.
 
+## Scope: full, pilot, smoke
+
+A long labelling run that stops part-way leaves real work in the cache. `rsna-knee-b23-pilot` turns that into a valid, explicitly scoped export **without calling the model again**.
+
+```text
+full    every report in train.csv was labelled
+pilot   a declared subset, deliberately scoped; VALID for training
+smoke   a throwaway --limit run; REFUSED for training
+```
+
+A pilot is a legitimate experiment with a stated size; a smoke test is a twenty-report correctness check. Both are partial, but only one is something to draw a conclusion from.
+
+Cache entries are matched by full cache key, so an entry written under a different prompt or model is correctly a miss rather than silently reused — the pilot is built only from work that was actually done under the labelling function it claims.
+
+```bash
+rsna-knee-b23-pilot \
+  --train-csv "$DATA_ROOT/train.csv" \
+  --cache runs/b23_llm_report_labels/extraction_cache.jsonl \
+  --provenance runs/b23_llm_report_labels/policy.json \
+  --out-root runs/b23_pilot_1000 \
+  --pilot-size 1000
+```
+
+### What a pilot can and cannot show
+
+The weak pipeline **already trains on the 3,120 report-only studies B6 activates** — B20's `0.6672` came from those, not from the 58 expert cases. So a pilot smaller than 3,120 trains on *fewer* studies than B20 did, and its score is not directly comparable to B20's.
+
+What a pilot *can* do is compare B6 against B23 supervision **on the same studies**, which is exactly the B24 matched design. A pilot answers "do these labels beat those labels at this scale", not "is this better than B20".
+
+### Where B23's gain actually comes from
+
+```text
+report-only studies        4349
+B6 activates               3120   (71.7%)
+B6 leaves dark             1229   zero usable cells
+B6 usable cells           14123 of 52188   (27.1%)
+```
+
+So B23's contribution is two things, and neither is "58 → thousands":
+
+1. **denser cells inside the 3,120 studies B6 already reaches** — 27% coverage toward ~85%;
+2. **up to 1,229 studies B6 cannot label at all**, which only the `full` B24 surface variant can exploit, since the matched surface takes the intersection.
+
 ## Artifacts
 
 ```text

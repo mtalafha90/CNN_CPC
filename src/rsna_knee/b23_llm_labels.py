@@ -713,6 +713,7 @@ def run_b23_export(
         "possible_cells_total": possible_total,
         "cell_coverage": float(usable_total / possible_total) if possible_total else 0.0,
         "unique_reports_labelled": int(len(cache)),
+        "scope": "smoke" if limit is not None else "full",
         "partial_smoke_test": limit is not None,
         "limit": int(limit) if limit is not None else None,
         "external_model_reproducible": bool(provenance.reproducible) if provenance else False,
@@ -783,10 +784,14 @@ def load_frozen_b23_export(
         raise ValueError("B23 audit does not certify zero gold rows in training_targets.csv")
     if bool(policy.get("unmentioned_is_negative", False)):
         raise ValueError("B23 must not map unmentioned report states to negative")
+    # A declared pilot is a legitimate scoped experiment; a smoke test is a
+    # twenty-report correctness check. Both are partial, but only one is
+    # something to draw a conclusion from.
     if bool(audit.get("partial_smoke_test", False)):
         raise ValueError(
-            "this B23 export is a partial smoke test, not a full labelling run; "
-            "re-run without --limit before using it for training or a split"
+            "this B23 export is a throwaway smoke test, not a labelling run; "
+            "re-run without --limit, or build a declared pilot with "
+            "rsna-knee-b23-pilot, before using it for training or a split"
         )
     if require_reproducible and not bool(audit.get("external_model_reproducible", False)):
         raise ValueError(
