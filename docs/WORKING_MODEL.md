@@ -1,6 +1,6 @@
 # Active working model
 
-> **Decision — 2026-08-14:** **B20 remains the active working model.** B21-v1 passed weak-v2 but failed the predeclared full-data gold acceptance comparison. B22 then showed that extending the same pre-resize formulation from E2 to E5 does not rescue expert performance.
+> **Decision — 2026-08-15:** **B20 remains the active working model.** B23-v1 has now been run and audited, but its formal labeller gate failed on specificity. Formal B24 therefore remains blocked. The separate B24X exploratory pilot produced strong weak-v2 evidence for B23 supervision, but no gold evaluation or promotion is allowed. B24X-Density has completed training and awaits weak-v2 evaluation.
 
 ## Active model
 
@@ -12,165 +12,210 @@ implemented geometry   native MRI -> resize 224 -> center crop 90% -> resize 224
 cosine/vignette mask   no
 encoder                frozen historical B16 report-aligned encoder
 canonical gold score   0.667159355531343
+status                 ACTIVE WORKING MODEL
 ```
 
 Historical B20 is preserved unchanged.
 
-## Why B20 remains active
+## Why B20 still remains active
 
-### B21-v1: corrected pre-resize crop
+B20 remains active for governance reasons, not because the newer exploratory results are uninteresting.
 
-B21 changed the spatial ordering to:
+### B21-v1
+
+B21 corrected the crop ordering to:
 
 ```text
 B20 historical: native MRI -> resize 224 -> crop 90% -> resize 224
 B21-v1:         native MRI -> crop 90% -> percentile normalization -> resize 224
 ```
 
-The leakage-safe weak-v2 development comparison favored B21:
+Weak-v2 favored B21:
 
 ```text
 B20-v2 control macro AUC        0.7298727911
-B21 pre-resize macro AUC        0.7410090411
+B21-v1 macro AUC                0.7410090411
 raw B21 - control              +0.0111362500
 paired 95% CI        [+0.0001624070,+0.0226346590]
 P(B21 > control)                0.9758888435
 ```
 
-But the frozen full-data expert acceptance comparison went in the opposite direction:
+But the predeclared reused-gold acceptance comparison did not:
 
 ```text
-B20 canonical macro AUC         0.6671593555
 B20 replay macro AUC            0.6674066371
 B21 macro AUC                   0.6573196516
 B21 - B20 replay               -0.0100869854
-paired median                  -0.0095857726
 paired 95% CI        [-0.0328814731,+0.0117052345]
 P(B21 > B20)                    0.1812
+```
+
+B21 is closed and not promoted.
+
+### B22
+
+B22 tested whether B21 was simply undertrained. It was not:
+
+```text
+Epoch   training loss   expert macro AUC
+E1      0.7388751291    0.6135270850
+E2      0.6381611442    0.6574269018  <- best
+E3      0.6087977977    0.6387456622
+E4      0.5890809184    0.6136783995
+E5      0.5680555741    0.6282683534
+```
+
+The training objective continued to improve after E2 while expert ranking deteriorated. Longer downstream training therefore does not rescue the pre-resize formulation.
+
+## B23-v1 formal status
+
+B23-v1 replaces the B6 regex parser with a local `qwen3:14b` Ollama labeller while keeping the downstream target semantics fixed.
+
+The pilot labeller audit showed a large gain in state-only ranking and coverage:
+
+```text
+                         B6                 B23
+state-only macro AUC     0.7024597743       0.8125164416
+sensitivity              0.9748             0.9855
+specificity              0.6061             0.5678
+coverage                 0.3606             0.6365
+```
+
+Paired state-only AUC difference:
+
+```text
+raw B23 - B6             +0.1100566673
+paired median            +0.1095402088
+paired 95% CI            [+0.0680786389,+0.1531882641]
+P(B23 > B6)              1.0000
+```
+
+However, the formal B23 rule required specificity to exceed B6. It did not:
+
+```text
+B23 specificity          0.5678
+B6 specificity           0.6061
+formal gate              FAILED
 ```
 
 Therefore:
 
 ```text
-promotion_rule_passed              false
-scientific_superiority_supported   false
+B23 formally adopted          no
+canonical B23 holdout         not frozen
+formal B24                    blocked / not run
 ```
 
-B21-v1 is not promoted.
+The audit remains descriptive/post-hoc because the repeatedly reused 58-study expert surface has influenced development.
 
-Canonical records:
-- [`B21_PRERESIZE_CROP.md`](B21_PRERESIZE_CROP.md)
-- [`B21_FULL_ACCEPTANCE.md`](B21_FULL_ACCEPTANCE.md)
+## B24X exploratory result
 
-### B22: five-epoch duration audit
+B24X was explicitly separated from formal B24. It preserves the failed B23 gate and prohibits gold evaluation and promotion.
 
-B22 retrained the same pre-resize formulation from scratch for a coherent E1-E5 trajectory, using the same historical B16 frozen encoder, full 3,120-study B6 surface and five-epoch cosine schedule.
-
-The training loss decreased monotonically:
+Matched surface:
 
 ```text
-E1  0.7388751291
-E2  0.6381611442
-E3  0.6087977977
-E4  0.5890809184
-E5  0.5680555741
+shared studies                         692
+possible cells                        8304
+B6 usable cells                       3045
+B23 usable cells                      5697
+B23-only added cells                  2844
+B6 cells dropped by B23                192
+both committed                        2853
+disagreements                           70  (2.5%)
 ```
 
-The expert-gold macro AUC did not follow that improvement:
+Both arms used the same study order, same MRI exposure, same weak-v2-safe frozen B16-v2 encoder, same B20 post-resize crop, same optimizer/scheduler and fixed E2 endpoint.
+
+Frozen 623-study B6 weak-v2 evaluation, with zero train/holdout overlap:
 
 ```text
-E1  0.6135270850
-E2  0.6574269018  <- best
-E3  0.6387456622
-E4  0.6136783995
-E5  0.6282683534
+B6 control       0.6148488366  [0.5856757959,0.6451316589]
+B23/Qwen         0.7116126450  [0.6785972089,0.7435358854]
+raw B23 - B6    +0.0967638083
+paired median   +0.0963512743
+paired 95% CI   [+0.0612014772,+0.1316174812]
+P(B23 > B6)      1.0000
 ```
 
-B22 E2 reproduced prior B21 E2 within `+0.0001072501`, well inside the predefined `0.005` tolerance. Historical B20 replay also passed its sanity tolerance.
+This is strong exploratory cross-teacher evidence because B23 wins on a surface labelled by B6. It is still **not expert truth** and therefore cannot replace B20.
 
-Relative to the B22-audit B20 replay (`0.6679590975`):
+Per-target weak-v2 deltas:
 
 ```text
-E2 raw delta  -0.0105321958   paired 95% CI [-0.0323859143,+0.0098214527]
-E3 raw delta  -0.0292134353   paired 95% CI [-0.0523986045,-0.0087333144]
-E4 raw delta  -0.0542806980   paired 95% CI [-0.0827548184,-0.0276651497]
-E5 raw delta  -0.0396907441   paired 95% CI [-0.0654472831,-0.0162928843]
+Synovitis          +0.3344
+PF OA              +0.2804
+Lateral Meniscus   +0.2172
+ACL                +0.1678
+Contusion          +0.1497
+Medial Meniscus    +0.0724
+MCL                +0.0427
+Medial OA          +0.0091
+Lateral OA         -0.0137
+Effusion           -0.0142
+Baker's            -0.0184
+Fracture           -0.0663
 ```
 
-So longer downstream training does not rescue the pre-resize crop. E2 remains the observed optimum in this frozen-encoder weak-supervision regime.
+The heterogeneous target pattern means the gain should not be attributed to supervision count alone without an ablation.
 
-Canonical record: [`B22_DURATION_AUDIT.md`](B22_DURATION_AUDIT.md).
+## B24X-Density
 
-## Current interpretation
-
-The combined B18/B20/B21/B22 evidence now points away from training duration as the next optimization lever.
-
-Three observations matter:
-
-1. **B18 and B20 both peak around E2** on the reused expert surface.
-2. **B22 reproduces that E2 optimum for the pre-resize pipeline**, while E3-E5 continue lowering weak-training loss but degrade expert ranking.
-3. **Weak-v2 favored B21 while expert gold did not**, showing that teacher agreement is not a sufficient surrogate for expert-pathology ranking for near-neighbor model selection.
-
-The practical bottleneck is therefore more likely the **weak-label / development-selection problem** than insufficient training duration or the specific crop-order defect.
-
-This is consistent with instance-dependent report supervision: continued optimization can improve agreement with report-derived targets while moving away from the expert-defined ranking objective.
-
-## Historical B20/B18 audit context
+B24X-Density isolates label density by preserving every B6 committed cell exactly and adding B23 only on cells where B6 is silent.
 
 ```text
-B20 cross-fitted epoch selections       [2,2,2]
-B20 cross-fitted OOF macro AUC          0.6671593555313430
-B20 measured epoch-selection optimism   0.0
-
-B18 cross-fitted epoch selections       [2,2,2]
-B18 replay OOF macro AUC                0.6655517376076434
-B18 measured epoch-selection optimism   0.0
+shared studies                 692
+B6 cells preserved            3045
+B23-only cells added           2844
+final supervised cells         5889
+B6 cells dropped                  0
+B6 labels overridden              0
 ```
 
-The B20-vs-B18 difference remains too small to establish predictive superiority on the repeatedly reused 58-study expert surface.
+Training completed at fixed E2:
 
-## Model roles
+```text
+E1 loss  0.7647414911
+E2 loss  0.6197285242
+checkpoint  runs/b24x_density/density/b24x_density_model.pt
+```
+
+**Current status:** frozen weak-v2 evaluation pending.
+
+The intended comparison is:
+
+```text
+B6       = 0.6148488366
+Density  = pending
+Full B23 = 0.7116126450
+```
+
+This will test how much of the B23 gain comes from filling B6-silent cells rather than replacing/dropping existing B6 supervision.
+
+## Current model roles
 
 ```text
 B17  frozen fixed-epoch reference
-B18  frozen full-FOV comparator
+B18  frozen full-FOV comparator; nested audit complete
 B19  rejected spatial formulation
 B20  ACTIVE WORKING MODEL
-B21  pre-resize crop candidate; weak-v2 passed, gold acceptance failed; NOT PROMOTED
-B22  five-epoch B21 duration audit; E2 best, no longer-training rescue; CLOSED
-B23  local-LLM report-labeller experiment (qwen3:14b / Ollama)
-     IMPLEMENTED / NOT YET RUN / NOT YET ADOPTED
-B24  matched two-arm B6-vs-B23 supervision comparison
-     IMPLEMENTED / NOT YET RUN / NOT YET ADOPTED
+B21  pre-resize crop candidate; weak-v2 passed, gold acceptance failed; CLOSED
+B22  duration audit; E2 best, no rescue; CLOSED
+B23-v1  local Qwen report labeller; FORMAL GATE FAILED; NOT ADOPTED
+B24 formal  BLOCKED / NOT RUN
+B24X  exploratory matched B6-vs-B23 pilot; WEAK-V2 COMPLETE; NO GOLD / NO PROMOTION
+B24X-Density  exploratory density ablation; TRAINING COMPLETE; WEAK-V2 PENDING
 ```
 
-B24 is the experiment B23 exists to enable. Two arms share the identical B20
-recipe -- frozen weak-v2-safe encoder, 90% post-resize crop, 224, fixed epoch 2
-set in advance -- and the same studies in the same order, so the batch sequence
-and optimiser trajectory are identical. Only the supervision cells differ.
+## Current scientific position
 
-Both arms are scored on both weak surfaces, because each surface favours the
-arm trained by its own labeller; only B24 also winning on B6's own weak-v2
-surface is informative. The decision comes from one predeclared gold look with
-a 0.95 probability-of-superiority threshold, chosen so that a difference smaller
-than the 58-study surface can resolve cannot promote anything.
+The evidence now points to the supervision/development signal as a genuine research lever, but with an important distinction between **useful exploratory signal** and **formal model promotion**.
 
-See [`B24_SUPERVISION_SOURCE.md`](B24_SUPERVISION_SOURCE.md).
-
-B23 is the first experiment in the campaign that changes the supervision source
-rather than the model. It leaves B20 completely untouched: no architecture,
-resolution, crop or schedule change, and B6 v1.2.1 stays frozen as the
-historical supervision for B7-B22. Adoption is gated on a predeclared labeller
-audit that B23 must pass before its development split may be frozen, and that
-gate is enforced in `freeze_b23_holdout` rather than in documentation.
-
-The labeller audit is **descriptive, not confirmatory**: the B23 prompt was
-written using aggregate information from all 58 expert studies, so a paired
-interval there cannot restore independence. Read it for the structural
-differences -- coverage and specificity -- which are far larger than the
-optimism that reuse can manufacture.
-
-See [`B23_LLM_REPORT_LABELS.md`](B23_LLM_REPORT_LABELS.md).
+1. B21/B22 show that more optimization is not the main bottleneck.
+2. B23-v1 is not formally acceptable because its specificity gate failed.
+3. B24X nevertheless shows that B23 supervision can improve MRI learning strongly on B6's own weak surface.
+4. The mechanism of that gain is not yet isolated; B24X-Density is the next diagnostic.
+5. No result so far justifies replacing B20 without an independent expert/competition signal.
 
 ## Current optimization priority
 
@@ -179,31 +224,46 @@ Do **not** spend the next experiment on:
 ```text
 more epochs
 crop-order retry
-crop-fraction sweep under the current normalization order
-stronger optimization of B6 labels
-target-wise B20/B21/B22 mixing
-another gold-guided epoch search
+crop-fraction sweep under the current formulation
+another reused-gold epoch search
+target-wise B6/B23 model mixing from the B24X weak table
+B24X gold acceptance
 ```
 
-The next campaign should address the development signal itself. Priority directions are:
+Priority:
 
 ```text
-1. audit how well weak-v2 model deltas predict expert-gold model deltas;
-2. improve the pathology-development surface / weak-label quality;
-3. if expert-labelled expansion is feasible, add genuinely new expert cases;
-4. otherwise predeclare a very small number of future hypotheses before any reused-gold audit;
-5. only after that revisit architecture, encoder adaptation, FOV or routing changes.
+1. complete B24X-Density weak-v2 evaluation;
+2. determine whether the B24X gain is mainly density or changed B23 semantics;
+3. revise B23 only as a new version with new provenance/cache if semantic errors are corrected;
+4. require a future B23 version to pass the formal labeller gate before formal B24 resumes;
+5. preserve hidden competition evaluation as the independent predictive signal.
 ```
 
 ## Governance
 
 - Keep historical B20 unchanged as the working checkpoint.
-- B21-v1 is closed and not promoted.
-- B22 is closed as an exploratory duration diagnostic.
-- Do not run another B21-v1 acceptance look.
-- Do not choose a B22 epoch for production from the reused 58-study trajectory.
-- Do not build target-wise mixtures from B20/B21/B22 expert results.
-- Do not treat weak-v2 teacher agreement as a sufficient proxy for expert truth.
-- Preserve B21/B22 artifacts as controlled negative/diagnostic results.
-- The 58 expert studies remain a repeatedly reused development surface, not pristine independent validation.
+- B21 and B22 remain closed.
+- B23-v1 formal gate failed; do not reinterpret it as passed.
+- No canonical B23 holdout exists.
+- Formal B24 has not been run.
+- B24X and B24X-Density are exploratory only.
+- Do not run formal `b24-accept` on B24X checkpoints.
+- Do not use gold to select among B24X variants.
+- Do not build target-wise hybrids from the weak-v2 per-target result.
+- Weak-v2 measures B6 teacher agreement, not expert truth.
+- The 58 expert studies remain a repeatedly reused development/post-hoc surface, not pristine independent validation.
 - Hidden competition evaluation remains the independent predictive-performance signal.
+
+## Canonical records
+
+- [`CURRENT_STATUS.md`](CURRENT_STATUS.md)
+- [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md)
+- [`B20_CROP_ONLY_FOCUS.md`](B20_CROP_ONLY_FOCUS.md)
+- [`B21_PRERESIZE_CROP.md`](B21_PRERESIZE_CROP.md)
+- [`B21_FULL_ACCEPTANCE.md`](B21_FULL_ACCEPTANCE.md)
+- [`B22_DURATION_AUDIT.md`](B22_DURATION_AUDIT.md)
+- [`B23_LLM_REPORT_LABELS.md`](B23_LLM_REPORT_LABELS.md)
+- [`B24_SUPERVISION_SOURCE.md`](B24_SUPERVISION_SOURCE.md)
+- [`B24X_EXPLORATORY_SUPERVISION.md`](B24X_EXPLORATORY_SUPERVISION.md)
+- [`VALIDATION.md`](VALIDATION.md)
