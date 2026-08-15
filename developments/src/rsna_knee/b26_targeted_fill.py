@@ -72,8 +72,15 @@ from .constants import TARGETS
 from .data import gold_mask, load_train_csv, normalize_report, report_hash
 from .supervision_balance import audit_supervision_balance
 
-B26_VERSION = "1.0.0"
+B26_VERSION = "1.1.0"
 B26_EXPERIMENT = "B26_targeted_supervision_fill"
+# v1.1.0 adds rule 3b after the v1.0 manual audit found that 50 of 60 sampled
+# added negations inferred absence of the target from absence of a *different*
+# finding. The v1.0 extraction record (prompt hash, cache, provenance) stands
+# unchanged; because the cache key includes the prompt SHA-256, v1.1 cannot
+# reuse v1.0 extractions. The current Synovitis path does not need a v1.1
+# re-run -- B26.1 adjudicates the existing proposals more cheaply -- but any
+# future target flagged by the balance audit gets the corrected prompt.
 
 # Same frozen semantics as B23. B26 changes which targets are read, not what a
 # state means, so a fill cell is indistinguishable from a B6 cell downstream.
@@ -101,6 +108,25 @@ When the findings section and the impression disagree, follow the impression. Th
 ## Rule 3 - a lesion NEAR a structure is not a lesion OF it
 
 Attribute a finding only to the structure that is actually abnormal.
+
+## Rule 3b - the absence of a DIFFERENT finding does not negate this one
+
+This is the mirror of rule 3 and it is the most common way to get this task
+wrong. Answer "negated" only when the report addresses THIS finding and says
+it is absent, or gives a genuinely unqualified global-normal conclusion
+covering the whole joint.
+
+None of these negate a finding they do not name:
+
+- "no joint effusion" or "trace effusion"
+- "no bone bruise" / "normal bone marrow"
+- "normal menisci" / "normal ligaments"
+- "no intra-articular body"
+- "normal surrounding soft tissues"
+- the absence of any single unrelated abnormality
+
+If the report is silent about THIS finding, the answer is "unmentioned", not
+"negated" -- even when it negates several neighbouring findings.
 
 ## Rule 4 - abnormality, not just severe disease
 

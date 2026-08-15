@@ -289,3 +289,50 @@ def test_identical_reports_are_only_sent_once(tmp_path):
     run_targeted_fill(path, counting, FLAGGED, _provenance(),
                       out_root=tmp_path / "b26", progress_every=0)
     assert calls["n"] == 1
+
+
+# --- rule 3b: the v1.0 audit's measured failure mode -------------------------
+# 50 of 60 sampled added negations inferred "no synovitis" from "no effusion",
+# "normal bone marrow", "normal menisci" and similar. Rule 3 covered only the
+# positive direction; nothing forbade the negative mirror. These tests pin the
+# correction so a future flagged target cannot repeat it.
+
+
+def test_the_prompt_forbids_negating_from_an_unrelated_absence():
+    prompt = build_system_prompt(FLAGGED).lower()
+    assert "## rule 3b" in prompt
+    assert "absence of a different finding does not negate this one" in prompt
+
+
+@pytest.mark.parametrize(
+    "spurious",
+    [
+        "no joint effusion",
+        "trace effusion",
+        "no bone bruise",
+        "normal bone marrow",
+        "normal menisci",
+        "normal ligaments",
+        "no intra-articular body",
+        "normal surrounding soft tissues",
+    ],
+)
+def test_every_measured_spurious_negation_is_named_in_the_prompt(spurious):
+    assert spurious in build_system_prompt(FLAGGED).lower()
+
+
+def test_silence_about_this_finding_stays_unmentioned_even_beside_other_negations():
+    prompt = build_system_prompt(FLAGGED).lower()
+    assert 'the answer is "unmentioned", not' in prompt
+    assert "even when it negates several neighbouring findings" in prompt
+
+
+def test_the_corrected_prompt_is_a_new_version_and_a_new_cache():
+    from rsna_knee.b23_local_llm import prompt_sha256
+    from rsna_knee.b26_targeted_fill import B26_VERSION
+
+    assert B26_VERSION == "1.1.0"
+    # The cache key includes the prompt hash, so v1.1 cannot silently replay
+    # v1.0 extractions while recording v1.1 provenance.
+    v10_hash = "4aaa5e7df804108a4250060607fc9b5cbec6866ab1a88414b7eaed4a1b0b3e00"
+    assert prompt_sha256(build_system_prompt(FLAGGED)) != v10_hash
