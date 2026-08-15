@@ -117,7 +117,7 @@ def train_b24(
     expected_batches = int(math.ceil(len(study_uids) / batch_size))
     target_multiplier = target_balance_multipliers(weights)
 
-    dataset_config = make_b7_dataset_config(config, normalization=B13_INPUT_NORMALIZATION)
+    dataset_config = make_b7_dataset_config(config, root, train=True)
     train_ds = make_matched_crop_dataset(
         "control",  # B20's post-resize crop geometry, frozen for B24
         study_uids,
@@ -136,7 +136,7 @@ def train_b24(
         **runtime.loader_kwargs(seed=seed),
     )
 
-    spec = b12_1_model_spec(config)
+    spec = b12_1_model_spec(config, normalize_input=True)
     model = build_b12_1_model(spec, pretrained_weights=False)
     model.encoder.load_state_dict(report_payload["encoder"])
     freeze_encoder(model)
@@ -159,7 +159,7 @@ def train_b24(
     )
     scaler = make_scaler(runtime)
     budget = RuntimeBudget(
-        hours=float(config.get("runtime_budget_hours", 8.5)),
+        max_hours=float(config.get("runtime_budget_hours", 8.5)),
         reserve_minutes=float(config.get("runtime_reserve_minutes", 10)),
     )
 
@@ -173,8 +173,8 @@ def train_b24(
             volumes = batch["volumes"].to(runtime.device, non_blocking=True)
             present = batch["present"].to(runtime.device, non_blocking=True)
             meta = batch["series_meta"].to(runtime.device, non_blocking=True)
-            target = batch["targets"].to(runtime.device, non_blocking=True)
-            weight = batch["weights"].to(runtime.device, non_blocking=True)
+            target = batch["target"].to(runtime.device, non_blocking=True)
+            weight = batch["weight"].to(runtime.device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
             with autocast(runtime):
@@ -209,7 +209,7 @@ def train_b24(
                 "epoch_seconds": round(float(epoch_seconds), 1),
                 "seconds_per_study": round(float(epoch_seconds / max(len(study_uids), 1)), 4),
                 "full_coverage": bool(full_coverage),
-                "budget_limited": bool(budget.exhausted()),
+                "budget_limited": bool(budget.remaining_work_seconds <= 0.0),
             }
         )
         print(
