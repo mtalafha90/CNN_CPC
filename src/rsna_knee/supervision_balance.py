@@ -2,8 +2,8 @@
 
 B25X diagnosed the campaign's one durable supervision defect: B6 supplied 322
 positive and 13 negative Synovitis cells, a 96.1% one-sided training surface.
-A binary head trained on that cannot learn a ranking, and its weak-v2 AUC was
-`0.2370` -- below chance rather than merely at chance. Filling the missing
+A head trained on that ranked worse than chance -- weak-v2 AUC `0.2370` --
+under the current recipe. Filling the missing
 negatives moved it to `0.9123`, and that single target accounted for 96.4% of
 the entire 12-target macro gain. Across the other eleven targets the same
 supervision change was worth `+0.0024`, i.e. nothing.
@@ -11,19 +11,29 @@ supervision change was worth `+0.0024`, i.e. nothing.
 ## Why this module exists
 
 The obvious next move -- "fill Synovitis" -- looks like target-wise selection
-chosen from a weak-v2 result, which the repository rightly prohibits. It is
-not, provided the rule is stated the right way round.
+chosen from a weak-v2 result, which the repository rightly prohibits. This
+audit is what replaces that with a general rule.
 
-This audit reads **training-label counts only**. It touches no model, no
-prediction, and no evaluation surface. A target failing the balance test is
-identifiable before anything is trained, so a policy of the form
+It reads **training-label counts only**: no model, no prediction, no
+evaluation surface. A target failing the test is identifiable before anything
+is trained, and the rule applies uniformly to all twelve rather than naming
+one.
 
-    fill any target whose supervision is more than X% one class
+**What this does and does not fix.** The thresholds below were chosen after
+the B25X Synovitis diagnosis, so they do not retroactively make B25X a
+prospective experiment -- that result stays exploratory. What the rule buys is
+forward-looking: from here on, targets are selected for fill by a stated
+policy rather than by their weak-v2 rank.
 
-is prospective and applies uniformly to all twelve. That is categorically
-different from reading the per-target weak-v2 table and picking winners.
+The result happens not to depend on where the thresholds sit. On the full
+frozen B6 surface both criteria are sharply bimodal:
 
-Declare the threshold before running this, not after.
+    majority share    Synovitis 95.9%, next-worst MCL 80.1%
+    minority cells    Synovitis    17, next-fewest Fracture 203
+
+so any threshold inside a 15.8-point band, or anywhere between 18 and 203
+cells, selects exactly the same single target. Synovitis is not a marginal
+call that a chosen cut-off produced.
 """
 from __future__ import annotations
 
@@ -36,9 +46,9 @@ import pandas as pd
 
 from .constants import TARGETS
 
-# A binary head needs both classes to learn a ranking. Beyond this share of a
-# single class the target is treated as structurally unlearnable rather than
-# merely imbalanced. Declared in advance; do not tune it against an outcome.
+# Beyond this share of a single class the target is treated as having
+# insufficient minority-class support to rank reliably under the current
+# recipe. Frozen from here forward; do not tune against a future outcome.
 DEFAULT_IMBALANCE_THRESHOLD = 0.90
 # Below this many minority-class cells the estimate is too fragile to trust
 # even when the share looks acceptable.
@@ -75,13 +85,19 @@ def balance_table(targets: np.ndarray, weights: np.ndarray) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def flag_unlearnable(
+def flag_imbalanced(
     table: pd.DataFrame,
     *,
     threshold: float = DEFAULT_IMBALANCE_THRESHOLD,
     min_minority: int = DEFAULT_MIN_MINORITY_CELLS,
 ) -> pd.DataFrame:
-    """Mark targets whose supervision cannot support a ranking."""
+    """Mark targets with insufficient minority-class support.
+
+    Deliberately not called "unlearnable": B25X showed a practical failure
+    under one specific recipe, not an impossibility result for binary
+    classification. The claim is that the training surface gives the head too
+    little of one class to rank reliably, which is weaker and defensible.
+    """
     out = table.copy()
     out["fails_balance"] = out["majority_share"] >= float(threshold)
     out["fails_minority_count"] = out["minority_cells"] < int(min_minority)
@@ -113,7 +129,7 @@ def audit_supervision_balance(
         raise ValueError("labeller must be 'b6' or 'b23'")
 
     _uids, y, w, summary = prepare_b7_supervision(train, frame)
-    table = flag_unlearnable(
+    table = flag_imbalanced(
         balance_table(y, w), threshold=threshold, min_minority=min_minority
     )
     flagged = table.loc[table["needs_fill"], "target"].tolist()
@@ -123,8 +139,10 @@ def audit_supervision_balance(
         "threshold": float(threshold),
         "min_minority_cells": int(min_minority),
         "rule": (
-            "prospective: computed from training-label counts only; no model, "
-            "no prediction, no evaluation surface consulted"
+            "computed from training-label counts only; no model, no prediction "
+            "and no evaluation surface consulted. Thresholds were set after the "
+            "B25X diagnosis, so they are binding forward rather than making any "
+            "earlier result prospective."
         ),
         "targets_needing_fill": flagged,
         "n_targets_needing_fill": len(flagged),

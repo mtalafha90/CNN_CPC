@@ -8,7 +8,7 @@ from rsna_knee.constants import TARGETS
 from rsna_knee.supervision_balance import (
     DEFAULT_IMBALANCE_THRESHOLD,
     balance_table,
-    flag_unlearnable,
+    flag_imbalanced,
     format_balance,
 )
 
@@ -42,7 +42,7 @@ def test_the_measured_synovitis_failure_is_flagged():
     # B6 supplied 322 positive and 13 negative Synovitis cells: 96.1% one class.
     counts = _uniform(200, 200)
     counts["Synovitis"] = (322, 13)
-    flagged = flag_unlearnable(balance_table(*_surface(counts))).set_index("target")
+    flagged = flag_imbalanced(balance_table(*_surface(counts))).set_index("target")
     assert flagged.loc["Synovitis", "majority_share"] == pytest.approx(322 / 335, abs=1e-4)
     assert flagged.loc["Synovitis", "needs_fill"]
     assert flagged.loc["Synovitis", "minority_class"] == "negative"
@@ -53,7 +53,7 @@ def test_the_measured_synovitis_failure_is_flagged():
 def test_a_target_with_too_few_minority_cells_is_flagged_even_when_the_share_passes():
     counts = _uniform(200, 200)
     counts["Fracture"] = (100, 12)  # 89.3% share passes, 12 negatives do not
-    flagged = flag_unlearnable(balance_table(*_surface(counts))).set_index("target")
+    flagged = flag_imbalanced(balance_table(*_surface(counts))).set_index("target")
     assert flagged.loc["Fracture", "majority_share"] < DEFAULT_IMBALANCE_THRESHOLD
     assert flagged.loc["Fracture", "fails_minority_count"]
     assert flagged.loc["Fracture", "needs_fill"]
@@ -64,13 +64,13 @@ def test_the_rule_applies_uniformly_rather_than_naming_targets():
     for broken in ("ACL", "Effusion", "Baker's"):
         counts = _uniform(200, 200)
         counts[broken] = (400, 5)
-        flagged = flag_unlearnable(balance_table(*_surface(counts))).set_index("target")
+        flagged = flag_imbalanced(balance_table(*_surface(counts))).set_index("target")
         assert flagged.loc[broken, "needs_fill"]
         assert int(flagged["needs_fill"].sum()) == 1
 
 
 def test_a_healthy_surface_flags_nothing():
-    flagged = flag_unlearnable(balance_table(*_surface(_uniform(150, 150))))
+    flagged = flag_imbalanced(balance_table(*_surface(_uniform(150, 150))))
     assert not flagged["needs_fill"].any()
 
 
@@ -79,7 +79,7 @@ def test_the_report_states_that_no_outcome_was_consulted():
     payload = {
         "labeller": "b6", "threshold": 0.9, "min_minority_cells": 30,
         "targets_needing_fill": [], "n_targets_needing_fill": 0,
-        "table": flag_unlearnable(balance_table(y, w)).to_dict("records"),
+        "table": flag_imbalanced(balance_table(y, w)).to_dict("records"),
     }
     text = format_balance(payload)
     assert "computed from training labels alone" in text
