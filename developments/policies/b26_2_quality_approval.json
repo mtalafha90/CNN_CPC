@@ -1,0 +1,33 @@
+{
+  "policy_version": "1.0.0",
+  "experiment": "B26_2_deterministic_evidence_gate",
+  "decision_date": "2026-08-16",
+  "status": "passed_for_controlled_fixed_e2_training",
+  "scope": "label-quality development audit only; not expert-gold validation and not model promotion evidence",
+  "fresh_review": {
+    "prior_review_uids_excluded": 160,
+    "positive_reviewed": 20,
+    "positive_supported": 20,
+    "negated_reviewed": 50,
+    "negated_supported": 50,
+    "total_reviewed": 70,
+    "total_supported": 70
+  },
+  "approved_surface": {
+    "accepted_positive": 76,
+    "accepted_negated": 95,
+    "accepted_total": 171,
+    "base_positive": 399,
+    "base_negative": 17,
+    "final_positive": 475,
+    "final_negative": 112,
+    "final_usable_synovitis": 587,
+    "base_cells_dropped": 0,
+    "base_cells_overridden": 0
+  },
+  "input_sha256": {
+    "b26_1_candidates": "35ead84a7ba127d7f844af339b71cf699831dbbda99f1305e58d7307da133522",
+    "balance_audit": "bcc6fadbfb3a0d0b8cdeb1ea3fc116ad1236242d3b699d06d421d237a032f3f2"
+  },
+  "authorization": "This approval permits only the frozen B20-family fixed-E2 training experiment with the 171 B26.2 fill cells. It does not authorize whitelist retuning after model evaluation."
+}
