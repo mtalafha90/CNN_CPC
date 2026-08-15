@@ -1,39 +1,42 @@
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-*.egg-info/
-.pytest_cache/
-.env
-.kaggle/
 
-# Competition data and medical images
-data/
-cache/
-*.dcm
-*.zip
-
-# Model/training outputs
-runs/
-checkpoints/
-*.npy
-*.pt
-*.pth
-*.ckpt
-*_output.csv
-submission*.csv
-pseudo_labels*.csv
-
-.ipynb_checkpoints/
-.DS_Store
-
-# LaTeX build artefacts
 *.aux
-*.log
-*.out
 *.bbl
+*.before_api_fix
 *.blg
-*.synctex.gz
+cache/
+checkpoints/
+*.ckpt
+# Competition data and medical images
+configs/train_local*.yaml
+data/
+*.dcm
+.DS_Store
+*.egg-info/
+.env
 *.fdb_latexmk
 *.fls
+.ipynb_checkpoints/
+.kaggle/
+# LaTeX build artefacts
+# Local machine-specific training configs
+# Local source backups
+*.log
+# Model/training outputs
+*.npy
+*.out
+*_output.csv
+pseudo_labels*.csv
+*.pt
+*.pth
+__pycache__/
+*.py[cod]
+.pytest_cache/
+# RSNA competition data
+rsna-knee-abnormality-detection/
+runs/
+submission*.csv
+*.synctex.gz
 *.toc
+.venv/
+venv/
+*.zip
