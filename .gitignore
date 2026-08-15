@@ -7,8 +7,12 @@ cache/
 checkpoints/
 *.ckpt
 # Competition data and medical images
-configs/train_local*.yaml
-data/
+# Top-level data/ now contains the clean dataset code interface; keep raw data out
+# of Git via explicit subdirectories instead of ignoring the whole package.
+data/raw/
+data/processed/
+data/cache/
+config/*_local.yaml
 *.dcm
 .DS_Store
 *.egg-info/
