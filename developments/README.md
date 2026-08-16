@@ -2,7 +2,7 @@
 
 This directory preserves the complete research/development history that previously occupied the repository root.
 
-It contains the B0--B26.2 experiment lineage, historical configurations, documentation, scripts, source modules, tests, Kaggle methodology notes, fixtures, manuscript material and the previous GitHub workflows.
+It contains the B0--B27 experiment lineage, historical configurations, documentation, scripts, source modules, tests, Kaggle methodology notes, fixtures, manuscript material and the previous GitHub workflows.
 
 ## Layout
 
@@ -24,25 +24,36 @@ developments/
   requirements_legacy.txt   previous requirements snapshot
 ```
 
-The files are preserved for reproducibility. New work on the active model should use the clean top-level `model/`, `training/`, `validation/`, `testing/`, `data/`, `config/` and `docs/` interface.
+The files are preserved for reproducibility. New work on the active model should use the clean top-level `model/`, `training/`, `validation/`, `testing/`, `data/`, `config/` and `docs/` interface unless the experiment is explicitly kept in this development archive.
 
-The current targeted-supervision records are:
+## Current development status
+
+B26 supervision repair is closed and not promoted. Its final deterministic B26.2 labels passed manual semantic audit, but the fixed-E2 model did not improve the reused expert macro and Synovitis AUC decreased. The mechanism audit showed a large within-target class-mass and co-occurrence shift. Canonical records:
 
 ```text
 docs/B26_TARGETED_FILL.md
 docs/B26_2_DETERMINISTIC_GATE.md
+docs/B26_2_REUSED_GOLD_RESULT.md
+docs/B26_CLOSURE.md
 policies/b26_2_quality_approval.json
 ```
 
-B26-v1 raw extraction failed its first manual negative-label quality audit. B26.1 reduced the raw 631 proposed Synovitis fill cells to 281 same-polarity candidates, but its fresh audit still achieved only 60% accepted negation precision (36/60), so B26.1 is not approved for training. B26.2 then applied a deterministic precision-first evidence whitelist and retained 171 cells (76 positive, 95 negated). Its third fresh semantic review excluded all 160 previously reviewed UIDs and found 70/70 supported calls (20/20 positive, 50/50 negated) under the frozen B26.2 semantics. B26.2 is therefore approved for a controlled fixed-E2 B20-family training experiment only; B20 remains the active working model and no promotion has occurred.
+B20 therefore remains the active working model.
 
-The fixed-E2 trainer is:
+The next imaging-side experiment is B27:
 
 ```text
-src/rsna_knee/b26_2_training.py
+docs/B27_PATHOLOGY_SERIES_ROUTING.md
+src/rsna_knee/b27_pathology_routing.py
+src/rsna_knee/b27_training.py
+src/rsna_knee/b27_gold_eval.py
+scripts/review_b27_routes_with_ollama.py
+tests/test_b27_pathology_routing.py
 ```
 
-For old commands from this archive, the implementation remains importable with:
+B27 adds only 84 zero-initialised pathology-specific metadata attention-bias parameters to the existing B20 pathology-query cross-attention. It keeps B6 supervision, the frozen B16 encoder, B20 crop geometry, all 3,120 studies, all 17,475 eligible series and the fixed-E2 training endpoint unchanged. Ollama is audit-only and is not part of B27 training or competition inference.
+
+For commands from this archive, the implementation remains importable with:
 
 ```bash
 export PYTHONPATH="$PWD/developments/src:$PYTHONPATH"
