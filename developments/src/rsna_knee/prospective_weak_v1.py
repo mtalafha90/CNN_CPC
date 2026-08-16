@@ -7,7 +7,9 @@ scores enter split assignment.
 
 The purpose is architecture selection after the repeatedly reused 58-study
 expert surface became too exposed. This is still WEAK-LABEL validation, not
-independent clinical validation.
+independent clinical validation. The historical B16 encoder was aligned on all
+4,349 non-gold reports, so this split is valid only for comparing downstream
+architectures while that exact encoder remains frozen and shared.
 """
 from __future__ import annotations
 
@@ -98,6 +100,12 @@ def build_prospective_weak_v1_manifest(
             "The frozen supervision surface is keyed by StudyInstanceUID. This policy certifies study-level "
             "separation only; it does not claim patient-identity grouping."
         ),
+        "historical_b16_encoder_saw_validation_reports": True,
+        "historical_b16_report_alignment_studies": 4349,
+        "selection_scope": (
+            "downstream architecture comparison only with the exact shared frozen B16 encoder; "
+            "not valid for selecting a new encoder or representation-pretraining method"
+        ),
         "total_studies": PV1_TOTAL_STUDIES,
         "training_studies": PV1_TRAIN_STUDIES,
         "validation_studies": PV1_VALIDATION_STUDIES,
@@ -128,6 +136,10 @@ def validate_prospective_weak_v1_manifest(manifest: dict, active_uids: list[str]
         raise ValueError("PV1 split unexpectedly certifies expert-label assignment")
     if manifest.get("model_outputs_used_to_assign_split") is not False:
         raise ValueError("PV1 split unexpectedly certifies model-output assignment")
+    if manifest.get("historical_b16_encoder_saw_validation_reports") is not True:
+        raise ValueError("PV1 must explicitly retain the historical B16 pretraining-overlap limitation")
+    if int(manifest.get("historical_b16_report_alignment_studies", -1)) != 4349:
+        raise ValueError("PV1 B16 report-alignment provenance changed")
 
     training_uids = [str(x) for x in manifest.get("training_uids", [])]
     validation_uids = [str(x) for x in manifest.get("validation_uids", [])]
@@ -177,6 +189,8 @@ def create_manifest_from_files(config: dict, *, b6_root: str | Path, out_path: s
         "training_studies": manifest["training_studies"],
         "validation_studies": manifest["validation_studies"],
         "labels_used_to_assign_split": False,
+        "historical_b16_encoder_saw_validation_reports": True,
+        "selection_scope": manifest["selection_scope"],
         "path": str(path),
     }, indent=2))
     return path
