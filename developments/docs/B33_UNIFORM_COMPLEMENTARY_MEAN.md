@@ -1,6 +1,6 @@
 # B33 — exact-uniform complementary mean
 
-> **Status — 2026-08-16:** IMPLEMENTED / FROZEN BEFORE B33 OUTCOME / READY FOR SAFETY TESTS. **B20 remains the active reference. B29 and B31 remain frozen development candidates. B32 is closed and not promoted.**
+> **Status — 2026-08-16:** IMPLEMENTED / FROZEN BEFORE B33 OUTCOME / **SAFETY TESTS PASSED / READY FOR FULL TRAINING**. **B20 remains the active reference. B29 and B31 remain frozen development candidates. B32 is closed and not promoted.**
 
 ## Motivation
 
@@ -131,6 +131,8 @@ B33 tests pin:
 - finite/bounded audit metrics;
 - bf16 finite behavior;
 - empty-study finite behavior.
+
+GitHub Actions passed after B33 integration: compilation succeeded and the complete current-model safety suite reported **73 passed**.
 
 ## Runtime
 
