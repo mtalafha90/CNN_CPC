@@ -1,30 +1,26 @@
 # B27 — pathology-specific acquisition routing
 
-> **Status — 2026-08-16:** IMPLEMENTED / READY FOR FIXED-E2 TRAINING. **B20 remains the active working model.**
+> **Status — 2026-08-16:** FIXED-E2 TRAINING COMPLETE / STRUCTURALLY SUPERSEDED BEFORE EXPERT EVALUATION. **B20 remains active.** B27 has not been evaluated on the reused 58-study expert surface.
 
 ## Motivation
 
-B26 closed the supervision-repair branch. The next intervention returns to the imaging side while preserving the frozen B20 weak-label semantics.
-
-A naive proposal to "add pathology-specific series attention" would duplicate functionality already present in B20/B12.1: B20 has 12 learned pathology tokens that cross-attend to the contextualised real-series memory.
-
-B27 therefore makes a much narrower change. It exposes the already-available acquisition metadata directly to that final pathology-to-series attention as a learned additive logit bias.
+B27 returned to the imaging side after the B26 supervision-repair branch closed. B20 already has 12 pathology query tokens that cross-attend to contextualised real-series memory, so B27 made a deliberately small change: an additive pathology-specific attention-logit bias from acquisition metadata.
 
 ```text
 B20
-series image/content + metadata embeddings
+series content + metadata embeddings
  -> shared study Transformer
  -> pathology-query cross attention
 
 B27
 same path
- + 12 pathology-specific additive attention biases from
+ + pathology-specific route bias from
    plane / fluid sensitivity / fat suppression
 ```
 
-## Single architectural change
+## Original B27 routing
 
-For target `t` and real series `k`, B27 adds
+For target `t` and series `k`:
 
 ```text
 routing_bias(t,k)
@@ -33,46 +29,24 @@ routing_bias(t,k)
   + fat_bias(t, fat_k)
 ```
 
-to the existing B20 pathology-query attention logits before softmax.
-
-No anatomical preference is hard-coded. All new values start at exactly zero.
-
-Known categories:
+The tables were zero-initialised and added only 84 trainable parameters:
 
 ```text
-plane:   Sagittal / Coronal / Axial
-fluid:   structural / fluid-sensitive
-fat:     not-fat-suppressed / fat-suppressed
+12 x (3 plane + 2 fluid + 2 fat) = 84
 ```
 
-Unknown metadata and padding have a permanently fixed routing bias of exactly zero, preventing B27 from learning a direct missing-metadata/site shortcut through these new parameters.
+Unknown metadata received zero routing bias. With all routing tables at zero, B27 was functionally equivalent to B20.
 
-Total new trainable parameters:
-
-```text
-12 x (3 + 2 + 2) = 84
-```
-
-This is deliberately tiny relative to the ConvNeXt/Transformer model and adds negligible compute compared with MRI encoding.
-
-## Zero-initialisation contract
-
-When B27 shares the same B20 state and all routing tables are zero, B27 is functionally equivalent to B20. The unit tests explicitly check this property.
-
-That matters because B27 starts from the existing imaging decision function rather than introducing a second randomly initialised routing network.
-
-## Frozen elements
+## Frozen training contract
 
 ```text
-B6 v1.2.1 supervision       unchanged
 training studies            3120
-usable cells                14123
-positive / negative         6871 / 7252
-eligible MRI series         17475
-B16 report-aligned encoder  unchanged and frozen
+usable B6 cells            14123
+positive / negative        6871 / 7252
+eligible MRI series        17475
+B16 encoder                 frozen
 encoder SHA                 b328667cf9dfa9b909ef181c1bcc8975ec42bcd8b9eddad08f908875b73fae96
 B20 crop                    90% post-resize crop only
-slice sampling              16 positions / series
 optimizer / LR              unchanged
 augmentation                unchanged
 loader seed                 unchanged
@@ -82,73 +56,97 @@ expert labels in gradients  0
 expert checkpoint selection none
 ```
 
-The historical B20 active checkpoint remains untouched.
+## Completed B27 training
+
+The run completed the exact frozen surface in both epochs:
+
+```text
+E1 loss              0.7422715253
+E1 runtime            1751.3 s
+E1 routing max |b|    0.0136499135
+
+E2 loss              0.6487928373
+E2 runtime            1777.0 s
+E2 routing max |b|    0.0165207200
+
+full wall time        3534.2 s (~58.9 min)
+```
+
+Every epoch saw exactly 3,120 studies, 17,475 series and 14,123 supervision cells. The encoder SHA remained unchanged and no gold labels were used.
+
+## Pre-outcome structural audit
+
+Before running Ollama or any reused-expert diagnostic, the learned routing table showed that the fluid and fat tables were exactly identical target by target. A direct audit of the complete training metadata then confirmed perfect collinearity:
+
+```text
+series                         17475
+fluid_id == fat_id             17475
+fluid_id != fat_id                 0
+fraction identical               1.0
+
+pair (1,1)                     7459
+pair (2,2)                    10016
+```
+
+Therefore the B27 training surface contains only one empirical sequence-metadata degree of freedom across those two fields. Because the two routing tables started at zero and saw identical categories on every training series, they received identical gradients and remained identical.
+
+B27 consequently implemented, on this surface, approximately:
+
+```text
+plane + 2 x paired-sequence signal
+```
+
+rather than three independent metadata axes.
+
+This is a structural identifiability issue, not a failed optimization run. The training itself is valid, but the 84-parameter routing representation is redundant for this dataset.
+
+## Decision before outcome inspection
+
+```text
+B27 training                    valid
+B27 reused-expert evaluation   NOT RUN
+B27 Ollama route review        NOT RUN
+B27 model promotion            not considered
+B27 representation             structurally superseded
+successor                      B27.1
+```
+
+The correction was made before observing B27 expert performance, so B27.1 is not an outcome-driven retune.
+
+## B27.1 correction
+
+B27.1 collapses the perfectly collinear fluid/fat terms into one paired-sequence term:
+
+```text
+B27.1 route = plane + paired_sequence
+parameters  = 12 x (3 + 2) = 60
+```
+
+The paired categories are:
+
+```text
+1 = structural + not-fat-suppressed
+2 = fluid-sensitive + fat-suppressed
+```
+
+Unknown or discordant future/test combinations receive zero paired-sequence routing bias because no such combination existed on the frozen training surface.
+
+Canonical successor record:
+
+```text
+developments/docs/B27_1_COLLINEARITY_SAFE_ROUTING.md
+```
 
 ## Runtime policy
 
-The user-supplied competition ceiling is 9 hours. B27 uses a stricter experiment guard:
+Both B27 and B27.1 use a hard budget of at most 8.25 h and at least a 30-minute internal reserve, below the 9-hour competition ceiling. B27's observed E2 runtime of about 59 minutes confirms a large safety margin.
 
-```text
-hard budget          <= 8.25 h
-internal reserve      >= 30 min
-```
+## Ollama governance
 
-The recent B20-family fixed-E2 run on the RTX A4500 Laptop GPU completed in about 58 minutes, so B27 has a very large safety margin. The 84 routing-bias parameters do not add another image encoder pass.
-
-The existing repository-wide `RuntimeBudget` also refuses any budget `>= 9 h`.
-
-## Ollama use
-
-The local `qwen3:14b` Ollama model is **not** placed in B27 training or competition inference.
-
-Instead, after training B27 exports `routing_biases.json`. A one-call audit utility:
-
-```text
-developments/scripts/review_b27_routes_with_ollama.py
-```
-
-asks the pinned local Ollama model to review whether the *learned* routing preferences are clinically interpretable. The review:
-
-- is descriptive only;
-- is never fed into the MRI model;
-- does not change routing values, labels, thresholds or epochs;
-- is not part of the competition runtime path;
-- records the Ollama model digest/provenance.
-
-This gives us useful LLM-assisted interpretation without paying LLM latency inside the 9-hour submission window or injecting an LLM-derived anatomical prior into B27.
-
-## Training outputs
-
-```text
-runs/b27_pathology_routing/
-├── b27_model.pt
-├── training_audit.json
-├── history.json
-└── routing_biases.json
-```
-
-The training audit records exact study/series/cell coverage, frozen encoder SHA, routing norm growth and the conservative runtime budget.
+The local `qwen3:14b` model is audit-only. It is not used in MRI training or competition inference and cannot modify routing values, labels, thresholds, epochs or model selection.
 
 ## Evaluation governance
 
-Because B27 trains on all 3,120 B20 studies, the historical 623-study weak-v2 partition is not a holdout for B27.
+The historical 623-study weak-v2 partition is not a holdout for B27/B27.1 because both use all 3,120 B20 training studies. The 58 expert studies are heavily reused development data and selected historical B20 checkpoints. They remain post-hoc development evidence only.
 
-The existing 58 expert studies are also heavily reused development data and selected the historical B20 epoch. The provided B27 paired evaluation is therefore post-hoc development evidence only:
-
-```text
-python -m rsna_knee.b27_gold_eval ...
-```
-
-No automatic promotion is allowed from that result. Hidden competition evaluation remains the independent performance signal.
-
-## Run order
-
-```text
-1. unit tests
-2. B27 fixed-E2 training
-3. inspect training_audit.json and routing_biases.json
-4. optional one-call Ollama route plausibility audit
-5. only then run the reused-expert paired diagnostic
-```
-
-Do not tune B27 routing tables or metadata categories from the reused 58-study outcome.
+Hidden competition evaluation remains the independent predictive-performance signal.
