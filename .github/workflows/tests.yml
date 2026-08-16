@@ -26,4 +26,5 @@ jobs:
         run: |
           pytest -q \
             developments/tests/test_b20_crop_focus.py \
-            developments/tests/test_supervision_balance.py
+            developments/tests/test_supervision_balance.py \
+            developments/tests/test_b27_pathology_routing.py
