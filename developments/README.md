@@ -2,7 +2,7 @@
 
 This directory preserves the complete research/development history that previously occupied the repository root.
 
-It contains the B0--B29 experiment lineage, historical configurations, documentation, scripts, source modules, tests, Kaggle methodology notes, fixtures, manuscript material and the previous GitHub workflows.
+It contains the B0--B30 experiment lineage, historical configurations, documentation, scripts, source modules, tests, Kaggle methodology notes, fixtures, manuscript material and the previous GitHub workflows.
 
 ## Layout
 
@@ -34,9 +34,11 @@ B26 supervision repair is closed and not promoted. B27 was structurally supersed
 
 B28 then tested a zero-gated element-wise max-evidence residual over encoder image-content slice embeddings. The fixed-E2 run was valid and the 768-dimensional gate learned small finite values, but the reused expert macro fell to 0.638346 versus B20 0.667407 (delta -0.029061; paired 95% CI [-0.065624, +0.007122]; P[B28>B20]=0.0586). B28 is not promoted and the max-evidence residual formulation is closed.
 
-B29 tested a zero-gated second learned softmax summary of the same 16 B20 slice tokens. Its fixed-E2 training run completed the exact B20 surface with a frozen B16 encoder. On the reused 58-study expert development surface, B29 reached macro AUC 0.676888 versus B20 0.667407 (raw delta +0.009481; paired 95% CI [-0.003749, +0.024188]; P[B29>B20]=0.9188). This is encouraging but not independent validation. B29 is therefore a **frozen promising candidate, not promoted**. The next performance signal is the hidden competition comparison of canonical B20 versus the exact frozen B29 checkpoint, with no initial blending or target-specific retuning.
+B29 tested a zero-gated second learned softmax summary of the same 16 B20 slice tokens. Its fixed-E2 training run completed the exact B20 surface with a frozen B16 encoder. On the reused 58-study expert development surface, B29 reached macro AUC 0.676888 versus B20 0.667407 (raw delta +0.009481; paired 95% CI [-0.003749, +0.024188]; P[B29>B20]=0.9188). This is encouraging but not independent validation. B29 is therefore a **frozen promising candidate, not promoted**. Its hidden competition submission has been frozen byte-for-byte and B29 must not be retuned from the reused 58-study result.
 
-Canonical result records include:
+The next prospectively frozen experiment is **B30**. B30 keeps B20's historical learned-attention series token `A`, but replaces B29's raw dot-product complementary summary with a new query operating through the current B20 Q/K/V, output-projection and LayerNorm affine parameters as **detached deterministic operators**. The B20 `A` branch remains unchanged. B30 adds the same 1,536 trainable parameters as B29 (768 query + 768 zero-init gate), starts as the exact B20 function, uses fixed E2, and records a prospective attention-complementarity mechanism audit before any B30 expert outcome is inspected.
+
+Canonical result/design records include:
 
 ```text
 docs/B27_1_REUSED_GOLD_RESULT.md
@@ -44,9 +46,10 @@ docs/B28_MAX_EVIDENCE_RESIDUAL.md
 docs/B28_REUSED_GOLD_RESULT.md
 docs/B29_COMPLEMENTARY_SERIES_POOL.md
 docs/B29_REUSED_GOLD_RESULT.md
+docs/B30_PROJECTED_COMPLEMENTARY_SERIES_POOL.md
 ```
 
-B29 implementation and hidden-evaluation support:
+Current B29/B30 implementation support:
 
 ```text
 src/rsna_knee/b29_complementary_series_pool.py
@@ -54,17 +57,14 @@ src/rsna_knee/b29_training.py
 src/rsna_knee/b29_gold_eval.py
 src/rsna_knee/b29_submission.py
 tests/test_b29_complementary_series_pool.py
+
+src/rsna_knee/b30_projected_complementary_series_pool.py
+src/rsna_knee/b30_training.py
+src/rsna_knee/b30_gold_eval.py
+tests/test_b30_projected_complementary_series_pool.py
 ```
 
-B29 keeps the complete B20 learned attention-pooled series token `A` and adds a second deterministic learned softmax summary `C` of the same 16 B20 slice tokens:
-
-```text
-A + tanh(g) * (C - A)
-```
-
-The new query `q` has 768 parameters and the feature-wise gate `g` has 768 parameters, for 1,536 new parameters total. The gate starts at exactly zero, so B29 starts as the exact B20 function. The complementary branch contains no dropout or other random operation, and the safety tests pin training-mode RNG-path equivalence to B20 at zero gate.
-
-B29 keeps B6 supervision, the frozen B16 encoder, B20 crop geometry, all 3,120 studies, all 17,475 eligible series, the same optimizer/augmentation/loader seed and the fixed-E2 endpoint. B20 remains active until independent hidden evaluation justifies a change.
+B30 frozen controls remain the B20/B29 historical recipe: B6 supervision, frozen B16 encoder, 90% crop, all 3,120 studies, all 17,475 eligible series, 14,123 supervision cells, the historical optimizer/augmentation/loader seed, five-epoch scheduler horizon, and fixed-E2 endpoint. The historical 623-study weak-v2 partition is not a holdout for B30.
 
 For commands from this archive, the implementation remains importable with:
 
