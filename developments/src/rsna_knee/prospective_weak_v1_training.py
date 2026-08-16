@@ -3,6 +3,11 @@
 B20, B31 and B33 are retrained from the same historical B16/B20 initialization
 on the frozen 80% study subset. The 20% validation subset is never loaded by
 this trainer and is never used for checkpoint selection.
+
+After model construction, the global training RNG is reset to one fixed seed for
+all controls. This prevents B31's additional randomly initialized query/Conv1d
+parameters from shifting the dropout/augmentation stochastic trajectory relative
+to B20/B33 merely by consuming extra construction-time random draws.
 """
 from __future__ import annotations
 
@@ -64,6 +69,7 @@ PV1_FIXED_EPOCHS = 2
 PV1_MAX_HARD_HOURS = 8.25
 PV1_MIN_RESERVE_MINUTES = 30.0
 PV1_CONTROL_NAMES = ("b20", "b31", "b33")
+PV1_POST_CONSTRUCTION_SEED_OFFSET = 19_200_000
 
 
 def _build_control_model(name: str, config: dict):
@@ -204,6 +210,12 @@ def train_prospective_weak_v1_control(
     encoder_sha_initial = encoder_state_sha256(model.encoder)
     model = model.to(runtime.device)
 
+    # Critical matched-control guardrail: construction of B31 consumes extra RNG
+    # draws for its query/Conv1d. Reset ALL training RNGs here so the subsequent
+    # dropout/main-process stochastic path starts identically for B20/B31/B33.
+    post_construction_seed = seed + PV1_POST_CONSTRUCTION_SEED_OFFSET
+    seed_everything(post_construction_seed)
+
     head_params = [p for n, p in model.named_parameters() if not n.startswith("encoder.") and p.requires_grad]
     if not head_params or any(p.requires_grad for p in model.encoder.parameters()):
         raise RuntimeError("PV1 frozen-encoder contract failed")
@@ -232,7 +244,7 @@ def train_prospective_weak_v1_control(
     )
     print(
         f"[PV1/{model_name}] candidate_added_parameters={added_parameters}; "
-        "validation subset is not loaded during training"
+        f"post_construction_training_seed={post_construction_seed}; validation subset is not loaded during training"
     )
 
     history: list[dict] = []
@@ -345,6 +357,10 @@ def train_prospective_weak_v1_control(
         "training_positive_cells": positive_cells,
         "training_negative_cells": negative_cells,
         "candidate_added_parameters": int(added_parameters),
+        "construction_seed": seed + 19_000_000,
+        "loader_seed": seed + 19_100_000,
+        "post_construction_training_seed": post_construction_seed,
+        "stochastic_path_matched_after_model_construction": True,
         "model_spec": spec,
         "model_state": model.state_dict(),
         "config": config,
@@ -386,6 +402,8 @@ def load_prospective_weak_v1_checkpoint(
         raise ValueError("PV1 validation studies unexpectedly entered gradients")
     if bool(payload.get("expert_labels_used", True)):
         raise ValueError("PV1 checkpoint unexpectedly used expert labels")
+    if payload.get("stochastic_path_matched_after_model_construction") is not True:
+        raise ValueError("PV1 checkpoint lacks the matched post-construction RNG guardrail")
     split_sha = str(payload.get("split_sha256", ""))
     if expected_split_sha256 is not None and split_sha != str(expected_split_sha256):
         raise ValueError("PV1 checkpoint split fingerprint mismatch")
