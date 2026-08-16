@@ -29,4 +29,5 @@ jobs:
             developments/tests/test_supervision_balance.py \
             developments/tests/test_b27_pathology_routing.py \
             developments/tests/test_b27_1_pathology_routing.py \
-            developments/tests/test_b28_max_evidence_residual.py
+            developments/tests/test_b28_max_evidence_residual.py \
+            developments/tests/test_b29_complementary_series_pool.py
