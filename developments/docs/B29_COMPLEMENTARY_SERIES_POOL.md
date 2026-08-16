@@ -1,6 +1,6 @@
 # B29 — zero-gated complementary learned series summary
 
-> **Status — 2026-08-16:** IMPLEMENTED / FROZEN BEFORE B29 OUTCOME / READY FOR SAFETY TESTS. **B20 remains the active working model.** B27/B27.1 and B28 are closed and not promoted.
+> **Status — 2026-08-16:** SAFETY TESTS PASSED / FULL FIXED-E2 TRAINING COMPLETED / REUSED-EXPERT DIAGNOSTIC POSITIVE / **FROZEN PROMISING CANDIDATE, NOT PROMOTED**. **B20 remains the active working model.** See `B29_REUSED_GOLD_RESULT.md` for the frozen result and hidden-evaluation protocol.
 
 ## Why B29 exists
 
@@ -20,7 +20,7 @@ B29 asks a different representation question:
 
 > Can one learned slice summary per series be an information bottleneck even when an aggressive element-wise maximum is not a good universal companion?
 
-B29 is defined after the B28 result, so it is not claimed to be independent of the experiment sequence. However, it is frozen before any B29 performance outcome and does not use B28 target-wise gains/losses to choose target-specific behavior.
+B29 is defined after the B28 result, so it is not claimed to be independent of the experiment sequence. However, it was frozen before any B29 performance outcome and does not use B28 target-wise gains/losses to choose target-specific behavior.
 
 ## Single architectural intervention
 
@@ -73,7 +73,7 @@ series_token = A
 
 and B29 is functionally identical to B20.
 
-The complementary branch contains **no dropout or random operation**. The historical B20 attention pool is executed first and unchanged. Consequently, when the gate is zero, merely computing the complementary branch does not consume RNG and does not shift downstream B20 dropout masks. The safety tests check equivalence in both evaluation mode and training mode with dropout enabled and an identical RNG reset.
+The complementary branch contains **no dropout or random operation**. The historical B20 attention pool is executed first and unchanged. Consequently, when the gate is zero, merely computing the complementary branch does not consume RNG and does not shift downstream B20 dropout masks. Safety tests passed for both evaluation-mode and training-mode B20 equivalence with an identical RNG reset.
 
 The new query is constructed after every historical B20 parameter so the historical construction seed preserves all shared random initialization.
 
@@ -86,9 +86,7 @@ gate gradient   nonzero
 query gradient  zero
 ```
 
-After the gate moves away from zero, the complementary query becomes coupled to the loss and must receive a finite nonzero gradient. The trainer refuses the run if that coupling never occurs during an epoch.
-
-This staged activation prevents a randomly initialized second summary from perturbing B20 before the model has learned that any complementary contribution is useful.
+After the gate moves away from zero, the complementary query becomes coupled to the loss and receives a finite nonzero gradient. The completed fixed-E2 run recorded both gate and query coupling in each epoch.
 
 ## Frozen controls
 
@@ -113,29 +111,14 @@ expert labels in gradients  0
 expert checkpoint selection none
 ```
 
-## Runtime
+## Completed runtime
 
 ```text
-hard budget       <= 8.25 h
-internal reserve   >= 30 min
-competition limit      9 h
+hard budget          <= 8.25 h
+internal reserve      >= 30 min
+observed training     ~61.6 min
+competition limit          9 h
 ```
-
-B29 adds only one 768-dimensional scoring query and one 768-dimensional gate over already-computed slice embeddings. The encoder workload and number of study tokens remain unchanged, so B29 should stay in the same roughly one-hour runtime class as recent B20-family fixed-E2 runs on the RTX A4500 Laptop GPU. Actual runtime must still be measured.
-
-## Safety tests before full training
-
-The B29 tests pin:
-
-- exactly 1,536 new parameters;
-- exactly zero gate initialization;
-- B20 functional equivalence at zero gate;
-- B20 **training-mode RNG-path equivalence** at zero gate with dropout enabled;
-- finite normalized complementary softmax weights;
-- bounded tanh gate;
-- expected staged gradient behavior: gate first, then query;
-- bf16 finite behavior;
-- empty-study finite behavior.
 
 ## Training outputs
 
@@ -147,12 +130,42 @@ runs/b29_complementary_series_pool/
 └── complementary_pool_state.json
 ```
 
-The state audit records query norm, query cosine similarity to the historical primary pooling query, gate magnitude, exact surface coverage, frozen encoder SHA, and runtime.
+The final effective feature-wise gate remained small and unsaturated (max absolute value ~0.0225, mean absolute value ~0.00516).
+
+## Reused expert result
+
+On the 58-study reused expert development surface:
+
+```text
+B20 macro AUC              0.6674066371
+B29 macro AUC              0.6768879224
+raw delta                 +0.0094812853
+paired median delta       +0.0094213679
+paired 95% CI             [-0.0037494185, +0.0241875594]
+P(B29 > B20)               0.9188
+```
+
+This is encouraging but **not independent validation**. B20 itself was historically selected using these expert studies. B29 was fixed before its outcome was inspected, but this surface remains reused development evidence.
+
+See:
+
+```text
+developments/docs/B29_REUSED_GOLD_RESULT.md
+```
+
+for the full target-wise result, freeze decision, and hidden competition protocol.
 
 ## Evaluation governance
 
 B29 trains on all 3,120 historical B20 weak-supervision studies, so the historical 623-study weak-v2 partition is not a holdout.
 
-The 58 expert studies are heavily reused development data and were historically used to select B20 checkpoints. A B20-vs-B29 paired comparison on those studies is therefore descriptive/post-hoc only. It cannot independently promote B29.
+No target-specific gate, target-specific query, endpoint change, selective ensemble, probability blend, or architecture retuning may be derived from the reused expert result.
 
-No target-specific gate, target-specific query, endpoint change, selective ensemble, or architecture retuning may be derived from that reused expert result. If B29 shows a convincing broad improvement there, the next independent performance signal should come from hidden competition evaluation rather than another target-wise retune on the 58 studies.
+The next independent performance signal is the hidden competition comparison of:
+
+```text
+Submission A = canonical B20
+Submission B = exact frozen B29 fixed-E2 checkpoint
+```
+
+No blending is used in this first comparison. B20 remains the active model until that independent signal justifies promotion.
