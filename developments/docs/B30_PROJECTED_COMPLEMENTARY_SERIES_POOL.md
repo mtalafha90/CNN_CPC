@@ -1,6 +1,6 @@
 # B30 — projected complementary attention
 
-> **Status — 2026-08-16:** IMPLEMENTED / FROZEN BEFORE B30 OUTCOME / READY FOR SAFETY TESTS. **B20 remains the active working model. B29 remains a frozen promising candidate and is not modified.**
+> **Status — 2026-08-16:** IMPLEMENTED / FROZEN BEFORE B30 OUTCOME / **SAFETY TESTS PASSED / READY FOR FULL TRAINING**. **B20 remains the active working model. B29 remains a frozen promising candidate and is not modified.**
 
 ## Why B30 exists
 
@@ -162,6 +162,8 @@ The B30 tests pin:
 - finite/bounded mechanism-audit metrics;
 - bf16 finite behavior;
 - empty-study finite behavior.
+
+GitHub Actions completed successfully after B30 integration, including compilation and the B30 safety suite.
 
 ## Training outputs
 
