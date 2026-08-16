@@ -2,7 +2,7 @@
 
 This directory preserves the complete research/development history that previously occupied the repository root.
 
-It contains the B0--B30 experiment lineage, historical configurations, documentation, scripts, source modules, tests, Kaggle methodology notes, fixtures, manuscript material and the previous GitHub workflows.
+It contains the B0--B31 experiment lineage, historical configurations, documentation, scripts, source modules, tests, Kaggle methodology notes, fixtures, manuscript material and the previous GitHub workflows.
 
 ## Layout
 
@@ -32,11 +32,13 @@ The files are preserved for reproducibility. New work on the active model should
 
 B26 supervision repair is closed and not promoted. B27 was structurally superseded before outcome inspection after a routing audit found perfect fluid/fat metadata collinearity on all 17,475 training series. B27.1 corrected that defect with a 60-parameter `plane + paired_sequence` route, completed a valid fixed-E2 run, and was then evaluated on the reused 58-study expert development surface. Its macro AUC was 0.659923 versus B20 0.667407 (delta -0.007483; paired 95% CI [-0.034725, +0.019182]; P[B27.1>B20]=0.2918), so B27.1 was not promoted and the routing family is closed for that formulation.
 
-B28 then tested a zero-gated element-wise max-evidence residual over encoder image-content slice embeddings. The fixed-E2 run was valid and the 768-dimensional gate learned small finite values, but the reused expert macro fell to 0.638346 versus B20 0.667407 (delta -0.029061; paired 95% CI [-0.065624, +0.007122]; P[B28>B20]=0.0586). B28 is not promoted and the max-evidence residual formulation is closed.
+B28 tested a zero-gated element-wise max-evidence residual over encoder image-content slice embeddings. The valid fixed-E2 run fell to macro 0.638346 versus B20 0.667407 on the reused expert surface (delta -0.029061; P[B28>B20]=0.0586). B28 is closed and not promoted.
 
-B29 tested a zero-gated second learned softmax summary of the same 16 B20 slice tokens. Its fixed-E2 training run completed the exact B20 surface with a frozen B16 encoder. On the reused 58-study expert development surface, B29 reached macro AUC 0.676888 versus B20 0.667407 (raw delta +0.009481; paired 95% CI [-0.003749, +0.024188]; P[B29>B20]=0.9188). This is encouraging but not independent validation. B29 is therefore a **frozen promising candidate, not promoted**. Its hidden competition submission has been frozen byte-for-byte and B29 must not be retuned from the reused 58-study result.
+B29 tested a zero-gated second learned softmax summary of the same 16 B20 slice tokens. Its fixed-E2 run completed the exact B20 surface. On the reused 58-study expert development surface, B29 reached macro AUC 0.676888 versus B20 0.667407 (delta +0.009481; paired 95% CI [-0.003749, +0.024188]; P[B29>B20]=0.9188). This is encouraging but not independent validation. B29 is therefore a **frozen promising candidate, not promoted**, and must not be retuned from the reused expert result.
 
-The next prospectively frozen experiment is **B30**. B30 keeps B20's historical learned-attention series token `A`, but replaces B29's raw dot-product complementary summary with a new query operating through the current B20 Q/K/V, output-projection and LayerNorm affine parameters as **detached deterministic operators**. The B20 `A` branch remains unchanged. B30 adds the same 1,536 trainable parameters as B29 (768 query + 768 zero-init gate), starts as the exact B20 function, uses fixed E2, and records a prospective attention-complementarity mechanism audit before any B30 expert outcome is inspected.
+B30 replaced B29's raw dot-product complementary scorer with a projected complementary query using detached current B20 Q/K/V/out/LayerNorm operators. Its training/mechanism audit was valid, but the reused expert macro declined to 0.654703 versus B20 0.667407 (delta -0.012703; paired 95% CI [-0.039119, +0.010722]; P[B30>B20]=0.1422). B30 is **not promoted and its formulation is closed**. See `docs/B30_REUSED_GOLD_RESULT.md`.
+
+The next prospectively frozen experiment is **B31 local-context complementary pooling**. B31 keeps B29's simple learned query and original-value weighted sum, but scores each slice after a zero-initialized depthwise Conv1d(k=3) local through-plane context residual. Context changes attention scores only; the weighted values remain the original B20 slice tokens. B31 adds 2,304 context parameters to B29's 1,536 query+gate parameters, for 3,840 new parameters versus B20. Both the context convolution and outer B29 gate start at exact zero, so B31 starts as the exact B20 function and as exact B29 complementary scoring when the context branch is zero.
 
 Canonical result/design records include:
 
@@ -47,9 +49,11 @@ docs/B28_REUSED_GOLD_RESULT.md
 docs/B29_COMPLEMENTARY_SERIES_POOL.md
 docs/B29_REUSED_GOLD_RESULT.md
 docs/B30_PROJECTED_COMPLEMENTARY_SERIES_POOL.md
+docs/B30_REUSED_GOLD_RESULT.md
+docs/B31_LOCAL_CONTEXT_COMPLEMENTARY_POOL.md
 ```
 
-Current B29/B30 implementation support:
+Current B29--B31 implementation support:
 
 ```text
 src/rsna_knee/b29_complementary_series_pool.py
@@ -62,9 +66,14 @@ src/rsna_knee/b30_projected_complementary_series_pool.py
 src/rsna_knee/b30_training.py
 src/rsna_knee/b30_gold_eval.py
 tests/test_b30_projected_complementary_series_pool.py
+
+src/rsna_knee/b31_local_context_complementary_pool.py
+src/rsna_knee/b31_training.py
+src/rsna_knee/b31_gold_eval.py
+tests/test_b31_local_context_complementary_pool.py
 ```
 
-B30 frozen controls remain the B20/B29 historical recipe: B6 supervision, frozen B16 encoder, 90% crop, all 3,120 studies, all 17,475 eligible series, 14,123 supervision cells, the historical optimizer/augmentation/loader seed, five-epoch scheduler horizon, and fixed-E2 endpoint. The historical 623-study weak-v2 partition is not a holdout for B30.
+B31 keeps the historical B20/B29 controls: B6 supervision, frozen B16 encoder, 90% crop, all 3,120 studies, all 17,475 eligible series, 14,123 supervision cells, historical optimizer/augmentation/loader seed, five-epoch scheduler horizon, and fixed-E2 endpoint. The 623-study weak-v2 partition is not a holdout.
 
 For commands from this archive, the implementation remains importable with:
 
