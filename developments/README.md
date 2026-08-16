@@ -38,7 +38,9 @@ B31 kept B29's simple query and added a zero-init depthwise Conv1d(k=3) local-co
 
 B32 added a same-weight second-order feature standard-deviation summary alongside B29's mean-like residual. The training/mechanism run was valid and the dispersion residual was non-redundant, but the reused expert macro was only 0.668699, versus B29 0.676888 and B31 0.682280. B32-B31 was -0.013580 raw with P[B32>B31]=0.0946. B32 is **not promoted and its weighted-dispersion formulation is closed**. See `docs/B32_REUSED_GOLD_RESULT.md`.
 
-The next prospectively frozen experiment is **B33 exact-uniform complementary mean**. B33 removes the learned complementary query entirely and uses the exact arithmetic mean of the 16 B20 slice tokens, followed by parameter-free LayerNorm, behind one zero-init 768-D feature-wise tanh gate. B33 therefore adds only 768 parameters versus B20 and starts as the exact B20 function. It contains no B29 query, B31 local-context convolution, B32 dispersion statistic, projection, trainable normalization or target-specific route. The experiment directly tests whether the B29/B31 development signal comes from a second broad mean-like series representation rather than learned slice selection.
+B33 removed the learned complementary query entirely and used the exact arithmetic mean of the 16 B20 slice tokens behind one zero-init 768-D gate. On the reused 58-study expert surface B33 reached 0.676446, essentially matching B29 0.676888 (raw delta -0.000442; paired 95% CI [-0.023312, +0.022036]; P[B33>B29]=0.4800). B31 remained numerically highest at 0.682280. B33 is therefore a **successful frozen simplification, not independently validated and not promoted**. Its result supports the interpretation that most of B29's development gain may come from a second broad global series representation rather than learned slice selection. See `docs/B33_REUSED_GOLD_RESULT.md`.
+
+The repeatedly reused 58-study expert surface is now retired as the primary architecture-design surface. Before any B34 experiment, the repository freezes **prospective weak-validation v1**: a StudyInstanceUID-hash 80/20 split of the 3,120 active B6 studies, with 2,496 studies for matched fixed-E2 training and 624 untouched studies for weak-label validation. Split membership uses UID hashes only and does not use B6 labels, expert labels, model predictions or previous scores. B20, B31 and B33 are retrained as matched controls on the 80% subset before B34. This is architecture-selection evidence only, not independent clinical validation. See `docs/PROSPECTIVE_WEAK_V1.md`.
 
 Canonical result/design records include:
 
@@ -54,9 +56,11 @@ docs/B31_LOCAL_CONTEXT_COMPLEMENTARY_POOL.md
 docs/B32_DISPERSION_COMPLEMENTARY_POOL.md
 docs/B32_REUSED_GOLD_RESULT.md
 docs/B33_UNIFORM_COMPLEMENTARY_MEAN.md
+docs/B33_REUSED_GOLD_RESULT.md
+docs/PROSPECTIVE_WEAK_V1.md
 ```
 
-Current B29--B33 implementation support:
+Current B29--B33 and prospective-validation implementation support:
 
 ```text
 src/rsna_knee/b29_complementary_series_pool.py
@@ -84,9 +88,14 @@ src/rsna_knee/b33_uniform_complementary_mean.py
 src/rsna_knee/b33_training.py
 src/rsna_knee/b33_gold_eval.py
 tests/test_b33_uniform_complementary_mean.py
+
+src/rsna_knee/prospective_weak_v1.py
+src/rsna_knee/prospective_weak_v1_training.py
+src/rsna_knee/prospective_weak_v1_eval.py
+tests/test_prospective_weak_v1.py
 ```
 
-B33 keeps the historical B20 controls: B6 supervision, frozen B16 encoder, 90% crop, all 3,120 studies, all 17,475 eligible series, 14,123 supervision cells, historical optimizer/augmentation/loader seed, five-epoch scheduler horizon, and fixed-E2 endpoint. The 623-study weak-v2 partition is not a holdout.
+The historical B20-family controls remain B6 supervision, frozen B16 encoder, 90% post-resize crop, all-series B12/B13 policy, historical optimizer/augmentation/loader seed, five-epoch scheduler horizon, and fixed-E2 endpoint for recent candidates. The 623-study weak-v2 partition is not a holdout.
 
 For commands from this archive, the implementation remains importable with:
 
