@@ -97,3 +97,58 @@ def test_b27_metadata_bias_is_pathology_specific():
     assert float(bias[0, 0, 1]) == 0.0
     assert float(bias[0, 1, 1]) == -0.75
     assert float(bias[0, 1, 0]) == 0.0
+
+
+def _routing_batch():
+    """Two studies: one with three real series, one with a single real series."""
+    volumes = torch.randn(2, 4, 1, 3, 64, 64)
+    present = torch.tensor([[1, 1, 1, 0], [1, 0, 0, 0]], dtype=torch.bool)
+    meta = torch.tensor(
+        [
+            [[1, 1, 1], [2, 2, 2], [3, 1, 2], [0, 0, 0]],
+            [[2, 2, 1], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+        ],
+        dtype=torch.long,
+    )
+    return volumes, present, meta
+
+
+def test_b27_backward_reaches_every_routing_parameter():
+    """The 84 routing biases must actually receive finite gradient.
+
+    They are zero-initialised, so a plumbing fault that detached them would
+    leave B27 silently identical to B20 for a whole GPU session.
+    """
+    model = _model(PathologyMetadataRoutedKneeMILNet)
+    logits = model(*_routing_batch())
+    assert torch.isfinite(logits).all()
+    logits.sum().backward()
+
+    for name in ("route_plane_bias", "route_fluid_bias", "route_fat_bias"):
+        grad = getattr(model, name).grad
+        assert grad is not None, f"{name} received no gradient"
+        assert torch.isfinite(grad).all(), f"{name} gradient is not finite"
+        assert torch.count_nonzero(grad).item() == grad.numel()
+
+
+def test_b27_additive_inf_mask_survives_bf16_autocast():
+    """Training runs in bf16; the -inf padding mask must not produce NaN."""
+    model = _model(PathologyMetadataRoutedKneeMILNet)
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        logits = model(*_routing_batch())
+    assert torch.isfinite(logits).all()
+
+    logits.float().sum().backward()
+    assert torch.isfinite(model.route_plane_bias.grad).all()
+
+
+def test_b27_study_with_no_real_series_stays_finite():
+    """Every series padded means every routing logit is -inf before softmax."""
+    model = _model(PathologyMetadataRoutedKneeMILNet)
+    with torch.no_grad():
+        model.route_plane_bias.fill_(3.0)
+
+    volumes, _, meta = _routing_batch()
+    empty = torch.zeros(volumes.shape[0], volumes.shape[1], dtype=torch.bool)
+    logits = model(volumes, empty, torch.zeros_like(meta))
+    assert torch.isfinite(logits).all()
