@@ -86,7 +86,11 @@ def test_b30_complementary_path_detaches_shared_projection_parameters():
     summary, weights = model._projected_complementary_summary(active)
     assert torch.isfinite(summary).all()
     assert torch.isfinite(weights).all()
-    summary.sum().backward()
+
+    # A non-uniform deterministic probe avoids the zero-gradient symmetry of
+    # summing all LayerNorm outputs equally.
+    probe = torch.linspace(-1.0, 1.0, summary.shape[-1], dtype=summary.dtype)
+    (summary * probe[None, :]).sum().backward()
 
     assert active.grad is not None and torch.count_nonzero(active.grad).item() > 0
     q_grad = model.complementary_query.grad
