@@ -1,6 +1,6 @@
 # Prospective weak-validation v1
 
-> **Frozen before B34.** This framework replaces the repeatedly reused 58-study expert set as the primary architecture-selection surface for subsequent development. It is a weak-label validation framework, not independent clinical validation.
+> **Frozen before B34.** This framework replaces the repeatedly reused 58-study expert set as the primary architecture-selection surface for subsequent **downstream/frozen-encoder** development. It is a weak-label validation framework, not independent clinical validation.
 
 ## Why this exists
 
@@ -26,9 +26,11 @@ All 3,120 active UIDs are sorted by this key. The first 624 are assigned to vali
 
 The generated manifest records the exact UID lists and SHA-256 fingerprints. Once generated, the split must not be changed after model outcomes are inspected.
 
-### Scope limitation
+### Scope limitations
 
 This policy certifies **study-level** separation only. It does not claim patient-identity grouping because the frozen supervision surface is keyed by `StudyInstanceUID`. If a trustworthy patient identifier becomes available later, that would require a separately named validation policy rather than silently changing this split.
+
+There is also an important representation-pretraining limitation: the historical B16 encoder was aligned on **all 4,349 non-gold MRI/report pairs**. The 624 PV1 validation studies are therefore not unseen by the historical encoder. For that reason PV1 is valid only for comparing **downstream architecture changes while the exact same B16 encoder remains frozen and shared**. PV1 must not be used to select a new encoder, a new representation-pretraining method, or any change that retrains the encoder using this validation population.
 
 ## Matched controls
 
@@ -44,7 +46,7 @@ All three use:
 
 ```text
 same B6 supervision policy
-same frozen B16 encoder
+same exact frozen B16 encoder
 same 90% post-resize crop
 same variable-series policy
 same optimizer and LR
@@ -57,11 +59,11 @@ no validation checkpoint selection
 no expert labels
 ```
 
-The 624 validation studies are never loaded during matched-control training.
+The 624 validation studies are never loaded during the matched-control supervised training stage.
 
 ## Primary selection metric
 
-Primary metric on the untouched validation partition:
+Primary metric on the untouched matched-control validation partition:
 
 ```text
 macro of per-target B6-weighted soft-label BCE
@@ -83,9 +85,9 @@ Paired study-level bootstrap differences of the primary loss are reported for B3
 
 ## Interpretation boundary
 
-This surface is fresh with respect to the B20--B33 architecture decisions, but its labels are still generated from the B6 report-supervision system. It therefore provides a prospective **architecture-selection** signal, not independent expert/clinical validation.
+This surface is fresh with respect to the **supervised downstream B20--B33 architecture decisions**, but its labels are generated from B6 reports and its fixed B16 encoder was historically pretrained using all non-gold reports. PV1 therefore provides a prospective **frozen-encoder downstream architecture-selection** signal only. It is not independent expert/clinical validation and is not a valid encoder-selection surface.
 
-A future B34 may be selected against this frozen surface. The split itself, primary metric, fixed E2 endpoint, and matched-control protocol must not be changed in response to observed outcomes.
+A future B34 may be selected against this frozen surface only if it retains the exact shared frozen B16 encoder. The split itself, primary metric, fixed E2 endpoint, and matched-control protocol must not be changed in response to observed outcomes.
 
 ## Commands
 
