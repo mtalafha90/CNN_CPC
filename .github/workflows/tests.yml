@@ -42,4 +42,5 @@ jobs:
             developments/tests/test_dataset_contract_audit.py \
             developments/tests/test_dataset_header_audit.py \
             developments/tests/test_dataset_domain_intersection_audit.py \
-            developments/tests/test_report_supervision_gap_audit.py
+            developments/tests/test_report_supervision_gap_audit.py \
+            developments/tests/test_report_translation_rescue_pilot.py
