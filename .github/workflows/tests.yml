@@ -39,4 +39,5 @@ jobs:
             developments/tests/test_prospective_weak_v1.py \
             developments/tests/test_pv1_b31_context_counterfactual.py \
             developments/tests/test_prospective_weak_v2.py \
-            developments/tests/test_dataset_contract_audit.py
+            developments/tests/test_dataset_contract_audit.py \
+            developments/tests/test_dataset_header_audit.py
