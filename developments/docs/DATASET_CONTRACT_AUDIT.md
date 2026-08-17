@@ -82,70 +82,63 @@ Direct inspection found target-relevant diagnostic content in **all 36** inactiv
 
 The current B6 rule set is multilingual but largely Latin-script. Its normalizer does not transliterate Greek or Cyrillic, and its target/normality/negation lexicons contain no effective native Greek/Cyrillic coverage.
 
-The active controls confirm the mechanism:
-
-```text
-12/12 sampled Greek B6-active reports:
-    exactly one usable cell each
-    Contusion positive
-    driven by embedded English `bone bruise`
-
-single Cyrillic B6-active report:
-    exactly one usable cell
-    Fracture positive
-    driven by embedded English `subchondral insufficiency fracture`
-```
-
-Latin-script failure is also substantial. The 12 sampled inactive Latin-script reports included South-Slavic Latin-script, Turkish and Spanish reports with clear target findings that the frozen rule vocabulary did not resolve.
-
-Consequently:
-
-```text
-modify B6 v1.2.1 in place                         NO-GO
-Greek/Cyrillic-only lexicon patch                  NO-GO
-revive unrestricted B23 replacement                NO-GO
-define B35                                          NO-GO
-constrained translation -> frozen-B6 rescue pilot   GO
-```
+The active controls confirm the mechanism: sampled Greek B6-active reports were activated by embedded English `bone bruise`, while the single Cyrillic active control was activated by embedded English fracture wording. Latin-script failure is also substantial, including South-Slavic Latin-script, Turkish and Spanish terminology missed by the frozen rules.
 
 Raw Phase-5 report text remains a local-only artifact and must not be committed.
 
-## Phase 6 — FROZEN, READY TO RUN: translation -> frozen-B6 rescue
+## Phase 6 — COMPLETE/PASS: deterministic translation -> frozen B6
 
-Protocol recorded in:
+Protocol:
 
 ```text
 developments/docs/DATASET_CONTRACT_AUDIT_PHASE6_TRANSLATION_RESCUE.md
 ```
 
+Result:
+
+```text
+developments/docs/DATASET_CONTRACT_AUDIT_PHASE6_RESULT.md
+```
+
+The exact frozen pilot passed every predeclared feasibility rule:
+
+```text
+translation failures                    0
+overall inactive rescue             31/36 = 86.11%
+Latin inactive rescue               12/12 = 100%
+Greek inactive rescue                7/12 = 58.33%
+Cyrillic inactive rescue            12/12 = 100%
+added usable cells                    112
+added positive cells                   81
+added negative cells                   31
+active B6 controls preserved        25/25
+```
+
+The translator was `qwen3:14b` under the frozen local deterministic provenance and the language model performed translation only. Frozen B6 v1.2.1 remained the target-state extractor.
+
+Five Greek pilot reports remained unrecovered despite successful translations, demonstrating that translation solves much, but not all, of the frozen-B6 terminology/aggregation gap. No B6 rule changes are permitted from this result.
+
+The reused-gold translation diagnostic produced 109 definite calls over 216 official cells (50.46% coverage), with 74.31% definite-call accuracy, 68.54% positive-call precision and 100% negative-call precision. These numbers are diagnostic only and are not independent validation or a promotion gate.
+
+Phase 6 therefore establishes **coverage-mechanism feasibility**, not clinical label accuracy.
+
+## Phase 7 — FROZEN, READY TO RUN: full 1,229-study inactive-population audit
+
+Protocol:
+
+```text
+developments/docs/DATASET_CONTRACT_AUDIT_PHASE7_FULL_TRANSLATION_RESCUE.md
+```
+
 Implementation:
 
 ```text
-developments/src/rsna_knee/report_translation_rescue_pilot.py
+developments/src/rsna_knee/report_translation_rescue_full.py
 ```
 
-The hypothesis is deliberately narrow:
+Phase 7 applies the exact Phase-6 translator only to the complete 1,229-study zero-original-cell population. The code aborts if the model digest, prompt hash, quantisation, seed or output budget differ from the successful pilot.
 
-```text
-original report
-  -> deterministic pinned local translation to English
-  -> unchanged frozen B6 v1.2.1
-  -> translated-B6 cells eligible ONLY when original study has zero usable B6 cells
-```
-
-Original B6-active studies remain unchanged by construction. The translator is not asked to classify the 12 targets.
-
-Frozen feasibility criteria, declared before translation results are observed:
-
-```text
-translation failures                                      0
-overall rescue among 36 inactive sample reports          >=75%
-rescue in each Latin/Greek/Cyrillic inactive stratum     >=50%
-each inactive script stratum recovers positive + negative cells
-all original B6-active control cells preserved            yes
-```
-
-Gold metrics are diagnostic safety information only because the gold surface is reused and Phase 5 directly inspected the report texts.
+The run is resumable through a local append-only translation cache. Phase 7 records overall/script/target recovery and optional acquisition-domain recovery. It does not create an authorized MRI training target file.
 
 Run:
 
@@ -154,16 +147,22 @@ cd /media/talafha/Disk_1/CNN_CPC_current
 conda activate rsna-knee
 git pull --ff-only origin main
 
+export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
+export B6_ROOT="/media/talafha/Disk_1/CNN_CPC/runs/b6_report_labels_v121"
+
 PYTHONPATH=developments/src \
-python -m rsna_knee.report_translation_rescue_pilot \
-  --sample-jsonl runs/report_supervision_gap_audit/report_text_sample.jsonl \
-  --out-root runs/report_translation_rescue_pilot \
+python -m rsna_knee.report_translation_rescue_full \
+  --data-root "$DATA_ROOT" \
+  --b6-root "$B6_ROOT" \
+  --domain-study-csv runs/dataset_domain_intersection_audit/study_domain_table.csv \
+  --out-root runs/report_translation_rescue_full \
   --model qwen3:14b \
   --num-ctx 8192 \
-  --max-new-tokens 4096
+  --max-new-tokens 4096 \
+  --seed 2026
 ```
 
-The translated-text output is local-only and must not be committed.
+Raw translations in `translation_cache.jsonl` are local-only and must not be committed.
 
 ## Current decision boundary
 
@@ -171,9 +170,10 @@ The translated-text output is local-only and must not be committed.
 globally increase 16 slice positions              NO-GO
 create adaptive 3D sampler now                     NO-GO
 modify frozen B6 v1.2.1                            NO-GO
+fill partially silent B6-active studies            NO-GO
+target/script-specific rescue tuning               NO-GO
 define B35                                         NO-GO
-run frozen Phase-6 translation rescue pilot        GO
-full 1229-study translation rescue                 only if Phase 6 passes
+run frozen Phase-7 full inactive-population audit  GO
 MRI training using translation rescue              NOT YET AUTHORIZED
 verify compressed-DICOM codec capability           GO before hidden submission
 ```
