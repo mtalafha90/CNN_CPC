@@ -1,6 +1,5 @@
 %% CNN_CPC manuscript draft for Computer Physics Communications.
-%% Updated 2026-08-17 to reflect the current B20--B33 development lineage
-%% and prospective weak-validation v1 status. PV1 final evaluation is pending.
+%% Updated 2026-08-17: full B0--B33 development history and completed PV1 result.
 \documentclass[preprint,12pt]{elsarticle}
 
 \usepackage{amsmath,amssymb}
@@ -17,26 +16,26 @@
 
 \newcommand{\code}[1]{\texttt{#1}}
 \newcommand{\R}{\mathbb{R}}
-\newcommand{\sigmoid}{\operatorname{sigmoid}}
+\newcommand{\LNzero}{\mathrm{LN}_0}
 
 \journal{Computer Physics Communications}
 
 \begin{document}
 \begin{frontmatter}
 
-\title{CNN\_CPC: Leakage-aware weak supervision, hierarchical series aggregation, and controlled model development for multi-sequence knee MRI classification}
+\title{CNN\_CPC: Leakage-aware weak supervision and hierarchical multi-series knee MRI classification}
 
 \author[a]{Mohammed H. Talafha\corref{cor1}}
 \cortext[cor1]{Corresponding author.}
 \address[a]{Research Institute of Sciences and Engineering, University of Sharjah, Sharjah, United Arab Emirates}
-% TODO before submission: add the corresponding author's e-mail address.
+% TODO before submission: add corresponding-author e-mail.
 
 \begin{abstract}
-Knee magnetic-resonance imaging (MRI) classification is difficult when trusted structured labels are scarce, radiology reports are abundant but incomplete, and each examination contains a heterogeneous set of pulse sequences. We present \code{CNN\_CPC}, a PyTorch framework for leakage-aware weakly supervised, study-level classification of twelve knee abnormalities. The released development surface contains 4,407 studies and 24,371 MRI series; 58 studies carry complete expert labels, while the remaining 4,349 studies are primarily supervised through their reports. A frozen report parser converts each report/target cell to positive, negated, uncertain, or unmentioned, and report silence is never treated as a negative label. The active B20 model uses 3,120 report-supervised studies, 17,475 eligible MRI series, and 14,123 usable target cells. Each real MRI series is represented by sixteen distributed 2.5D slice triplets, a frozen ConvNeXt-Tiny encoder, learned attention pooling to one token per series, study-level Transformer context, and twelve learned pathology queries. B20 additionally applies a deterministic centered 90\% crop to the resized MRI input and resizes back to $224\times224$.
+Knee magnetic-resonance imaging (MRI) classification is challenging when trusted structured labels are scarce, radiology reports are abundant but incomplete, and each examination contains a heterogeneous collection of pulse sequences. We present \code{CNN\_CPC}, a PyTorch framework for leakage-aware, weakly supervised, study-level classification of twelve knee abnormalities. The released development surface contains 4,407 studies and 24,371 MRI series. Fifty-eight studies carry complete expert labels, whereas the remaining 4,349 are primarily accompanied by reports. The frozen B6 report parser maps each report/target cell to positive, negated, uncertain, or unmentioned; report silence is never converted automatically to a negative label. The active B20 model is trained on 3,120 report-supervised studies containing 17,475 eligible MRI series and 14,123 usable target cells. Each real MRI series is represented by sixteen distributed 2.5D slice triplets, a frozen ConvNeXt-Tiny encoder, learned attention pooling to one series token, a study-level Transformer, and twelve learned pathology queries. B20 additionally uses a deterministic post-resize centered 90\% crop.
 
-Because the same 58 expert studies were repeatedly used during development, later architecture experiments are reported as reused-development diagnostics rather than independent validation. On this surface, B20 reached macro ROC AUC 0.66741. B29 added a zero-gated second learned series summary and reached 0.67689; B31 added local through-plane context to the complementary scorer and reached 0.68228; B32 added a non-redundant weighted dispersion summary but fell to 0.66870; and B33 removed the learned complementary query entirely, using an exact uniform mean behind a 768-parameter gate, and reached 0.67645. B33 was therefore practically indistinguishable from B29 on the reused surface despite using half as many new parameters, supporting the interpretation that the useful signal is primarily a second broad global series representation rather than learned slice selection. B31 remains the highest reused-development candidate, but no post-B20 candidate is promoted because this surface is not independent.
+The software was developed through a controlled B0--B33 experiment ladder. B10--B17 progressively replaced fixed-stream processing with all-series hierarchical aggregation and improved the visual representation, culminating in the frozen B16 report-aligned encoder and the B17 frozen-encoder downstream regime. B18--B22 studied checkpoint selection and spatial focusing; B20 became the active reference after removing the synthetic vignette artifact introduced by B19. B23--B26 investigated supervision density and class coverage but did not justify replacement of the frozen B6 training contract. B27--B33 then tested increasingly constrained complementary series summaries. On the repeatedly reused 58-study expert development surface, B20 replay reached macro ROC AUC 0.66741, B29 reached 0.67689, B31 reached 0.68228, B32 reached 0.66870, and the simplified B33 reached 0.67645. These values are development diagnostics, not independent validation.
 
-To stop further architecture optimization against the reused 58-study set, we prospectively froze an 80/20 StudyInstanceUID hash split of the 3,120 active weak-supervision studies before B34. The resulting 2,496-study training partition contains 13,931 eligible series and 11,303 usable weak cells; the untouched 624-study partition is reserved for downstream architecture selection with the exact same frozen B16 encoder. Matched fixed-E2 B20, B31, and B33 controls have completed training. Their epoch-2 training losses are 0.69249, 0.69122, and 0.68335, respectively; these training losses are not selection metrics. The prospectively frozen primary validation metric is the macro average of per-target B6-weighted soft-label binary cross-entropy, with study-level paired bootstrap uncertainty. At the present manuscript snapshot the final 624-study prospective evaluation is still running and no PV1 model ranking is reported. This separation between frozen architecture design, reused expert diagnostics, prospective weak-label architecture selection, and future independent hidden evaluation is a central methodological contribution of the software.
+To stop further optimization against the reused expert set, prospective weak-validation v1 (PV1) was frozen before B34. A deterministic StudyInstanceUID-only hash split assigns 2,496 B6-active studies to matched training and 624 studies, comprising 3,544 MRI series, to downstream validation. B20, B31, and B33 were retrained under identical fixed-E2 conditions with the same frozen B16 encoder. The predeclared primary metric is the macro average of per-target B6-weighted soft-label binary cross-entropy, where lower is better. PV1 yielded 0.61558 for B20, 0.57431 for B31, and 0.58497 for B33. The paired bootstrap median B31--B20 difference was $-0.04114$ with 95\% interval $[-0.05182,-0.02959]$; B33--B20 was $-0.03069$ with interval $[-0.04735,-0.01303]$; and B33--B31 was $+0.01086$ with interval $[+0.00225,+0.01951]$. The secondary macro AUC was 0.57276, 0.75673, and 0.75652 for B20, B31, and B33, respectively. Thus B31 is the prospectively selected downstream architecture under the frozen PV1 criterion, while B20 remains the active historical model because PV1 uses weak labels and is not independent expert validation. The framework explicitly separates model development, weak-label architecture selection, reused expert diagnostics, and future independent hidden or external evaluation.
 
 \vspace{1em}
 \noindent\textbf{PROGRAM SUMMARY}
@@ -44,21 +43,22 @@ To stop further architecture optimization against the reused 58-study set, we pr
 \begin{small}
 \noindent
 {\em Program Title:} CNN\_CPC \\
-{\em Developer's repository:} \url{https://github.com/mtalafha90/CNN_CPC} \\
+{\em Repository:} \url{https://github.com/mtalafha90/CNN_CPC} \\
 {\em Programming language:} Python $\geq 3.10$ with PyTorch. \\
 {\em Repository snapshot described here:} 17 August 2026. \\
-{\em Active working model:} B20 (\code{B20\_crop\_only\_joint\_focus}), canonical epoch 2. \\
+{\em Active historical model:} B20 (\code{B20\_crop\_only\_joint\_focus}), canonical epoch 2. \\
+{\em Prospectively selected downstream development architecture:} B31 under PV1; not promoted to independent-test status. \\
 
-{\em Nature of problem:} Study-level multi-label classification of twelve knee MRI abnormalities from heterogeneous DICOM examinations when only a very small subset has trusted structured labels and a much larger remainder is accompanied by incomplete free-text radiology reports. MRI studies contain variable numbers of sagittal, coronal, and axial acquisitions, multiple sequence contrasts, missing sequence types, scanner heterogeneity, and occasional partial DICOM corruption. \\
+{\em Nature of problem:} Study-level multi-label classification of twelve knee MRI abnormalities from heterogeneous DICOM examinations with sparse trusted labels, incomplete report-derived supervision, variable numbers of acquisitions, protocol heterogeneity, and occasional incomplete DICOM metadata. \\
 
-{\em Solution method:} CNN\_CPC validates competition metadata, repairs missing MRI-series metadata from DICOM headers when necessary, decodes and spatially orders all eligible real MRI series, constructs sixteen distributed 2.5D triplets per series, and encodes them with ConvNeXt-Tiny. A learned multi-head attention pool maps the slice tokens of each series to a single series token. A study-level Transformer integrates the variable-size set of series, and twelve pathology queries produce target-specific logits. The active visual encoder is initialized from historical competition-only image--report alignment and is frozen for B20-family experiments. Direct supervision comes from frozen B6 pathology-specific report labels with asymmetric soft targets and weights. \\
+{\em Solution method:} CNN\_CPC validates metadata, repairs missing series descriptors from DICOM headers when needed, orders slices spatially, constructs distributed 2.5D triplets, encodes them with ConvNeXt-Tiny, pools sixteen slice tokens to one series token, integrates all eligible real series with a study-level Transformer, and predicts twelve pathologies with learned queries. Reports are used only to create training supervision or representation-alignment targets; final prediction is MRI-only. \\
 
-{\em Restrictions and unusual features:} Reports are training-only supervision; final inference is MRI-only. Gold expert studies are excluded from weak-training gradients. The 58-study expert set has been reused and is explicitly retired as the primary architecture-design surface. Prospective weak-validation v1 is valid only for downstream architecture comparison with the exact frozen B16 encoder because that encoder was historically aligned on all 4,349 non-gold MRI/report pairs, including studies that now fall in the 624-study validation partition. CNN\_CPC is research software and is not a clinical diagnostic device.
+{\em Restrictions and unusual features:} Expert-labelled studies are excluded from weak-training gradients. The 58-study expert surface is explicitly treated as repeatedly reused development evidence. PV1 is a prospective weak-label architecture-selection surface and is valid only for downstream comparisons that share the exact frozen B16 encoder. CNN\_CPC is research software and is not a clinical diagnostic device.
 \end{small}
 \end{abstract}
 
 \begin{keyword}
-knee MRI \sep weak supervision \sep DICOM \sep ConvNeXt \sep Transformer \sep multi-series MRI \sep hierarchical aggregation \sep report supervision \sep model selection \sep reproducibility
+knee MRI \sep weak supervision \sep DICOM \sep ConvNeXt \sep Transformer \sep multi-series MRI \sep hierarchical aggregation \sep report supervision \sep prospective validation \sep reproducibility
 \end{keyword}
 
 \end{frontmatter}
@@ -66,51 +66,51 @@ knee MRI \sep weak supervision \sep DICOM \sep ConvNeXt \sep Transformer \sep mu
 \section{Introduction}
 \label{sec:introduction}
 
-Magnetic-resonance imaging provides complementary information about knee ligaments, menisci, cartilage, bone, synovium, and joint fluid through multiple anatomical planes and pulse sequences. Deep learning has demonstrated the feasibility of examination-level knee MRI classification, with MRNet providing an influential multi-series baseline \cite{bien2018mrnet}. Modern convolutional encoders such as ConvNeXt \cite{liu2022convnext} and attention-based sequence models \cite{vaswani2017attention} make it possible to integrate evidence from many slices and acquisitions. In the present setting, however, network capacity is not the only limiting factor. The central methodological problem is how to learn twelve target classifiers when structured labels are scarce, free-text reports are incomplete, MRI acquisition protocols vary substantially, and a very small expert-labelled set must be protected from direct training leakage and from excessive sequential reuse.
+MRI provides complementary information about knee ligaments, menisci, cartilage, bone, synovium, and joint fluid through multiple anatomical planes and pulse sequences. Examination-level knee MRI classification has been demonstrated by systems such as MRNet \cite{bien2018mrnet}, while modern convolutional encoders such as ConvNeXt \cite{liu2022convnext} and attention-based sequence models \cite{vaswani2017attention} provide flexible building blocks for multi-series learning. In the present setting, however, the central difficulty is not simply network capacity. It is how to learn twelve study-level targets when structured labels are scarce, free-text reports are incomplete, acquisition protocols vary, and a very small expert-labelled surface must be protected from both gradient leakage and excessive model-selection reuse.
 
-CNN\_CPC was developed around six principles. First, reports are training supervision rather than inference inputs. Second, report silence is not a negative label. Third, all eligible MRI series can contribute evidence instead of forcing each examination into one fixed protocol template. Fourth, expert-labelled studies do not enter weak-training gradients. Fifth, every development change is named and frozen before its evaluation. Sixth, the role of each evaluation surface is recorded explicitly: repeated expert-set results are development diagnostics, prospectively frozen weak-label partitions are architecture-selection surfaces only, and independent hidden or external data are required for promotion claims.
+CNN\_CPC was developed around six rules. Reports are training supervision rather than inference inputs. Report silence is not a negative label. Every eligible real MRI series may contribute evidence. Expert-labelled studies do not enter weak-training gradients. Each model intervention is versioned and frozen before its designated evaluation. Finally, every evaluation surface is assigned an explicit role: the historical 58-study expert set is reused development evidence, PV1 is prospective weak-label architecture-selection evidence, and hidden competition or external expert data are required for an independent performance claim.
 
-The repository contains a long controlled experiment ladder. Early B0--B9 work established competition-only representation learning, report-derived weak supervision, full weak-corpus coverage, DICOM handling, and several negative ablations. Later B10--B20 work replaced the earlier fixed six-stream abstraction with variable all-series hierarchical aggregation, improved the representation-learning path, and culminated in B20, which remains the active working model. B26--B33 then investigated report-supervision repair and increasingly constrained complementary series-level summaries. These later experiments produced a mechanistic result that now drives the next stage: a very small zero-gated global residual can help B20 on the reused development surface, while additional routing, max-evidence, projected-attention, or dispersion complexity has not provided reliable evidence of further benefit.
+The repository contains the complete B0--B33 history rather than only the early B0--B9 experiments. The present manuscript therefore documents the full transition from early fixed-stream baselines, through variable-series hierarchical aggregation and report-aligned representation learning, to the active B20 model, the B23--B26 supervision studies, the B27--B33 complementary-series family, and the completed prospective PV1 comparison.
 
 \section{Problem definition and data contract}
 \label{sec:problem}
 
 \subsection{Targets}
-For each study $i$, the model predicts $\hat{\mathbf y}_i\in[0,1]^{12}$ for ACL, MCL, medial meniscus, lateral meniscus, medial osteoarthritis, lateral osteoarthritis, patellofemoral osteoarthritis, effusion, synovitis, Baker's cyst, contusion, and fracture.
+For study $i$, the model predicts $\hat{\mathbf y}_i\in[0,1]^{12}$ in the fixed order ACL, MCL, medial meniscus, lateral meniscus, medial osteoarthritis, lateral osteoarthritis, patellofemoral osteoarthritis, effusion, synovitis, Baker's cyst, contusion, and fracture.
 
 \subsection{Released data surface}
-The verified release contains 4,407 training studies, 58 fully labelled expert studies, 4,349 report-only studies, and 24,371 series rows. The report-only pool supports representation learning and weak image supervision. The current B20-family supervision surface contains 3,120 active studies with at least one usable B6 target cell. Across those studies, 17,475 MRI series satisfy the frozen variable-series policy and 14,123 target cells are usable for direct weak supervision: 6,871 positive and 7,252 negated.
+The verified release contains 4,407 training studies, 58 fully labelled expert studies, 4,349 non-gold report studies, and 24,371 series rows. The active B20-family weak-supervision surface contains 3,120 studies with at least one usable B6 cell. Across those studies, 17,475 MRI series satisfy the frozen variable-series policy and 14,123 cells are supervised directly: 6,871 positive and 7,252 negated.
 
 \subsection{Evaluation roles}
-The 58 expert studies were repeatedly used to select or reject historical models. They are therefore referred to throughout this manuscript as the \emph{reused expert development surface}, not as independent validation. The historical 623-study weak-v2 subset is also not a holdout for B20-family experiments because those experiments train on the full 3,120-study active weak-supervision population.
+The 58 expert studies were used repeatedly in historical model selection and checkpoint diagnostics. They are therefore called the \emph{reused expert development surface}, not an independent validation cohort. The historical 623-study weak-v2 subset is also not a valid holdout for full-surface B20-family experiments because those experiments use all 3,120 B6-active studies.
 
-A separate prospective weak-validation framework was frozen on 16 August 2026 before B34. It uses a StudyInstanceUID-only hash split of the 3,120 active studies. This split is fresh with respect to downstream B20--B33 supervised architecture choices, but it is not independent clinical validation and it is not valid for encoder selection because the historical B16 encoder had already been aligned on all 4,349 non-gold MRI/report pairs.
+PV1 was frozen before any B34 experiment. It uses only StudyInstanceUID to define the split. PV1 is fresh with respect to supervised downstream B20/B31/B33 architecture selection, but it is not independent clinical validation because labels are derived from B6 and the historical B16 representation stage had already seen the non-gold reports, including reports corresponding to PV1 validation studies.
 
 \section{DICOM ingestion and 2.5D preprocessing}
 \label{sec:dicom}
 
-Selected DICOM objects are decoded with pydicom. When \code{ImageOrientationPatient} and \code{ImagePositionPatient} are available, slice order is determined from the image-plane normal
+DICOM objects are decoded with pydicom. When \code{ImageOrientationPatient} and \code{ImagePositionPatient} are present, ordering is determined from the image-plane normal
 \begin{equation}
 \mathbf n=\mathbf r\times\mathbf c,
 \end{equation}
-and scalar coordinate $z=\mathbf p\cdot\mathbf n$. \code{InstanceNumber} is used as fallback. Multi-frame objects are expanded deterministically. Pixel values are rescaled using the DICOM slope and intercept, MONOCHROME1 is inverted, finite 1st and 99th percentiles are used for clipping, and the result is normalized to $[0,1]$ before neural preprocessing.
+and scalar coordinate $z=\mathbf p\cdot\mathbf n$. \code{InstanceNumber} is the fallback. Multi-frame objects are expanded deterministically. Pixel values are rescaled with DICOM slope/intercept, MONOCHROME1 is inverted, robust finite percentiles are used for clipping, and intensities are mapped to the neural preprocessing range.
 
-For each eligible MRI series, sixteen center positions are distributed through the volume. With triplet gap $g$, center $c_s$ produces the 2.5D input
+For each eligible series, sixteen positions are distributed through the volume. With center $c_s$ and triplet gap $g$, the 2.5D input is
 \begin{equation}
 X_s=[I_{c_s-g},I_{c_s},I_{c_s+g}].
 \end{equation}
-Training can vary the gap and center position according to the frozen augmentation policy; evaluation uses the frozen three-center-offset TTA $[-1,0,1]$. Each triplet is represented as three input channels and resized to $224\times224$.
+Each triplet is represented as three channels at $224\times224$. Evaluation uses the frozen center-offset TTA $[-1,0,1]$.
 
-The B20 spatial intervention is intentionally simple. After the historical dataset preprocessing has produced the resized input, B20 takes a deterministic centered crop retaining 90\% of the in-plane extent and resizes the crop back to $224\times224$. No cosine vignette or artificial dark border is applied.
+B20 applies its joint-focus operation \emph{after} the historical resize: a deterministic centered crop retaining 90\% of the resized field is taken and resized back to $224\times224$. No vignette, synthetic border, or crop jitter is used.
 
-\section{Structured weak supervision from reports}
+\section{Weak supervision from radiology reports}
 \label{sec:reports}
 
-For each target, the frozen B6 v1.2.1 parser assigns
+The frozen B6 v1.2.1 parser assigns each report/target cell
 \begin{equation}
 r_{ic}\in\{\mathrm{positive},\mathrm{negated},\mathrm{uncertain},\mathrm{unmentioned}\}.
 \end{equation}
-Uncertain and unmentioned cells are ignored. Positive and negated cells use the globally frozen asymmetric policy
+The downstream mapping is
 \begin{center}
 \begin{tabular}{lcc}
 \toprule
@@ -123,16 +123,16 @@ unmentioned & ignored & 0.00 \\
 \bottomrule
 \end{tabular}
 \end{center}
-Target-wise multipliers equalize total weak-supervision mass across the twelve outputs. The full active B6 surface contains 14,123 usable cells. Synovitis remains particularly imbalanced in the frozen report supervision, with 399 positive and only 17 negated cells on the full active surface; target-specific architectural decisions are therefore not made from Synovitis outcomes.
+Target-wise multipliers equalize total supervision mass. The asymmetry reflects the higher reliability of explicit negation relative to positive report mentions in this frozen rule set. Uncertain and unmentioned cells never become implicit negatives.
 
-\section{B20 hierarchical all-series model}
-\label{sec:b20model}
+\section{Hierarchical all-series architecture}
+\label{sec:architecture}
 
-The active B20 model processes every eligible real MRI series in the study under the frozen B12/B13 variable-series policy. For a series with sixteen sampled triplets, the frozen ConvNeXt-Tiny encoder produces slice tokens $X\in\R^{16\times768}$. Historical learned multi-head attention pooling maps these slice tokens to one series representation $A\in\R^{768}$. All real series tokens for the study are then integrated by the historical study-level Transformer, after which twelve learned pathology queries interact and produce twelve logits.
+For each real MRI series, the visual encoder maps sixteen 2.5D triplets to $X\in\R^{16\times768}$. Historical multi-head attention pooling maps these slice tokens to one series representation $A\in\R^{768}$. The variable set of series representations is passed to the study-level Transformer. Twelve learned pathology queries then produce twelve logits.
 
-The active computation can be summarized as
+The B20 computation is summarized as
 \begin{equation}
-\text{study}\rightarrow\{\text{real series}\}
+\text{study}\rightarrow\{\text{eligible series}\}
 \rightarrow\{16\text{ triplets/series}\}
 \rightarrow\text{ConvNeXt-Tiny}
 \rightarrow A_{\mathrm{series}}
@@ -140,151 +140,219 @@ The active computation can be summarized as
 \rightarrow\text{12 pathology queries}.
 \end{equation}
 
-The visual encoder is the historical B15/B16 report-aligned encoder and remains frozen in B20-family downstream experiments. Its canonical SHA-256 fingerprint is
+The visual encoder is the historical B16 full-report-aligned ConvNeXt-Tiny encoder. It remains frozen in the B17--B33 downstream family. Its canonical SHA-256 fingerprint is
 \begin{verbatim}
 b328667cf9dfa9b909ef181c1bcc8975ec42bcd8b9eddad08f908875b73fae96
 \end{verbatim}
-The canonical B20 checkpoint is \code{runs/b20\_crop\_focus/b20\_model.pt}, selected epoch 2. Historical post-B20 development evidence does not automatically replace this checkpoint.
+The canonical active B20 checkpoint is \code{runs/b20\_crop\_focus/b20\_model.pt}, epoch 2.
 
 \section{Development governance}
 \label{sec:governance}
 
-The current development policy distinguishes three forms of evidence. Reused expert-set AUC is diagnostic evidence only. A prospectively frozen weak-label partition may guide downstream architecture design only when the exact same frozen encoder is shared. Promotion of the active model requires a stronger independent signal, such as hidden competition evaluation or an external expert-labelled dataset.
+The development policy separates optimization evidence from independent evidence. The reused 58-study macro AUC may diagnose a frozen experiment but may not justify post-hoc target switching, per-target model mixtures, candidate-specific blend weights, or a ``.1'' model defined after observing target-wise outcomes. Failed formulations are closed rather than locally tuned against that surface.
 
-No candidate may be modified after its reused-expert outcome to exploit target-specific winners. In particular, the project forbids outcome-derived target switching, target-specific gates, selective B20/candidate substitution, post-hoc blend weights, or a ``.1'' variant whose design is motivated by the reused 58-study result. A failed formulation is closed rather than locally optimized against the reused set.
+PV1 may guide future downstream architecture selection only when the exact frozen B16 encoder and frozen split are retained. It does not authorize encoder selection, report-parser tuning, or claims of expert-label generalization. B20 therefore remains the active historical checkpoint even when a later architecture wins PV1.
 
-\section{Earlier development ladder}
-\label{sec:earlyladder}
+\section{Development history: B0--B9 foundations}
+\label{sec:b0b9}
 
-The early B0--B9 ladder established the foundations that were later retained or superseded. Table~\ref{tab:earlyladder} records the measured macro AUC values on the repeatedly used 58-study development surface.
+The first phase established the representation and supervision foundations. Table~\ref{tab:b0b9} records the historical global point estimates on the reused expert surface.
 
 \begin{table}[ht]
 \centering
-\caption{Early measured development ladder. These values are historical development estimates, not independent validation.}
-\label{tab:earlyladder}
+\caption{B0--B9 development ladder. Values are reused-development macro ROC AUCs, not independent validation.}
+\label{tab:b0b9}
 \begin{tabular}{llc}
 \toprule
-ID & Method & Macro AUC \\
+ID & Main intervention & Macro AUC \\
 \midrule
 B0 & Random-init Stage-1 & 0.476254 \\
-B1 & Strong competition-only MRI SSL & 0.503028 \\
-B2 & B1 with reduced encoder LR & 0.499324 \\
+B1 & Competition-only MRI SSL & 0.503028 \\
+B2 & Lower encoder learning rate & 0.499324 \\
 B3 & Pathology-aware low-capacity MIL & 0.494465 \\
 B4 & Frozen SSL features + PCA/LR & 0.513757 \\
 B5 & Image--report SSL + frozen probe & 0.524365 \\
-B7-v1 & Direct frozen-B6 weak supervision & 0.539772 \\
-B7.1 & B7 with complete epoch coverage & 0.564480 \\
-B5+B7.1 & Fixed 50:50 rank ensemble & 0.554014 \\
-B8 & 2$\times$2 spatial anatomy tokens & 0.530096 \\
+B7-v1 & Direct B6 weak supervision & 0.539772 \\
+B7.1 & Complete epoch coverage & 0.564480 \\
+B8 & $2\times2$ spatial anatomy tokens & 0.530096 \\
 B9 & Strict semantic routing & 0.533496 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The negative B8 and B9 experiments were important because they established two recurring design rules: greater architectural complexity is not sufficient evidence of better generalization, and correcting a genuine metadata inconsistency can still reduce predictive ranking if the correction removes informative acquisitions. The subsequent B10--B20 transition therefore moved toward all-series hierarchical aggregation rather than increasingly rigid fixed-stream routing.
+B5 established that image--report representation alignment was useful. B6 then froze pathology-specific report states, and B7/B7.1 showed that direct report-derived pathology supervision improved the MRI learner. B8 and B9 were negative experiments: greater spatial or semantic structure did not improve the global result. These failures motivated a shift away from increasingly rigid fixed-stream routing.
 
-\section{B20-family complementary-series experiments}
-\label{sec:b20family}
+\section{Development history: B10--B17 representation and aggregation}
+\label{sec:b10b17}
 
-\subsection{Reference performance and supervision repair}
-On the reused 58-study expert surface, the canonical B20 model reaches
-\begin{equation}
-\mathrm{AUC}_{\mathrm{B20}}=0.6674066371.
-\end{equation}
-B24X/B25X supervision pilots suggested that broad report-label filling could improve some coverage statistics but also exposed severe Synovitis imbalance. B26.2 then tested a deterministic whitelist repair. Under the matched fixed-E2 comparison B26.2 reached 0.6662972 versus B20 0.6674066, a raw difference of $-0.0011094$ with paired 95\% interval approximately $[-0.01566,0.01425]$. The supervision-repair family was therefore closed.
+\subsection{B10 physical-scale normalization}
+B10 tested a plane-specific physical-field normalization using DICOM pixel spacing before resizing. It preserved the B7.1 model and B6 supervision. B10 reached macro AUC 0.552398, below B7.1 at 0.564480, so the global physical-normalization replacement was rejected. This did not rule out physical-scale information in general; it closed only this fixed $224\times224$ normalization protocol.
+
+\subsection{B11/B11.1 pseudo-label completion}
+B11 attempted to fill B6-silent cells with high-confidence teacher predictions. A fixed absolute confidence rule failed its viability gate. B11.1 replaced the absolute threshold with target-wise 5th/95th percentile teacher tails and added 3,656 pseudo cells while preserving all 14,123 B6 cells. Despite successful training, B11.1 reached 0.550690 on the reused expert surface, below B7.1. The teacher-pseudo-label completion family was therefore closed.
+
+\subsection{B12 variable-number-of-series model}
+B12 replaced the six fixed semantic slots with all eligible repaired sagittal, coronal, and axial MRI series. The frozen audit retained 17,475 series across the 3,120 B6-active studies, compared with 15,468 unique series in the historical dual-stream mapping. B12 reached 0.566092, demonstrating that all-series processing was viable and establishing the acquisition representation inherited by later models.
+
+\subsection{B13 hierarchical series tokens and ImageNet ConvNeXt}
+B13 paired the all-series hierarchy with ImageNet-pretrained ConvNeXt-Tiny. Sixteen 2.5D positions were encoded per series; an eight-head attention pool compressed each series to one token; a two-layer study Transformer and pathology queries produced the outputs. B13 reached 0.629357. Its paired interval versus B12 was entirely above zero in the historical analysis, making B13 the first large step in the later architecture lineage.
+
+\subsection{B14 full slice-token memory}
+B14 tested whether retaining all $K\times16$ slice tokens at the study level would outperform one-token-per-series compression. It reached 0.619791, below B13, despite fitting B6 training loss more strongly. This supplied early evidence that additional downstream capacity and tighter weak-label fitting were not sufficient for improved expert ranking.
+
+\subsection{B15 knee-MRI domain adaptation}
+B15 inserted same-study knee-MRI contrastive adaptation between ImageNet initialization and the B13 hierarchy. On the historical weak-v2 teacher-agreement surface it improved macro AUC from 0.565250 to 0.731906, but on the reused expert surface it reached only 0.620900. The large teacher-agreement gain therefore did not transfer to a global expert-set improvement.
+
+\subsection{B16 full-report semantic alignment}
+B16 used the completed B15 encoder and aligned MRI representations with full normalized reports represented by TF--IDF, truncated SVD, and L2 normalization. The representation stage used all 4,349 non-gold report studies and excluded the 58 expert studies. Returning to the full B13/B6 downstream surface yielded 0.634977. The gain over B13 was small and statistically unresolved, but the predeclared point-estimate rule retained B16 as the representation source. The report head is training-only; inference remains MRI-only.
+
+\subsection{B17 frozen B16 encoder}
+B17 froze the B16 encoder completely and trained only the hierarchy/head for five fixed epochs. The encoder hash remained unchanged. B17 reached 0.642589 at epoch 5, modestly above B16. This supported the working hypothesis that preserving report-aligned visual features may be preferable to continued direct adaptation of the encoder to sparse/noisy B6 supervision.
+
+\begin{table}[ht]
+\centering
+\caption{B10--B17 historical development summary.}
+\label{tab:b10b17}
+\begin{tabular}{llc}
+\toprule
+Model & Main intervention & Reused macro AUC \\
+\midrule
+B10 & Physical-scale normalization & 0.552398 \\
+B11.1 & Quantile teacher tails & 0.550690 \\
+B12 & All real MRI series & 0.566092 \\
+B13 & Hierarchical series tokens + ImageNet & 0.629357 \\
+B14 & Full slice-token memory & 0.619791 \\
+B15 & Knee-MRI same-study SSL & 0.620900 \\
+B16 & Full-report semantic alignment & 0.634977 \\
+B17 & Frozen B16 encoder & 0.642589 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Development history: B18--B22 checkpoint and spatial focus}
+\label{sec:b18b22}
+
+\subsection{B18 expert-guided epoch selection}
+B18 kept the B17 training trajectory unchanged and used the reused expert set only to select one global epoch from five. The epoch-wise selection macro AUCs were 0.618716, 0.665450, 0.651115, 0.639416, and 0.642589, so epoch 2 was selected. The value 0.665450 is a checkpoint-selection statistic, not independent validation performance.
+
+\subsection{B19 joint-focused crop plus vignette}
+B19 introduced a 90\% centered crop followed by a cosine vignette. The selected epoch 3 statistic was 0.658131. A same-source Grad-CAM diagnostic showed strong activation along the synthetic vignette boundaries. B19 was therefore rejected as a final preprocessing strategy even though classification remained functional.
+
+\subsection{B20 crop-only focus: active historical model}
+B20 retained the 90\% centered crop but removed the vignette entirely. It selected epoch 2 with historical selection statistic 0.667159. A replay under later matched evaluation code produced 0.667407, within the frozen tolerance. B20 is the active historical model because it combines the strongest clean knee-focused formulation with a stable frozen B16 encoder and no synthetic spatial boundary.
+
+The canonical B20 training surface is
+\begin{verbatim}
+training studies       3120
+eligible MRI series   17475
+usable B6 cells       14123
+positive / negated    6871 / 7252
+encoder                frozen B16
+selected epoch         2
+TTA                    [-1,0,1]
+\end{verbatim}
+
+\subsection{B21 pre-resize crop}
+B21 corrected the geometric interpretation by applying the 90\% crop before resizing. On the leakage-safe weak-v2 surface B21 improved over its matched B20 control by approximately $+0.01114$, but the single reused-expert acceptance look gave 0.657320 versus B20 replay 0.667407. B21 was not promoted.
+
+\subsection{B22 training-duration audit}
+B22 extended the B21 pre-resize-crop trajectory to five epochs. Training loss continued to fall, but the reused expert trajectory peaked at epoch 2 (0.657427) and deteriorated afterward. Longer downstream training therefore did not rescue the pre-resize crop and reinforced the practical fixed-E2 regime used by later B20-family experiments.
+
+\section{Development history: B23--B26 supervision studies}
+\label{sec:b23b26}
+
+\subsection{B23 local-LLM report labelling}
+B23 replaced the B6 regex parser experimentally with a local open-weights Qwen report labeller while preserving the twelve target meanings and four report states. On the reused expert audit, B23 increased state-only macro AUC from 0.702460 to 0.812516 and increased usable-cell coverage, but specificity fell from 0.6061 to 0.5678. Because improved specificity was part of the predeclared adoption gate, B23-v1 formally failed and no canonical B23 development split was adopted.
+
+\subsection{B24X density pilot}
+B24X was explicitly exploratory and did not override the failed B23 gate. On a matched 692-study pilot, the B6 control achieved weak-v2 macro AUC 0.614849, full B23 supervision achieved 0.711613, and a density-preserving policy that kept every B6 cell while filling only B6-silent cells achieved 0.714799. This showed that supervision recovery, rather than replacing existing B6 decisions, explained essentially the entire pilot gain.
+
+\subsection{B25X full hybrid-supervision experiment}
+B25X scaled the fill idea to a leakage-safe 2,497-study weak-v2 training surface. The B6 control, pure Hybrid, and B6+Hybrid-fill arms reached 0.672372, 0.726878, and 0.730847 on weak-v2. However, the gain was dominated by Synovitis, where B6 contained only 13 explicit negatives in the B25X training surface and Hybrid-fill recovered 136 additional negatives. Excluding Synovitis, the eleven-target macros were 0.711950 for B6, 0.709133 for Hybrid, and 0.714348 for Fill. The defensible conclusion was therefore class-coverage repair for Synovitis, not broad twelve-target superiority.
+
+\subsection{B26.2 deterministic supervision repair}
+The B26 family attempted to turn the supervision-density observation into a deterministic, reproducible repair. B26.2 produced a final Synovitis balance of 475 positive and 112 negative cells, but the exact matched fixed-E2 comparison yielded B20 0.667407 versus B26.2 0.666297, a raw difference of $-0.001109$. Synovitis itself declined materially. Mechanism audit indicated mention-selection bias, so the B26 supervision-repair family was closed and no B26.3 was created.
+
+\section{B27--B33 complementary-series experiments}
+\label{sec:b27b33}
 
 \subsection{B27.1 metadata routing}
-B27.1 added pathology-specific routing based on plane and paired-sequence metadata after an earlier fluid/fat formulation was found to be collinear on the complete 17,475-series surface. B27.1 introduced only 60 trainable routing parameters and optimized successfully, but its reused-expert macro was approximately 0.65992, below B20 by about 0.00748. The routing family was closed and no B27.2 was created.
+An initial B27 fluid/fat routing idea was invalid because the relevant metadata were perfectly collinear over the 17,475-series B20 surface. B27.1 instead used plane plus paired-sequence metadata and introduced only 60 routing parameters. It optimized successfully but reached approximately 0.659923, below B20 replay by about 0.00748. The routing family was closed.
 
 \subsection{B28 max-evidence residual}
-B28 tested whether the elementwise maximum over the sixteen image-content slice embeddings provided complementary evidence to B20's learned series token. With $M$ the elementwise maximum and $A$ the historical B20 token,
+Let $M$ be the elementwise maximum over the sixteen image-content slice embeddings and $A$ the B20 series token. B28 used
 \begin{equation}
-T=A+\tanh(g)\odot\mathrm{LN}_0(M),
+T=A+\tanh(g)\odot\LNzero(M),
 \end{equation}
-where $g\in\R^{768}$ was zero initialized and $\mathrm{LN}_0$ denotes parameter-free layer normalization. The gate preserved exact B20 behavior at initialization. B28 reached approximately 0.63835 on the reused expert surface, a raw decline of about 0.02906 from B20. The max-evidence formulation was closed.
+with zero-initialized feature-wise gate $g$. At $g=0$ the model is exactly B20. B28 reached approximately 0.63835, a material decline, and the max-evidence residual was closed.
 
-\subsection{B29 learned complementary mean-like summary}
-B29 introduced a second learned softmax summary over the same sixteen B20 slice tokens. Let
+\subsection{B29 learned complementary summary}
+B29 added a second softmax summary over the same sixteen B20 slice tokens:
 \begin{equation}
-C=\mathrm{LN}_0\!\left(\sum_{i=1}^{16}w_iX_i\right),\qquad
+C=\LNzero\!\left(\sum_{i=1}^{16}w_iX_i\right),\qquad
 w_i=\frac{\exp(q^TX_i/\sqrt{768})}{\sum_j\exp(q^TX_j/\sqrt{768})},
 \end{equation}
-with learned query $q\in\R^{768}$. The final series token is
+with learned query $q\in\R^{768}$. The final token is
 \begin{equation}
 T=A+\tanh(g)\odot(C-A).
 \label{eq:b29}
 \end{equation}
-The learned query and feature-wise gate contribute 1,536 new parameters. The gate is exactly zero initialized, so B29 begins as the exact B20 function.
-
-The fixed-E2 run covered all 3,120 studies, 17,475 series, and 14,123 weak cells. The final effective gate remained small, with maximum absolute value 0.02250 and mean absolute value 0.00516. On the reused 58-study expert surface,
-\begin{equation}
-\mathrm{AUC}_{\mathrm{B29}}=0.6768879224,
-\end{equation}
-with raw difference $+0.0094813$ from B20. The paired median difference was $+0.0094214$, 95\% interval $[-0.0037494,0.0241876]$, and $P(\mathrm{B29}>\mathrm{B20})=0.9188$. B29 is therefore a frozen promising candidate, but not promoted.
+The query and zero-initialized gate add 1,536 parameters. On the reused expert surface B29 reached 0.676888, raw $+0.009481$ over B20. Its paired median difference was $+0.009421$ with 95\% interval $[-0.003749,+0.024188]$. B29 was frozen as promising but not promoted.
 
 \subsection{B30 projected complementary attention}
-B30 tested a more sophisticated complementary attention path using the historical B20 attention projections while detaching the complementary branch from shared parameters. The mechanism was valid and trained, but the reused-expert macro fell to approximately 0.65470, with raw B30--B20 difference $-0.01270$ and $P(\mathrm{B30}>\mathrm{B20})=0.1422$. The projected-attention formulation was closed.
+B30 reused B20's attention projections in the complementary path while detaching that branch from the shared parameters. Although the mechanism trained, the reused macro fell to approximately 0.654704. The projected-attention formulation was closed.
 
 \subsection{B31 local-context complementary scorer}
-B31 retained the B29 query but allowed immediate through-plane neighbours to perturb only the complementary attention scores. For the original slice tokens $X$, define
+B31 retained the B29 complementary query but perturbed its scores using immediate through-plane context:
 \begin{equation}
-H=X+\mathrm{DWConv}_{k=3}(\mathrm{LN}_0(X)),
+H=X+\mathrm{DWConv}_{k=3}(\LNzero(X)).
 \end{equation}
-where the depthwise Conv1d has 768 groups, kernel size three, no bias, and exact zero initialization. The B29 query scores $H$, while the weighted value sum still uses the original $X$. B31 therefore adds 2,304 local-context parameters on top of B29, for 3,840 new parameters relative to B20.
+The depthwise Conv1d has 768 groups, kernel size three, no bias, and zero initialization. The complementary scores are computed from $H$, while the weighted values remain the original $X$. B31 adds 3,840 parameters relative to B20.
 
-The fixed-E2 training run was valid. Its prospective mechanism audit showed that the local-context pathway changed the B29 attention distribution only minimally: normalized Jensen--Shannon divergence was approximately $3.56\times10^{-9}$, top-1 slice agreement was 98.9\%, and top-3 overlap was approximately 99.63\%. The effective residual remained small. Nevertheless, on the reused expert surface B31 reached
-\begin{equation}
-\mathrm{AUC}_{\mathrm{B31}}=0.6822797439,
-\end{equation}
-the highest value in the current reused-development lineage. Relative to B20 the raw difference is $+0.0148731$; relative to B29 it is $+0.0053918$. The paired intervals remain broad, so B31 is a frozen leading development candidate rather than a promoted model. The small attention redistribution also means that the causal mechanism behind its numerical gain is uncertain.
+The mechanism audit showed only a tiny change in the B29 attention distribution: normalized Jensen--Shannon divergence was approximately $3.56\times10^{-9}$, top-1 agreement 98.9\%, and top-3 overlap 99.63\%. Nevertheless, B31 reached 0.682280 on the reused expert surface, the highest B20-family development point estimate. Relative to B20 the raw difference was $+0.014873$; relative to B29 it was $+0.005392$. Because the surface was heavily reused and the mechanism effect was small, B31 was frozen as the leading development candidate rather than promoted.
 
 \subsection{B32 weighted dispersion summary}
-B32 tested whether second-order through-series information could add something genuinely distinct from the B29 mean-like residual. Using the same B29 attention weights,
+B32 tested second-order information with the same complementary attention weights:
 \begin{align}
 \mu&=\sum_iw_iX_i,\\
 \sigma&=\sqrt{\sum_iw_i(X_i-\mu)^2+10^{-6}},
 \end{align}
-and the final token was
+and
 \begin{equation}
-T=A+\tanh(g_\mu)\odot(\mathrm{LN}_0(\mu)-A)
-+\tanh(g_\sigma)\odot\mathrm{LN}_0(\sigma).
+T=A+\tanh(g_\mu)\odot(\LNzero(\mu)-A)
++\tanh(g_\sigma)\odot\LNzero(\sigma).
 \end{equation}
-The prospective mechanism audit confirmed that the dispersion residual was non-redundant: the mean--dispersion residual cosine was approximately 0.074 at E2. However, non-redundancy was not sufficient for performance. B32 reached 0.6686993213, only $+0.0012927$ above B20 and below both B29 and B31. The paired median B32--B31 difference was $-0.0131667$, 95\% interval $[-0.0373309,0.0066110]$, with $P(\mathrm{B32}>\mathrm{B31})=0.0946$. The weighted-dispersion formulation is closed.
+The mean--dispersion residual cosine was approximately 0.074, confirming a non-redundant branch, but B32 reached only 0.668699. Non-redundancy was therefore not sufficient for improved ranking, and the dispersion formulation was closed.
 
 \subsection{B33 exact uniform complementary mean}
-B33 was designed as the simplest direct test of the mechanism suggested by B29 and B31: whether a second broad series representation is useful even without learned complementary slice selection. It removes the B29 query entirely and defines
+B33 removed the learned complementary query entirely and used
 \begin{equation}
-C_{\mathrm{mean}}=\mathrm{LN}_0\!\left(\frac{1}{16}\sum_{i=1}^{16}X_i\right),
+C_{\mathrm{mean}}=\LNzero\!\left(\frac{1}{16}\sum_{i=1}^{16}X_i\right),
 \end{equation}
-with final token
+with
 \begin{equation}
 T=A+\tanh(g)\odot(C_{\mathrm{mean}}-A).
 \label{eq:b33}
 \end{equation}
-Only the 768-dimensional zero-initialized feature-wise gate is new.
+Only the 768-dimensional zero-initialized gate is new. The full-surface E2 mechanism audit showed mean absolute effective gate 0.00502 and maximum 0.02290; the uniform mean and B20 token were nearly orthogonal while the effective injected residual was only about 0.64\% of the B20 token norm.
 
-On the full 3,120-study fixed-E2 run, the B33 gate received non-zero gradients and remained conservative. The final mean absolute effective gate was approximately 0.00502 and the maximum approximately 0.02290. The mechanism audit showed that $C_{\mathrm{mean}}$ and $A$ were almost orthogonal, with cosine approximately $-0.0023$, while the effective injected residual remained only about 0.64\% of the B20 token norm on average. Thus B33 learns to introduce a very small amount of a substantially different global representation.
-
-On the reused expert surface,
-\begin{equation}
-\mathrm{AUC}_{\mathrm{B33}}=0.6764460785.
-\end{equation}
-This is only $-0.0004418$ below B29. The paired B33--B29 median difference was $-0.0004964$, 95\% interval $[-0.0233115,0.0220359]$, with $P(\mathrm{B33}>\mathrm{B29})=0.4800$. B33 is therefore practically indistinguishable from B29 at the resolution of this reused surface despite using half as many new parameters. This supports, but does not independently prove, the interpretation that B29's useful signal comes primarily from a second global series representation rather than learned non-uniform slice selection.
+B33 reached 0.676446 on the reused expert surface, only $-0.000442$ below B29. The paired B33--B29 median was $-0.000496$, 95\% interval $[-0.023312,+0.022036]$. Thus B33 was a successful simplification on the reused surface: it recovered essentially the B29 point estimate using half as many new parameters.
 
 \begin{table}[ht]
 \centering
-\caption{Current B20-family reused-expert development results and governance status. The 58-study surface is not independent validation.}
+\caption{B20-family reused expert development results. This table is diagnostic only.}
 \label{tab:b20family}
 \begin{tabular}{llcl}
 \toprule
 Model & Main intervention & Macro AUC & Status \\
 \midrule
-B20 & Canonical hierarchical crop model & 0.667407 & Active reference \\
-B27.1 & Plane + paired-sequence routing & $\sim$0.659923 & Closed \\
-B28 & Max-evidence residual & $\sim$0.63835 & Closed \\
+B20 & Post-resize 90\% crop-only reference & 0.667407 & Active historical \\
+B26.2 & Deterministic supervision repair & 0.666297 & Closed \\
+B27.1 & Plane + paired-sequence routing & 0.659923 & Closed \\
+B28 & Max-evidence residual & 0.63835 & Closed \\
 B29 & Learned complementary summary & 0.676888 & Frozen promising \\
 B30 & Projected complementary attention & 0.654704 & Closed \\
-B31 & Local-context complementary scorer & 0.682280 & Frozen leading candidate \\
+B31 & Local-context complementary scorer & 0.682280 & Frozen leading \\
 B32 & Weighted dispersion residual & 0.668699 & Closed \\
 B33 & Exact uniform complementary mean & 0.676446 & Frozen simplification \\
 \bottomrule
@@ -294,33 +362,31 @@ B33 & Exact uniform complementary mean & 0.676446 & Frozen simplification \\
 \section{Prospective weak-validation v1}
 \label{sec:pv1}
 
-\subsection{Reason for creating a new surface}
-By B33 the 58-study expert set had been inspected across many architecture decisions. Continuing to design candidates against it would increasingly optimize to the evaluation set. The project therefore retired it as the primary architecture-design surface and froze prospective weak-validation v1 (PV1) before any B34 experiment.
+\subsection{Why a new development surface was required}
+By B33, the 58-study expert set had been inspected across many sequential decisions. Continuing architecture development against it would increasingly optimize to the evaluation surface. PV1 was therefore frozen before B34 and the reused expert set was retired as the primary architecture-selection surface.
 
 \subsection{Frozen split}
-PV1 assigns studies using only StudyInstanceUID. For UID $u$,
+For StudyInstanceUID $u$, PV1 computes
 \begin{equation}
 k(u)=\mathrm{SHA256}(\texttt{CNN\_CPC|prospective-weak-v1|2026-08-16}\,\Vert\,\texttt{NUL}\,\Vert\,u).
 \end{equation}
-All 3,120 active UIDs are sorted by $k(u)$. The first 624 form validation and the remaining 2,496 form training. B6 states, weak-label confidences, expert labels, previous model scores, and model predictions do not influence membership. The frozen split fingerprint is
+All 3,120 B6-active UIDs are sorted deterministically by this key. The first 624 form validation and the remaining 2,496 form training. B6 labels, expert labels, previous model scores, and predictions do not influence membership. The frozen split SHA-256 is
 \begin{verbatim}
 a0032307abb1ab99724eb39fac25332ce131c575f64d823083bb37f5ec20d1e6
 \end{verbatim}
-This certifies StudyInstanceUID-level separation only; patient-identity separation is not claimed because a trustworthy patient identifier is not part of the frozen supervision contract.
+The validation partition contains 624 studies and 3,544 MRI series. The training partition contains 13,931 eligible series and 11,303 usable weak cells, including 5,559 positive and 5,744 negated cells.
 
-The training partition contains 13,931 eligible MRI series and 11,303 usable weak cells, of which 5,559 are positive and 5,744 negated. The validation partition contains 624 studies and remains excluded from the supervised matched-control gradient and checkpoint selection.
+The split certifies StudyInstanceUID-level separation only; patient-level separation is not claimed because a trustworthy patient identifier is not part of the frozen contract.
 
 \subsection{Representation-pretraining limitation}
-The historical B16 encoder was aligned using all 4,349 non-gold MRI/report pairs before PV1 was conceived. Therefore the 624 PV1 validation studies are not unseen by the encoder. PV1 is valid only for comparing downstream architecture changes that share the exact same frozen B16 encoder fingerprint. It must not be used to select a new encoder, representation-pretraining method, or any method that retrains the encoder using this population.
+B16 had been aligned using all 4,349 non-gold MRI/report pairs before PV1 existed. Therefore PV1 is valid only for comparing downstream models that share the exact frozen B16 encoder. It may not be used to select a new encoder or representation-pretraining method.
 
-\subsection{Matched controls}
-Before B34, B20, B31, and B33 were retrained from the same historical B16/B20 initialization on exactly the 2,496-study PV1 training subset. All runs use the same split, frozen encoder, 90\% B20 crop, variable-series policy, optimizer, learning rate, augmentation, loader seed, five-epoch scheduler horizon, and fixed E2 endpoint. The trainer also resets the post-construction stochastic seed after model creation so that extra B31/B33 parameter initialization does not shift the downstream dropout/random-training path.
-
-All three audits report construction seed 19,002,026, loader seed 19,102,026, and post-construction training seed 19,202,026. No validation study or expert study enters the gradient. The frozen encoder fingerprint remains unchanged before and after each run.
+\subsection{Matched B20/B31/B33 training}
+The three controls were retrained on exactly the same 2,496-study PV1 training subset with fixed E2 endpoint, frozen B16 encoder, B20 post-resize crop, identical optimizer and schedule, and a matched post-construction stochastic seed. This seed reset prevents extra candidate parameters from shifting the downstream stochastic path merely because model construction consumed a different number of random draws.
 
 \begin{table}[ht]
 \centering
-\caption{PV1 matched-control training audits. These are training quantities, not model-selection results.}
+\caption{PV1 matched-control training audits. Training loss is descriptive and was not the selection metric.}
 \label{tab:pv1train}
 \begin{tabular}{lrrrr}
 \toprule
@@ -333,78 +399,138 @@ B33 & 768 & 0.7667159 & 0.6833535 & 2981.71 \\
 \end{tabular}
 \end{table}
 
-B31's complementary query, complementary gate, and local-context convolution all received finite non-zero gradients. At E2 its effective complementary gate had mean absolute value 0.00401 and maximum 0.01828, while the local-context convolution remained small. B33's E2 effective uniform gate had mean absolute value 0.00428 and maximum 0.01872. The lower B33 training loss is descriptive only; it is not the prospectively frozen PV1 selection criterion.
+No validation study or expert study entered the gradients, and the frozen encoder fingerprint remained unchanged.
 
-\subsection{Frozen primary and secondary metrics}
-The primary PV1 metric is the macro average of per-target B6-weighted soft-label binary cross-entropy. For target $c$,
+\subsection{Predeclared PV1 metrics}
+For target $c$, the primary loss is
 \begin{equation}
 L_c=\frac{\sum_i w_{ic}\left[-y_{ic}\log p_{ic}-(1-y_{ic})\log(1-p_{ic})\right]}
 {\sum_i w_{ic}},
 \end{equation}
-and
+and the primary selection statistic is
 \begin{equation}
 L_{\mathrm{PV1}}=\frac{1}{12}\sum_{c=1}^{12}L_c,
 \end{equation}
-where lower is better. The secondary metric is macro ROC AUC over hard B6 positive/negated states for targets where both classes are present. Paired study-level bootstrap differences of the primary loss are predeclared for B31--B20, B33--B20, and B33--B31.
+where lower is better. The secondary statistic is macro ROC AUC over B6 positive/negated states for targets where both classes are present. Paired study-level bootstrap comparisons were predeclared for B31--B20, B33--B20, and B33--B31.
 
-\subsection{Current PV1 evaluation status}
-The first attempt to evaluate the three PV1 checkpoints simultaneously was terminated by the operating system's memory-pressure manager before any scientific comparison was accepted. The GNOME terminal scope reached a recorded 56.6~GB memory peak and 3.5~GB swap peak, after which \code{systemd-oomd} killed the process group. This failure is treated as an execution defect, not a model result.
+\subsection{Memory-safe evaluator}
+The first evaluator implementation loaded B20, B31, and B33 simultaneously. Under the local Linux desktop session, \code{systemd-oomd} terminated the GNOME terminal scope after a recorded 56.6~GB memory peak and 3.5~GB swap peak. No scientific result from that failed execution was accepted.
 
-The evaluator was subsequently changed from version 1.0.0 to a memory-conservative version 1.1.0. It now loads one checkpoint at a time, predicts all 624 validation studies, stores predictions on CPU/disk, deletes the model and checkpoint payload, runs garbage collection and CUDA cache release, and only then loads the next checkpoint. Evaluation is additionally frozen to batch size one, one DataLoader worker, prefetch factor one, no persistent worker, and zero worker-local raw-series cache. The scientific TTA offsets $[-1,0,1]$, checkpoint identities, prediction semantics, primary metric, secondary metric, and bootstrap definitions are unchanged.
+Evaluator v1.1.0 changed resource management only: one checkpoint is loaded at a time, predictions are moved to CPU/disk, the model and payload are deleted, garbage collection and CUDA cache release are performed, and only then is the next checkpoint loaded. Evaluation uses batch size one, one worker, prefetch factor one, no persistent worker, and zero worker-local raw-series cache. TTA remains $[-1,0,1]$, and prediction semantics and metrics are unchanged.
 
-At the time of this manuscript update, the corrected low-memory PV1 evaluation is running. No B20/B31/B33 PV1 ranking is therefore reported here. This is deliberate: the manuscript records only completed results and does not infer validation performance from the matched-control training losses.
+\subsection{Completed PV1 result}
+The corrected evaluation completed on all 624 validation studies. Table~\ref{tab:pv1result} gives the prospectively frozen global results.
+
+\begin{table}[ht]
+\centering
+\caption{Completed PV1 result. Primary loss is lower-is-better. Secondary AUC is computed over hard B6 positive/negated states. PV1 is weak-label architecture-selection evidence, not independent expert validation.}
+\label{tab:pv1result}
+\begin{tabular}{lcc}
+\toprule
+Model & Macro weighted soft BCE $\downarrow$ & Macro AUC $\uparrow$ \\
+\midrule
+B20 & 0.6155808 & 0.5727579 \\
+B31 & \textbf{0.5743066} & \textbf{0.7567309} \\
+B33 & 0.5849691 & 0.7565223 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The primary absolute differences are approximately
+\begin{align}
+L_{\mathrm{B31}}-L_{\mathrm{B20}}&=-0.04127,\\
+L_{\mathrm{B33}}-L_{\mathrm{B20}}&=-0.03061,\\
+L_{\mathrm{B33}}-L_{\mathrm{B31}}&=+0.01066.
+\end{align}
+The paired study bootstrap yielded
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Comparison & Median difference & 95\% interval & $P$(candidate better) \\
+\midrule
+B31--B20 & $-0.041141$ & $[-0.051822,-0.029586]$ & 1.0000 \\
+B33--B20 & $-0.030688$ & $[-0.047346,-0.013034]$ & 0.9992 \\
+B33--B31 & $+0.010862$ & $[+0.002246,+0.019512]$ & 0.0050 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Because lower loss is better, all three intervals support the ranking
+\begin{equation}
+\boxed{\mathrm{B31}\;>\;\mathrm{B33}\;>\;\mathrm{B20}}
+\end{equation}
+under the predeclared PV1 primary metric.
+
+The secondary AUC gives an additional but different picture. B31 and B33 are almost identical in ranking performance (0.75673 versus 0.75652), while both are far above B20 (0.57276). Therefore the prospectively observed B31--B33 advantage is primarily expressed in the predeclared weighted soft-label loss rather than a meaningful difference in macro AUC. This distinction is important: B31 is the PV1-selected architecture because the primary criterion was frozen in advance, not because every secondary statistic is larger.
+
+\subsection{PV1 decision}
+PV1 answers the architecture-selection question clearly. B31 is now the \emph{prospectively selected downstream development architecture} for future fixed-encoder work. B33 remains a successful and informative simplification, but it does not replace B31 under the frozen primary criterion. B20 remains the \emph{active historical model} because PV1 is weak-label validation and does not constitute independent expert or hidden-test evidence.
+
+No target-wise B20/B31/B33 switching, blending, or gate tuning is permitted from the PV1 per-target outputs. The PV1 split must remain unchanged after inspection of these results.
 
 \section{Runtime and execution policy}
 \label{sec:runtime}
 
-Competition mode uses one requested GPU with CPU multiprocessing for DICOM/data work. Current B20-family full-surface candidate runs use a hard internal cap of 8.25 h and reserve at least 30 min below the 9 h competition inference/runtime ceiling. Recent B29--B33 fixed-E2 training runs complete in roughly one hour on the NVIDIA RTX A4500 Laptop GPU used for local experiments. The PV1 matched-control runs complete in approximately 47--53 min each because only 80\% of the active weak-supervision studies are used.
+B20-family training uses one GPU with CPU DICOM/data work. Recent full-surface B29--B33 fixed-E2 runs complete in roughly one hour on the NVIDIA RTX A4500 Laptop GPU used for local experiments. The 80\% PV1 matched-control runs complete in approximately 47--53 minutes each. Competition-oriented workflows retain a conservative internal runtime budget below the nine-hour ceiling.
 
-Runtime controls are separated from scientific controls. Reducing evaluation batch size, worker count, prefetch depth, or cache size is allowed when it does not change MRI sampling, TTA, checkpoint weights, or prediction arithmetic. The confirmed PV1 out-of-memory event motivated such a resource-only change and is now explicitly documented for reproducibility.
+Resource controls are separated from scientific controls. Batch size, worker count, prefetch depth, and cache size may be reduced to prevent memory failure when MRI sampling, TTA, checkpoint weights, and prediction arithmetic are unchanged. The PV1 v1.1.0 evaluator is an example of this resource-only change.
 
 \section{Reproducibility and artifacts}
 \label{sec:reproducibility}
 
-The repository preserves the full B0--B33 development archive under \code{developments/} while exposing B20 as the clean top-level current model. Every recent candidate records its architecture specification, frozen supervision contract, encoder fingerprint, crop policy, fixed endpoint, candidate parameter count, training coverage, gradient-coupling checks, runtime, and whether expert or validation labels entered training or checkpoint selection.
+The repository preserves the B0--B33 archive under \code{developments/}. Current top-level code exposes B20 as the canonical historical model, while recent development modules record the frozen encoder fingerprint, series policy, crop policy, supervision contract, new parameter count, gradient checks, coverage, runtime, checkpoint identity, and whether any expert or validation labels entered gradients or checkpoint selection.
 
-PV1 additionally stores \code{split\_manifest.json}, separate matched-control checkpoints and training audits, per-model prediction files, a paired prediction table, and final \code{comparison.json}. The split manifest contains the exact training and validation UIDs plus SHA-256 fingerprints. Once generated, the split cannot be silently altered after outcomes are inspected.
-
-The repository also records explicit decision status. B20 remains active. B29 is a frozen promising candidate. B31 is the numerically strongest reused-development candidate but is not independently validated. B32's dispersion formulation is closed. B33 is a successful frozen simplification of B29. No B34 is to be designed from PV1 outcomes until the predeclared B20/B31/B33 matched comparison completes.
+PV1 stores the frozen split manifest, B20/B31/B33 matched checkpoints and audits, per-model predictions, paired predictions, and \code{comparison.json}. The completed evaluator reports version 1.1.0, split SHA-256, memory policy, primary and secondary metrics, paired bootstrap comparisons, the frozen encoder fingerprint, and the explicit governance statement that PV1 does not replace independent expert or hidden competition evaluation.
 
 \section{Discussion}
 \label{sec:discussion}
 
-The full development history supports several conclusions. First, representation quality and report-derived supervision both matter: the early B0--B7 progression showed that competition-only image learning, report alignment, and direct pathology-specific weak supervision each provided useful steps. Second, the negative B8, B9, B27.1, B28, B30, and B32 experiments show repeatedly that increased structural sophistication or mechanistic novelty is not sufficient for improved ranking. Third, the B29--B33 sequence isolates a much simpler useful pattern than originally expected.
+The full B0--B33 history reveals several consistent patterns. First, representation quality matters: B13's hierarchical ImageNet protocol produced a major gain over B12, and B16/B17 further established the retained report-aligned frozen encoder. Second, fitting weak supervision more strongly does not guarantee improved expert ranking. B14, B15, and B22 all contain examples where lower training loss or stronger teacher agreement failed to translate into a better reused expert result. Third, data-contract choices are as important as architecture. B23--B26 showed that denser report supervision can repair severe class-coverage failures, particularly Synovitis, while also creating specificity and selection-bias risks.
 
-B29 suggested that a second zero-gated series representation can complement B20. B31 achieved the highest reused-expert macro, but its local-context branch barely changed the complementary attention distribution, weakening a direct causal claim that through-plane neighbour context produced the gain. B32 then demonstrated that a genuinely non-redundant second-order dispersion residual still failed to improve the result consistently. Finally, B33 removed the learned complementary query and recovered essentially the same reused-expert macro as B29 with only 768 new parameters. Taken together, the most economical current hypothesis is that the B20 series token benefits from a tiny residual contribution from a second broad global representation; neither learned non-uniform slice selection nor second-order dispersion has yet been shown to be necessary.
+The B27--B33 sequence narrows the architecture question. Metadata routing, max-evidence pooling, projected complementary attention, and weighted dispersion all failed to justify promotion. B29 demonstrated that a second zero-gated series summary can be useful. B33 then showed on the reused expert surface that a simple exact uniform mean can recover almost the same point estimate as B29. However, the prospective PV1 comparison adds an important new constraint: B31 is better than B33 on the predeclared weighted soft-label loss, while their secondary macro AUCs are almost identical.
 
-This interpretation must remain proportional to the evidence. All B20--B33 AUC comparisons above come from the repeatedly reused 58-study surface. B31's numerical lead, B29/B33's apparent benefit, and B32's failure are useful development observations but cannot by themselves authorize promotion. The creation of PV1 is therefore not merely an engineering convenience; it is a methodological response to accumulated evaluation reuse.
+This means the B31 mechanism should not be interpreted merely as ``better slice ranking.'' Its local context barely changes the complementary attention distribution, and PV1 shows almost no AUC separation from B33. One plausible interpretation is that B31 provides a more suitable calibrated complementary representation under the B6 soft-label objective. That interpretation remains a hypothesis rather than a causal result. The next mechanistic experiment should therefore be designed globally and prospectively rather than by inspecting target-specific PV1 winners.
 
-PV1 itself also has limits. Its labels are still produced by B6, and the historical B16 encoder saw the validation reports during representation alignment. Thus PV1 measures downstream architecture behavior under a shared frozen representation, not independent clinical generalization. It is stronger for B34 architecture selection than returning again to the 58-study set, but hidden competition or new expert-labelled studies remain necessary for a definitive model replacement claim.
+PV1 also has clear limitations. Its labels are generated by B6 rather than experts, and the B16 encoder was historically aligned using reports from the complete non-gold population before PV1 existed. Therefore the large B20-to-B31 PV1 improvement establishes out-of-sample downstream agreement with the frozen weak-supervision contract, not clinical superiority. The B31 selection is meaningful for architecture development but does not replace an independent hidden or external expert evaluation.
 
-Weak-label reliability remains another limitation. The B6 parser is deterministic and report language is incomplete. Synovitis has extremely few explicit negated cells, which makes both training and weak-state validation particularly fragile for that target. This is one reason the PV1 primary metric is a predeclared macro weighted soft-label loss rather than target-wise winner selection.
+Additional limitations include sixteen sampled 2.5D positions rather than complete volumetric processing, scanner and physical-scale heterogeneity, no certified patient-level separation in PV1, extreme weak-label imbalance for some targets, and the absence of a current independent hidden-test comparison between B20 and the frozen post-B20 candidates.
 
-Other limitations include the use of sixteen sampled 2.5D positions rather than full three-dimensional volumes, scanner and physical-scale heterogeneity, the lack of certified patient-level separation in PV1, and the absence of an independent hidden-test result in the current manuscript snapshot.
+\section{Current model status and next experiment}
+\label{sec:next}
 
-\section{Future directions}
-\label{sec:future}
+The current status is deliberately two-tiered:
+\begin{equation}
+\boxed{\text{B20 = active historical model}},\qquad
+\boxed{\text{B31 = PV1-selected development architecture}}.
+\end{equation}
+B33 remains the preferred simple mechanistic comparator. B29 is also scientifically important because it separates the learned complementary query from B31's added local-context scorer.
 
-The immediate next step is not another architecture. The corrected PV1 evaluation must first complete and establish the matched B20/B31/B33 downstream baseline on the prospectively frozen 624-study partition. Only then should B34 be designed, and B34 should preserve the exact shared frozen B16 encoder if PV1 is used for selection.
+Before defining a novel B34 architecture, the most informative low-risk comparison is a matched PV1 retraining of the already frozen B29 architecture. This experiment would not be invented from target-wise PV1 outcomes; B29 predates PV1 and is already frozen. It would decompose the three relevant mechanisms under one prospective surface:
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Model & Complementary summary & Local context \\
+\midrule
+B33 & exact uniform mean & no \\
+B29 & learned query mean-like summary & no \\
+B31 & learned query mean-like summary & yes \\
+\bottomrule
+\end{tabular}
+\end{center}
+A matched B29 PV1 result would therefore tell whether the B31 advantage over B33 comes mainly from the learned query, from the local-context perturbation, or from their combination. After that single frozen mechanistic comparison, a B34 hypothesis can be defined without returning to the 58-study expert outcomes.
 
-If B33 matches or exceeds B31 prospectively, the preferred direction is to build from the simpler global residual in Eq.~\eqref{eq:b33}, because it has a clearer mechanism and far fewer new parameters. If B31 remains superior prospectively, follow-up work should investigate its optimization dynamics without using the old 58-study target outcomes to choose kernels, targets, or blends. If neither candidate improves B20 on PV1, the complementary-series family should be reconsidered rather than tuned to force a gain.
-
-Longer-term directions include physically normalized in-plane sampling using DICOM \code{PixelSpacing}; acquisition-set models that preserve multiple same-plane series without semantic slot forcing; stronger report supervision or uncertainty calibration; full-volume or adaptive slice sampling for focal abnormalities; and an external expert-labelled validation cohort. Any new encoder or representation-learning experiment requires a separately frozen evaluation surface because PV1 cannot validly select encoder changes.
+Independent hidden competition or new expert-labelled evaluation remains the required evidence for replacing B20 as the active predictive model.
 
 \section{Conclusions}
 \label{sec:conclusion}
 
-CNN\_CPC has evolved from a fixed-stream weakly supervised MRI classifier into a leakage-aware hierarchical all-series framework with explicit experiment governance. The active B20 model uses a frozen report-aligned ConvNeXt-Tiny encoder, sixteen 2.5D slice positions per real MRI series, learned series pooling, study-level Transformer context, twelve pathology queries, and a deterministic 90\% center-crop intervention. On the repeatedly reused 58-study expert development surface B20 reaches macro AUC 0.66741, but that number is not treated as independent validation.
+CNN\_CPC evolved from early fixed-stream baselines into a leakage-aware hierarchical all-series knee MRI framework with explicit experiment governance. The full development record extends well beyond B9. B10--B17 established the all-series hierarchy and frozen B16 report-aligned encoder; B18--B22 established the active B20 crop-only fixed-E2 regime; B23--B26 exposed both the promise and the risk of denser report supervision; and B27--B33 tested a sequence of increasingly controlled complementary series summaries.
 
-The post-B20 complementary-series experiments narrow the architecture question substantially. B29 reaches 0.67689 with a learned complementary summary; B31 reaches 0.68228 with local-context scoring; B32's non-redundant dispersion branch falls to 0.66870; and B33 reaches 0.67645 using only an exact uniform mean and one 768-parameter zero-gated residual. B33's near-equivalence to B29 indicates that the learned complementary query is not necessary on the reused development surface. B31 remains numerically highest there, but the mechanism audit shows almost no attention redistribution and the result is not independent.
+On the reused expert development surface, B31 had the highest B20-family macro AUC, while B33 showed that much of the B29 effect could be reproduced with an exact uniform mean and only 768 new parameters. Because that surface had been reused repeatedly, the project froze PV1 before further architecture development. The completed PV1 comparison is the strongest current architecture-selection evidence: B31 achieves primary macro weighted soft BCE 0.57431 versus 0.58497 for B33 and 0.61558 for B20, with paired bootstrap intervals excluding zero for B31 versus both controls. B31 and B33 have nearly identical secondary macro AUCs, 0.75673 and 0.75652, respectively.
 
-The principal current methodological advance is therefore the transition away from repeated expert-set optimization. Prospective weak-validation v1 freezes a StudyInstanceUID-only 80/20 split before B34, retrains matched B20/B31/B33 controls on 2,496 studies, and reserves 624 studies for a predeclared downstream comparison under the exact shared frozen B16 encoder. All matched-control training audits are valid. The corrected low-memory final evaluation is in progress at this manuscript snapshot, so no prospective winner is yet claimed. B20 remains the active model until stronger evidence supports promotion.
+The correct decision is therefore not to promote B31 directly to an independently validated model. Instead, B31 becomes the prospectively selected downstream development architecture, B33 remains the principal simplification comparator, and B20 remains the active historical model pending hidden or external expert evidence. This separation of model development from evaluation reuse is a central contribution of the CNN\_CPC workflow.
 
 \section*{Code availability}
-The source code and documentation are available at \url{https://github.com/mtalafha90/CNN_CPC}. Competition data are distributed separately by the competition organizer and are not redistributed by this repository.
+The source code and documentation are available at \url{https://github.com/mtalafha90/CNN_CPC}. Competition data are distributed separately by the competition organizer and are not redistributed by the repository.
 
 \section*{Acknowledgements}
 The author acknowledges the University of Sharjah and the Research Institute of Sciences and Engineering for research support and computational facilities. The RSNA Knee Abnormality Detection competition organizers are acknowledged for providing the challenge data and evaluation framework.
@@ -413,7 +539,6 @@ The author acknowledges the University of Sharjah and the Research Institute of 
 
 \section{Exact target order}
 \label{app:targets}
-The target order is:
 \begin{verbatim}
 ACL
 MCL
@@ -428,27 +553,28 @@ Baker's
 Contusion
 Fracture
 \end{verbatim}
-Changing the target ordering without retraining violates the checkpoint contract.
+Changing this ordering without retraining violates the checkpoint contract.
 
-\section{PV1 matched-control audit contract}
+\section{PV1 audit contract}
 \label{app:pv1audit}
-All three matched controls certify:
 \begin{verbatim}
-validation framework    prospective_weak_study_hash_80_20_v1
+evaluation version      1.1.0
 split SHA256            a0032307abb1ab99724eb39fac25332ce131c575f64d823083bb37f5ec20d1e6
 training studies        2496
 validation studies       624
+validation series       3544
 training series        13931
 training weak cells    11303
-positive / negative    5559 / 5744
+positive / negated     5559 / 5744
 fixed endpoint         E2
+TTA                    [-1,0,1]
 validation in gradient 0
-expert in gradient     0
+expert labels read     false
+weak-label validation true
 encoder SHA256          b328667cf9dfa9b909ef181c1bcc8975ec42bcd8b9eddad08f908875b73fae96
-construction seed      19002026
-loader seed            19102026
-post-construction seed 19202026
 \end{verbatim}
+
+The frozen low-memory evaluation policy is one resident model, batch size one, one worker, prefetch factor one, no persistent workers, and zero series cache per worker. These controls do not change prediction semantics.
 
 \section{Current experiment decision register}
 \label{app:decisionregister}
@@ -456,22 +582,25 @@ post-construction seed 19202026
 \toprule
 Model & Status & Decision \\
 \midrule
-B20 & Active & Canonical working model and reference checkpoint. \\
-B26.2 & Closed & Deterministic supervision repair did not improve the matched B20 result. \\
-B27.1 & Closed & Metadata-routing family not promoted; no B27.2 from reused outcomes. \\
+B20 & Active historical & Canonical checkpoint remains the externally unevaluated working reference. \\
+B21/B22 & Closed & Pre-resize crop and longer-duration rescue not supported. \\
+B23-v1 & Formal gate failed & Higher coverage/AUC but lower specificity; not adopted. \\
+B24X/B25X & Exploratory & Useful supervision-density diagnostics; no promotion. \\
+B26.2 & Closed & Deterministic repair did not improve the matched B20 result. \\
+B27.1 & Closed & Metadata-routing family not promoted. \\
 B28 & Closed & Max-evidence residual declined materially. \\
-B29 & Frozen promising & Positive reused-development direction; no B29.1 or target-wise blend. \\
+B29 & Frozen promising & Existing mechanistic candidate; suitable for one matched PV1 decomposition run. \\
 B30 & Closed & Projected complementary attention declined. \\
-B31 & Frozen leading candidate & Highest reused-58 macro, but not independently validated and mechanism remains uncertain. \\
-B32 & Closed & Weighted dispersion was non-redundant but did not improve performance. \\
-B33 & Frozen simplification & Essentially matches B29 with half as many new parameters; not promoted. \\
-PV1 & In progress & Split and matched training frozen/completed; corrected final 624-study evaluation running. \\
-B34 & Not started & Must not be designed before the predeclared PV1 comparison is available. \\
+B31 & PV1-selected development architecture & Best predeclared PV1 primary metric; not independent expert validation. \\
+B32 & Closed & Dispersion non-redundant but not beneficial. \\
+B33 & Frozen simplification & Better than B20 on PV1 but worse than B31 on primary loss; secondary AUC essentially tied with B31. \\
+PV1 & Complete/frozen & B31 $>$ B33 $>$ B20 by primary weighted soft-label BCE. \\
+B34 & Not yet defined & Define only after prospectively deciding whether to perform the frozen B29 decomposition. \\
 \bottomrule
 \end{longtable}
 
-\section{Recommended reporting checklist}
-Before interpreting a future result, verify that: the intended checkpoint completed its frozen training contract; the supervision, crop, series-policy, and encoder fingerprints match the declared experiment; the evaluation surface is identified as reused, prospective weak-label, hidden, or external expert data; paired comparisons use aligned StudyInstanceUIDs; no target-specific model or blend weights were selected from the same outcomes; resource-only runtime changes do not alter prediction semantics; and promotion claims are reserved for evidence stronger than the repeatedly reused 58-study development set.
+\section{Reporting checklist}
+Before interpreting a future result, verify the intended checkpoint and endpoint; the B6, crop, series-policy, and encoder fingerprints; the exact evaluation-surface role; aligned StudyInstanceUIDs for paired comparisons; absence of target-wise outcome-derived switching or blending; and whether a resource-only runtime change altered prediction semantics. Promotion claims must be reserved for evidence stronger than the reused 58-study set and PV1 weak-label validation.
 
 \begin{thebibliography}{00}
 \bibitem{bien2018mrnet}
