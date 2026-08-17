@@ -6,10 +6,18 @@ hard B6 positive/negated states for targets where both classes are present.
 
 This is a fresh architecture-selection signal, not independent clinical/expert
 validation. No expert labels are read by this module.
+
+PV1 evaluation is intentionally memory-conservative. Models are loaded and
+predicted one at a time, then deleted before the next checkpoint is loaded. The
+evaluation DataLoader is also frozen to batch_size=1, one worker, one prefetched
+batch, no persistent worker, and no per-worker raw-series cache. These changes
+alter resource use only; the frozen [-1,0,1] TTA and prediction/metric semantics
+remain unchanged.
 """
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 from pathlib import Path
 
@@ -30,7 +38,36 @@ from .prospective_weak_v1 import PV1_VALIDATION_STUDIES, validate_prospective_we
 from .prospective_weak_v1_training import load_prospective_weak_v1_checkpoint
 from .runtime import resolve_runtime
 
-PV1_EVAL_VERSION = "1.0.0"
+PV1_EVAL_VERSION = "1.1.0"
+PV1_EVAL_BATCH_SIZE = 1
+PV1_EVAL_NUM_WORKERS = 1
+PV1_EVAL_PREFETCH_FACTOR = 1
+PV1_EVAL_SERIES_CACHE_MB = 0
+PV1_EVAL_PERSISTENT_WORKERS = False
+
+
+def low_memory_eval_config(config: dict) -> dict:
+    """Return the frozen PV1 evaluation resource policy without mutating config."""
+    safe = dict(config)
+    safe["num_workers"] = PV1_EVAL_NUM_WORKERS
+    safe["persistent_workers"] = PV1_EVAL_PERSISTENT_WORKERS
+    safe["prefetch_factor"] = PV1_EVAL_PREFETCH_FACTOR
+    safe["series_cache_mb_per_worker"] = PV1_EVAL_SERIES_CACHE_MB
+    safe["b7_eval_batch_size"] = PV1_EVAL_BATCH_SIZE
+    return safe
+
+
+def _release_model(model, payload) -> None:
+    """Drop checkpoint/model references before loading the next matched control."""
+    del model
+    del payload
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        try:
+            torch.cuda.ipc_collect()
+        except RuntimeError:
+            pass
 
 
 def macro_weighted_soft_bce(targets: np.ndarray, weights: np.ndarray, probabilities: np.ndarray) -> dict:
@@ -119,6 +156,31 @@ def _subset_supervision(full_uids, targets, weights, subset_uids):
     return targets[idx], weights[idx]
 
 
+def _write_single_model_predictions(
+    out: Path,
+    *,
+    model_name: str,
+    val_uids: list[str],
+    prediction: np.ndarray,
+    split_sha256: str,
+    encoder_sha256: str,
+) -> None:
+    """Persist completed model predictions immediately for crash diagnostics."""
+    frame = pd.DataFrame(prediction, columns=TARGETS)
+    frame.insert(0, "StudyInstanceUID", val_uids)
+    frame.to_csv(out / f"{model_name}_predictions.csv", index=False)
+    meta = {
+        "evaluation_version": PV1_EVAL_VERSION,
+        "model_name": model_name,
+        "split_sha256": split_sha256,
+        "encoder_sha256": encoder_sha256,
+        "validation_studies": len(val_uids),
+        "prediction_shape": list(prediction.shape),
+        "status": "prediction pass completed; final PV1 comparison may still be pending",
+    }
+    (out / f"{model_name}_prediction_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+
 def evaluate_prospective_weak_v1(
     config: dict,
     *,
@@ -131,8 +193,15 @@ def evaluate_prospective_weak_v1(
     n_bootstrap: int = 5000,
 ) -> dict:
     crop_policy = require_b20_contract(config)
-    runtime = resolve_runtime(config)
+    eval_config = low_memory_eval_config(config)
+    runtime = resolve_runtime(eval_config)
     print(runtime.describe())
+    print(
+        "[PV1 eval] low-memory policy: sequential checkpoints | "
+        f"batch={PV1_EVAL_BATCH_SIZE} workers={PV1_EVAL_NUM_WORKERS} "
+        f"prefetch={PV1_EVAL_PREFETCH_FACTOR} persistent={PV1_EVAL_PERSISTENT_WORKERS} "
+        f"series_cache_mb={PV1_EVAL_SERIES_CACHE_MB}"
+    )
 
     root = Path(config["data_root"])
     train = load_train_csv(root / config.get("train_csv", "train.csv"))
@@ -166,7 +235,7 @@ def evaluate_prospective_weak_v1(
     ds = CropFocusedVariableSeriesKneeDataset(
         val_uids,
         val_index,
-        make_b7_dataset_config(config, root, train=False, tta_offsets=offsets),
+        make_b7_dataset_config(eval_config, root, train=False, tta_offsets=offsets),
         targets=val_targets,
         weights=val_weights,
         train=False,
@@ -174,7 +243,7 @@ def evaluate_prospective_weak_v1(
     )
     loader = DataLoader(
         ds,
-        batch_size=max(1, int(config.get("b7_eval_batch_size", 2))),
+        batch_size=PV1_EVAL_BATCH_SIZE,
         shuffle=False,
         collate_fn=collate_variable_series,
         **runtime.loader_kwargs(seed=int(config.get("seed", 2026)) + 34_100_000),
@@ -185,10 +254,20 @@ def evaluate_prospective_weak_v1(
         "b31": b31_checkpoint,
         "b33": b33_checkpoint,
     }
-    models = {}
-    payloads = {}
     split_sha = str(split["split_sha256"])
-    for name, path in checkpoints.items():
+    out = Path(out_root)
+    out.mkdir(parents=True, exist_ok=True)
+
+    predictions: dict[str, np.ndarray] = {}
+    metrics: dict[str, dict] = {}
+    encoder_shas: set[str] = set()
+
+    # Load only ONE model/checkpoint payload at a time. Keeping three payloads
+    # resident duplicated large state_dicts in CPU RAM and, with TTA batches and
+    # worker prefetching, contributed to a confirmed systemd-oomd kill.
+    for name in ("b20", "b31", "b33"):
+        path = checkpoints[name]
+        print(f"[PV1 eval] loading {name}: {path}")
         model, payload = load_prospective_weak_v1_checkpoint(
             path, expected_split_sha256=split_sha, device=runtime.device
         )
@@ -196,25 +275,40 @@ def evaluate_prospective_weak_v1(
             raise ValueError(f"PV1 checkpoint/model mismatch for {name}")
         if payload.get("crop_focus_policy") != crop_policy:
             raise ValueError(f"PV1 crop policy mismatch for {name}")
-        models[name] = model.eval()
-        payloads[name] = payload
+        encoder_sha = str(payload.get("encoder_sha256_initial", ""))
+        if not encoder_sha:
+            raise RuntimeError(f"PV1 {name} checkpoint has no encoder fingerprint")
+        encoder_shas.add(encoder_sha)
+        if len(encoder_shas) > 1:
+            raise RuntimeError("PV1 matched controls do not share one encoder fingerprint")
 
-    encoder_shas = {str(p.get("encoder_sha256_initial", "")) for p in payloads.values()}
-    if len(encoder_shas) != 1 or "" in encoder_shas:
-        raise RuntimeError("PV1 matched controls do not share one encoder fingerprint")
-
-    predictions = {}
-    metrics = {}
-    for name in ("b20", "b31", "b33"):
+        model.eval()
         print(f"[PV1 eval] predicting {name}")
-        pred_uids, pred = predict_b12_1(models[name], loader, runtime)
+        pred_uids, pred = predict_b12_1(model, loader, runtime)
         if [str(x) for x in pred_uids] != val_uids:
             raise RuntimeError(f"PV1 {name} prediction order changed")
+        pred = np.asarray(pred, dtype=np.float32)
         predictions[name] = pred
         metrics[name] = {
             "primary": macro_weighted_soft_bce(val_targets, val_weights, pred),
             "secondary": weak_state_auc(val_targets, val_weights, pred),
         }
+        _write_single_model_predictions(
+            out,
+            model_name=name,
+            val_uids=val_uids,
+            prediction=pred,
+            split_sha256=split_sha,
+            encoder_sha256=encoder_sha,
+        )
+        print(
+            f"[PV1 eval] completed {name}: "
+            f"weak-BCE={metrics[name]['primary']['macro_weighted_soft_bce']:.10f}; releasing model"
+        )
+        _release_model(model, payload)
+
+    if len(encoder_shas) != 1:
+        raise RuntimeError("PV1 evaluation did not certify one shared encoder fingerprint")
 
     seed = int(config.get("seed", 2026))
     paired = {
@@ -249,6 +343,16 @@ def evaluate_prospective_weak_v1(
         "primary_selection_metric": "macro of per-target B6-weighted soft-label BCE; lower is better",
         "secondary_metric": "macro AUC over B6 positive/negated states where both classes are present",
         "tta_offsets": list(offsets),
+        "memory_policy": {
+            "sequential_model_loading": True,
+            "models_resident_simultaneously": 1,
+            "eval_batch_size": PV1_EVAL_BATCH_SIZE,
+            "num_workers": PV1_EVAL_NUM_WORKERS,
+            "prefetch_factor": PV1_EVAL_PREFETCH_FACTOR,
+            "persistent_workers": PV1_EVAL_PERSISTENT_WORKERS,
+            "series_cache_mb_per_worker": PV1_EVAL_SERIES_CACHE_MB,
+            "prediction_semantics_changed": False,
+        },
         "metrics": metrics,
         "paired_primary_loss_bootstrap": paired,
         "primary_metric_ranking_best_first": ranking,
@@ -257,12 +361,11 @@ def evaluate_prospective_weak_v1(
         "governance": (
             "This surface is frozen before B34 and may be used for future architecture selection. "
             "It does not replace independent expert or hidden competition evaluation. Do not alter the split "
-            "after inspecting model outcomes."
+            "after inspecting model outcomes. The v1.1 low-memory implementation changes resource management "
+            "only; the frozen validation studies, TTA, predictions and metrics are unchanged."
         ),
     }
 
-    out = Path(out_root)
-    out.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame({"StudyInstanceUID": val_uids})
     for j, target in enumerate(TARGETS):
         frame[f"{target}__target"] = val_targets[:, j]
