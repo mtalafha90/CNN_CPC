@@ -17,6 +17,38 @@ The official dataset description establishes several facts that this audit must 
 - report text is unavailable at test time;
 - abnormality prevalence is not guaranteed to match between training and hidden evaluation.
 
+## Phase 1 status: COMPLETE
+
+The first tabular/report/series-metadata pass has been completed and is recorded in:
+
+```text
+developments/docs/DATASET_CONTRACT_AUDIT_PHASE1_RESULT.md
+```
+
+Key findings from the exact local release are:
+
+```text
+training studies                         4407
+fully labelled studies                     58
+partially labelled studies                  0
+report-only studies                      4349
+all reports non-empty                    4407
+
+B6-active studies                        3120
+B6 usable cells                         14123
+Latin-script share of report-only       87.70%
+Latin-script share of B6-active         98.75%
+Latin-script share of usable B6 cells   99.72%
+
+listed MRI series                       24371
+median series/study                         5
+maximum series/study                       14
+```
+
+The strongest Phase-1 warning is a large script-associated weak-supervision coverage shift: Greek- and Cyrillic-script report buckets account for about 12.3% of report-only studies but only 1.25% of B6-active studies and only 40 of 14,123 usable B6 cells. This is a coverage/selection-bias finding, not a language/site inference.
+
+The supplied training metadata also show perfect redundancy between `Fluid_Sensitive` and `Fat_Suppression`: every listed series has either both flags true or both false. Hidden-test equivalence must not be assumed because the competition contract says the two flags are not necessarily equivalent for every case.
+
 ## Important gold-label definition
 
 The repository's current `gold_mask()` policy is:
@@ -25,15 +57,7 @@ The repository's current `gold_mask()` policy is:
 study is gold/development-labelled if ANY of the 12 official target columns is populated
 ```
 
-This is not assumed to mean that every such study has all twelve labels. The new audit explicitly reports three separate quantities:
-
-```text
-repository_gold_any_label_studies
-fully_labeled_12_studies
-partially_labeled_studies
-```
-
-This resolves the exact structure directly from `train.csv` rather than relying on an assumption about the competition description.
+Phase 1 resolved the actual release structure: all 58 rows selected by this policy have all twelve official labels populated, and there are no partially labelled studies. Thus `ANY` and `ALL` happen to select the same 58 studies for this exact release, although the implementation remains intentionally tolerant of partial labels.
 
 ## Phase 1: tabular and report-contract audit
 
@@ -128,9 +152,9 @@ missing supplied metadata
 
 With `--scan-slices`, the audit also counts actual `.dcm` files under every listed series directory and reports slice-count quantiles and the long tail above 100 and 200 slices.
 
-## First run
+## Phase 2: physical DICOM slice-count pass
 
-From the repository root:
+Run from the repository root:
 
 ```bash
 cd /media/talafha/Disk_1/CNN_CPC_current
@@ -144,32 +168,27 @@ PYTHONPATH=developments/src \
 python -m rsna_knee.dataset_contract_audit \
   --data-root "$DATA_ROOT" \
   --b6-root "$B6_ROOT" \
-  --out-root runs/dataset_contract_audit
-```
-
-The first run intentionally skips filesystem slice counting so the tabular/gold/report/B6/series-metadata questions can be answered quickly.
-
-After inspecting that result, run the physical-series count pass:
-
-```bash
-PYTHONPATH=developments/src \
-python -m rsna_knee.dataset_contract_audit \
-  --data-root "$DATA_ROOT" \
-  --b6-root "$B6_ROOT" \
   --out-root runs/dataset_contract_audit \
   --scan-slices
 ```
+
+This reruns the cheap tabular checks and additionally scans every listed training series directory. The new artifact is:
+
+```text
+runs/dataset_contract_audit/slice_counts_by_series.csv
+```
+
+and `summary.json` is extended with the physical slice-count distribution.
 
 ## Decision boundary
 
 The next model experiment is **not defined yet**. The data audit comes first. In particular, do not define B35 from target-specific PV2 outcomes.
 
-The first questions to settle are:
+The remaining questions are now:
 
-1. Are the repository's 58 historically called gold studies fully labelled or only partially labelled, and what is the exact per-target official-label support?
-2. How much B6 coverage varies by report script bucket?
-3. Are the officially labelled studies materially different from the report-only population in number/type of MRI series?
-4. What is the true long-tail distribution of slices per series relative to the fixed 16-position sampling policy?
-5. Which supplied sequence combinations are common or rare, and are there missing metadata patterns that could affect preprocessing?
+1. What is the true long-tail distribution of DICOM slices per series relative to the fixed 16-position sampling policy?
+2. How heterogeneous are scanner/header, resolution, orientation and intensity characteristics after the slice-count pass?
+3. Can a separately versioned multilingual report-label candidate recover supervision from the currently almost-unused Greek- and Cyrillic-script report buckets while remaining accurate on the 58 official labels?
+4. How should robustness to `Fluid_Sensitive != Fat_Suppression` be tested, given that no such combinations occur in the training metadata but the competition contract permits them?
 
-Only after these are quantified should scanner/header heterogeneity and any next modelling intervention be defined.
+Any future multilingual label extractor must be a new supervision experiment. B6 v1.2.1, PV1 and PV2 remain frozen historical evidence.
