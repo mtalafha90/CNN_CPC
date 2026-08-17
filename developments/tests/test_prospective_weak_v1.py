@@ -11,6 +11,15 @@ from rsna_knee.prospective_weak_v1 import (
     build_prospective_weak_v1_manifest,
     validate_prospective_weak_v1_manifest,
 )
+from rsna_knee.prospective_weak_v1_b29_eval import (
+    PV1_B29_COMPARISONS,
+    PV1_B29_ORIGINAL_RANKING,
+)
+from rsna_knee.prospective_weak_v1_b29_training import (
+    PV1_B29_ADDENDUM_ROLE,
+    PV1_B29_ARCHITECTURE_FROZEN_BEFORE_PV1,
+    PV1_B29_ORIGINAL_PV1_RESULT_ALREADY_OBSERVED,
+)
 from rsna_knee.prospective_weak_v1_eval import (
     PV1_EVAL_BATCH_SIZE,
     PV1_EVAL_NUM_WORKERS,
@@ -22,6 +31,7 @@ from rsna_knee.prospective_weak_v1_eval import (
     paired_bootstrap_loss_difference,
     weak_state_auc,
 )
+from rsna_knee.prospective_weak_v1_training import PV1_CONTROL_NAMES
 
 
 def _surface():
@@ -128,3 +138,19 @@ def test_pv1_low_memory_eval_policy_is_frozen_and_nonmutating():
     assert safe["prefetch_factor"] == PV1_EVAL_PREFETCH_FACTOR == 1
     assert safe["persistent_workers"] is PV1_EVAL_PERSISTENT_WORKERS is False
     assert safe["series_cache_mb_per_worker"] == PV1_EVAL_SERIES_CACHE_MB == 0
+
+
+def test_pv1_b29_addendum_does_not_rewrite_original_control_set():
+    assert PV1_CONTROL_NAMES == ("b20", "b31", "b33")
+    assert PV1_B29_ORIGINAL_PV1_RESULT_ALREADY_OBSERVED is True
+    assert PV1_B29_ARCHITECTURE_FROZEN_BEFORE_PV1 is True
+    assert PV1_B29_ADDENDUM_ROLE == "post_pv1_frozen_architecture_mechanistic_addendum"
+
+
+def test_pv1_b29_addendum_global_comparisons_are_frozen():
+    assert PV1_B29_ORIGINAL_RANKING == ("b31", "b33", "b20")
+    assert PV1_B29_COMPARISONS == (
+        "b29_minus_b20",
+        "b29_minus_b33",
+        "b31_minus_b29",
+    )
