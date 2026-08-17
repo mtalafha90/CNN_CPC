@@ -6,26 +6,15 @@ Architecture development is paused after the successful frozen B34/PV2 mechanism
 
 This audit is intentionally independent of model selection. It does not train a model, change B6, inspect PV1/PV2 target-wise outcomes for architecture design, or promote a checkpoint.
 
-The official dataset description establishes several facts that this audit must verify against the actual local release:
-
-- one row per study in `train.csv`;
-- twelve binary target columns with only a small labelled subset;
-- radiology reports may be written in several languages;
-- one or more MRI series per study, described by anatomical plane, fluid sensitivity and fat suppression;
-- variable slice counts with a long tail;
-- heterogeneous scanner/protocol/intensity/resolution characteristics;
-- report text is unavailable at test time;
-- abnormality prevalence is not guaranteed to match between training and hidden evaluation.
-
 ## Phase 1 status: COMPLETE
 
-The first tabular/report/series-metadata pass has been completed and is recorded in:
+Recorded in:
 
 ```text
 developments/docs/DATASET_CONTRACT_AUDIT_PHASE1_RESULT.md
 ```
 
-Key findings from the exact local release are:
+Key findings from the exact local release:
 
 ```text
 training studies                         4407
@@ -49,7 +38,7 @@ The strongest Phase-1 warning is a large script-associated weak-supervision cove
 
 The supplied training metadata also show perfect redundancy between `Fluid_Sensitive` and `Fat_Suppression`: every listed series has either both flags true or both false. Hidden-test equivalence must not be assumed because the competition contract says the two flags are not necessarily equivalent for every case.
 
-## Important gold-label definition
+### Gold-label definition
 
 The repository's current `gold_mask()` policy is:
 
@@ -57,9 +46,63 @@ The repository's current `gold_mask()` policy is:
 study is gold/development-labelled if ANY of the 12 official target columns is populated
 ```
 
-Phase 1 resolved the actual release structure: all 58 rows selected by this policy have all twelve official labels populated, and there are no partially labelled studies. Thus `ANY` and `ALL` happen to select the same 58 studies for this exact release, although the implementation remains intentionally tolerant of partial labels.
+Phase 1 resolved the actual release structure: all 58 rows selected by this policy have all twelve official labels populated, and there are no partially labelled studies. Thus `ANY` and `ALL` happen to select the same 58 studies for this exact release.
 
-## Phase 1: tabular and report-contract audit
+## Phase 2 status: COMPLETE
+
+Recorded in:
+
+```text
+developments/docs/DATASET_CONTRACT_AUDIT_PHASE2_RESULT.md
+```
+
+The physical scan found every listed training series directory and no zero-DICOM series:
+
+```text
+series scanned                         24371
+missing series directories                 0
+zero-DICOM series                         0
+mean slices/series                     33.61
+median slices/series                      30
+95th percentile                           45
+97th percentile                           88
+99th percentile                          160
+maximum                                  320
+series >78 slices                        763  (3.13%)
+series >100 slices                       709  (2.91%)
+series >200 slices                        88  (0.36%)
+```
+
+The 763 series above 78 slices contain 15.24% of all listed training DICOM files, so the upper tail is small by series count but large by image count.
+
+### Current 16-position sampler relative to Phase 2
+
+The current preprocessing places 16 distributed centers through each series and builds a gap-1 three-slice 2.5D triplet at each center. Therefore one deterministic evaluation view can touch up to 48 distinct source slice indices. Frozen TTA uses center offsets `[-1,0,+1]`; the union of all three views can touch up to 78 distinct source indices.
+
+For the exact current center policy:
+
+```text
+one eval view fully covers series with <=48 slices
+three-view TTA fully covers series with <=78 slices
+
+series fully covered by one view        95.93%
+series fully covered by frozen TTA      96.87%
+mean per-series TTA source coverage     98.52%
+slice-weighted TTA source coverage      92.03%
+```
+
+The Phase-2 decision is therefore:
+
+```text
+unconditional global increase above 16 positions    NO-GO
+retain current 16-position policy                    YES for now
+structurally inspect the >78-slice tail              GO
+define B35 from slice counts alone                   NO-GO
+```
+
+The long tail includes repeated large counts such as 120, 128, 144, 160, 186 and 320 slices. Eighty-five series contain exactly 320 DICOM files. These should be explained by acquisition/header characteristics before any adaptive-sampling experiment is defined.
+
+## Phase 1/2 implementation
 
 Implemented in:
 
@@ -67,7 +110,7 @@ Implemented in:
 developments/src/rsna_knee/dataset_contract_audit.py
 ```
 
-Outputs:
+Main outputs:
 
 ```text
 runs/dataset_contract_audit/
@@ -76,85 +119,40 @@ runs/dataset_contract_audit/
 ├── official_label_count_histogram.csv
 ├── officially_labeled_studies.csv
 ├── report_script_buckets.csv
+├── b6_coverage_by_report_script.csv
 ├── series_per_study.csv
 ├── series_metadata_counts.csv
-├── b6_coverage_by_report_script.csv      # when --b6-root is supplied
-└── slice_counts_by_series.csv            # when --scan-slices is supplied
+└── slice_counts_by_series.csv
 ```
 
-The audit records SHA-256 fingerprints of `train.csv` and `train_series.csv` so later summaries can be tied to the exact local data release.
+## Phase 3: representative DICOM-header heterogeneity audit
 
-### Official-label audit
-
-For each target the script reports:
+Implemented in:
 
 ```text
-number of populated official labels
-positive cells
-negative cells
-positive prevalence among labelled cells
-missing cells
+developments/src/rsna_knee/dataset_header_audit.py
 ```
 
-At study level it reports the distribution of the number of official labels present (0 through 12) and writes the UIDs of all studies satisfying the repository gold definition. Report text itself is not copied into the audit artifacts.
-
-### Report script audit
-
-Because the official description says reports may be multilingual, the script groups reports by Unicode character system:
+Phase 3 reads one representative DICOM header per listed training series using `stop_before_pixels=True`. It does not decode image pixels. It records and aggregates:
 
 ```text
-Latin
-Cyrillic
-Arabic
-Greek
-Hebrew
-Devanagari
-Hangul
-Hiragana
-Katakana
-CJK
-Other
-Mixed:<...>
-Empty/no-letters
+manufacturer and scanner model
+magnetic field strength
+MR acquisition type (when present)
+transfer syntax
+Rows / Columns
+PixelSpacing and in-plane FOV
+SliceThickness and SpacingBetweenSlices
+NumberOfFrames
+photometric/pixel representation
+ImageOrientationPatient-derived closest anatomical plane
+obliquity relative to patient axes
+agreement with supplied Anatomical_Plane
 ```
 
-These are **script buckets, not language predictions**. A Latin-script report is not automatically English, and no institution/site is inferred from script.
+The output also stratifies the slice-count tail (`<=48`, `49-78`, `79-100`, `101-200`, `>200`) by supplied plane/flags and available scanner/acquisition metadata. Acquisition categories are descriptive metadata only and must not be interpreted as patient or institutional identity.
 
-When the frozen B6 root is supplied, the script reports for each script bucket:
-
-```text
-report-only studies
-B6-active studies
-studies with zero usable B6 cells
-active-study fraction
-usable B6 cells
-positive B6 cells
-negative B6 cells
-usable cells per study
-```
-
-This is intended to reveal large coverage differences that could create report-language/script selection bias in the weak-supervision population. It is descriptive only and does not authorize B6 retuning from the same evaluation surfaces.
-
-### Series audit
-
-The supplied `train_series.csv` is audited for:
-
-```text
-series rows and unique series
-studies with/without listed MRI series
-series per study distribution
-Anatomical_Plane distribution
-Fluid_Sensitive distribution
-Fat_Suppression distribution
-plane × fluid × fat-suppression combinations
-missing supplied metadata
-```
-
-With `--scan-slices`, the audit also counts actual `.dcm` files under every listed series directory and reports slice-count quantiles and the long tail above 100 and 200 slices.
-
-## Phase 2: physical DICOM slice-count pass
-
-Run from the repository root:
+Run:
 
 ```bash
 cd /media/talafha/Disk_1/CNN_CPC_current
@@ -162,33 +160,33 @@ conda activate rsna-knee
 git pull --ff-only origin main
 
 export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
-export B6_ROOT="/media/talafha/Disk_1/CNN_CPC/runs/b6_report_labels_v121"
 
 PYTHONPATH=developments/src \
-python -m rsna_knee.dataset_contract_audit \
+python -m rsna_knee.dataset_header_audit \
   --data-root "$DATA_ROOT" \
-  --b6-root "$B6_ROOT" \
-  --out-root runs/dataset_contract_audit \
-  --scan-slices
+  --out-root runs/dataset_header_audit
 ```
 
-This reruns the cheap tabular checks and additionally scans every listed training series directory. The new artifact is:
+Expected artifacts:
 
 ```text
-runs/dataset_contract_audit/slice_counts_by_series.csv
+runs/dataset_header_audit/
+├── header_summary.json
+├── header_by_series.csv
+├── header_categorical_counts.csv
+├── slice_tail_header_profile.csv
+└── orientation_vs_supplied_plane.csv
 ```
-
-and `summary.json` is extended with the physical slice-count distribution.
 
 ## Decision boundary
 
-The next model experiment is **not defined yet**. The data audit comes first. In particular, do not define B35 from target-specific PV2 outcomes.
+The next model experiment remains **undefined**. Do not define B35 from PV1/PV2 target outcomes, the Phase-2 long tail, or the Phase-3 scanner categories alone.
 
-The remaining questions are now:
+After Phase 3, the remaining high-value data questions are:
 
-1. What is the true long-tail distribution of DICOM slices per series relative to the fixed 16-position sampling policy?
-2. How heterogeneous are scanner/header, resolution, orientation and intensity characteristics after the slice-count pass?
-3. Can a separately versioned multilingual report-label candidate recover supervision from the currently almost-unused Greek- and Cyrillic-script report buckets while remaining accurate on the 58 official labels?
-4. How should robustness to `Fluid_Sensitive != Fat_Suppression` be tested, given that no such combinations occur in the training metadata but the competition contract permits them?
+1. Do >78-, >100- and >200-slice series represent distinct 3D/thin-slice acquisition families that justify an adaptive sampling hypothesis?
+2. Are resolution, field strength, orientation or transfer-syntax distributions broad enough to expose a preprocessing robustness gap?
+3. Can a separately versioned multilingual report-label candidate recover supervision from the almost-unused Greek- and Cyrillic-script report buckets while remaining accurate on the 58 official labels?
+4. How should robustness to `Fluid_Sensitive != Fat_Suppression` be tested, given that no discordant examples occur in the training metadata but the competition contract permits them?
 
 Any future multilingual label extractor must be a new supervision experiment. B6 v1.2.1, PV1 and PV2 remain frozen historical evidence.
