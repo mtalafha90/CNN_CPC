@@ -137,13 +137,30 @@ The rescue also greatly reduces the acquisition-domain coverage gap. Combining o
 
 Target-level recovery is not balanced. Synovitis adds 35 positives and zero negatives, while OA additions are strongly positive-skewed. These observed imbalances are recorded but may not be repaired through post-hoc target filtering from Phase-7 outcomes.
 
-## Phase 8 — FROZEN, READY TO RUN: global merged supervision artifact
+## Phase 8 — COMPLETE/PASS: global merged supervision artifact
 
 Protocol: `developments/docs/DATASET_CONTRACT_AUDIT_PHASE8_MERGED_SUPERVISION.md`
 
+Result: `developments/docs/DATASET_CONTRACT_AUDIT_PHASE8_RESULT.md`
+
 Implementation: `developments/src/rsna_knee/translation_rescue_supervision_merge.py`
 
-Phase 8 creates one training-target artifact over all 4,349 report-only studies:
+The generated artifact passed the frozen population and fingerprint checks:
+
+```text
+training_targets.csv SHA-256
+c59d78c74743112f09946fd18b64d7726947e6f75b83aabd1f585389a89d045a
+
+report-only studies                  4349
+candidate active studies             4173
+candidate inactive studies            176
+candidate usable cells              18024
+candidate positive cells             9590
+candidate negative cells             8434
+gold studies in output                  0
+```
+
+The merge preserves the original global rule:
 
 ```text
 3120 originally B6-active studies
@@ -156,50 +173,70 @@ Phase 8 creates one training-target artifact over all 4,349 report-only studies:
     -> remain zero-weight for supervised BCE
 ```
 
-The 58 official gold studies remain excluded from training targets. The builder pins the exact Phase-7 recovered-cell SHA-256 and verifies that no original usable B6 cell or B6-active row changes.
+No target/script-specific filtering is permitted from the Phase-8 result. Phase 8 freezes a supervision candidate; it does not establish MRI performance or authorize model promotion.
 
-Run:
+## Phase 9 — FROZEN, READY TO RUN: matched B34 supervision experiment
 
-```bash
-cd /media/talafha/Disk_1/CNN_CPC_current
-conda activate rsna-knee
-git pull --ff-only origin main
+Protocol: `developments/docs/DATASET_CONTRACT_AUDIT_PHASE9_MATCHED_SUPERVISION.md`
 
-export B6_ROOT="/media/talafha/Disk_1/CNN_CPC/runs/b6_report_labels_v121"
-export PHASE7_ROOT="runs/report_translation_rescue_full"
-
-PYTHONPATH=developments/src \
-python -m rsna_knee.translation_rescue_supervision_merge \
-  --b6-root "$B6_ROOT" \
-  --phase7-root "$PHASE7_ROOT" \
-  --out-root runs/translation_rescue_supervision_v1
-```
-
-Outputs:
+Implementation:
 
 ```text
-runs/translation_rescue_supervision_v1/
-├── training_targets.csv
-├── merge_audit.json
-└── policy.json
+developments/src/rsna_knee/phase9_supervision.py
+developments/src/rsna_knee/phase9_matched_supervision_training.py
+developments/src/rsna_knee/phase9_matched_supervision_eval.py
 ```
 
-After these artifacts are generated and checked, the next permissible modelling step is a matched same-architecture original-B6 versus merged-supervision experiment. Architecture, encoder, crop, series exposure, optimizer, seed, epoch endpoint and evaluation must remain fixed; supervision is the only changed variable.
+The old PV2 training split cannot test Phase 8 because it contains only original B6-active studies, and Phase 8 leaves those rows unchanged. Phase 9 therefore keeps the complete report-only MRI exposure identical in both arms:
+
+```text
+studies per arm                        4349
+eligible real MRI series per arm      24035
+batch size                                 2
+batches/full epoch                      2175
+fixed endpoint                            E2
+architecture                              B34
+encoder                         same frozen B16
+crop                                same B20 90%
+```
+
+Only supervision changes:
+
+```text
+CONTROL: original B6 v1.2.1
+active studies        3120
+usable cells         14123
+positive cells        6871
+negative cells        7252
+
+CANDIDATE: frozen Phase-8 merge
+active studies        4173
+usable cells         18024
+positive cells        9590
+negative cells        8434
+```
+
+The 1,229 B6-inactive studies remain inside the control dataloader with zero supervised BCE weight rather than being removed. This holds MRI acquisition-domain exposure constant between arms. Target-balance multipliers are recomputed mechanically from each arm using the unchanged frozen B7 formula; no manual target-specific adjustment is allowed.
+
+Both arms use the same B34 construction, optimizer, scheduler horizon, augmentation, seeds and fixed E2 endpoint. The 58 gold studies remain outside gradients and checkpoint selection. A paired reused-gold macro-AUC evaluation is diagnostic only; hidden competition or new external expert-labelled evidence remains required for promotion.
 
 ## Current decision boundary
 
 ```text
-globally increase 16 slice positions                 NO-GO
-create adaptive 3D sampler now                        NO-GO
-modify frozen B6 v1.2.1                               NO-GO
-fill partially silent B6-active studies               NO-GO
-target/script-specific rescue tuning                  NO-GO
-add 58 gold studies to matched training               NO-GO
-define B35                                             NO-GO
-build/fingerprint Phase-8 merged supervision          GO
-matched same-architecture B6 vs merged training       GO after Phase-8 artifact check
-promotion from Phase 7/8 alone                        NO-GO
-verify compressed-DICOM codec capability              GO before hidden submission
+globally increase 16 slice positions                    NO-GO
+create adaptive 3D sampler now                           NO-GO
+modify frozen B6 v1.2.1                                  NO-GO
+fill partially silent B6-active studies                  NO-GO
+target/script-specific rescue tuning                     NO-GO
+add 58 gold studies to matched training                  NO-GO
+define B35                                                NO-GO
+rebuild/refilter frozen Phase-8 supervision               NO-GO
+run Phase-9 matched B34 control/candidate                 GO
+same 4349-study / 24035-series exposure in both arms      REQUIRED
+reuse PV2 active-only training split for Phase 9           NO-GO
+promotion from Phase 8 or reused-gold Phase 9 alone       NO-GO
+verify compressed-DICOM codec capability                  GO before hidden submission
+independent hidden competition comparison                 GO after Phase-9 checkpoints are frozen
 ```
 
-B6 v1.2.1, PV1 and PV2 remain frozen historical evidence.
+B6 v1.2.1, PV1, PV2 and the Phase-8 supervision artifact remain frozen historical evidence.
