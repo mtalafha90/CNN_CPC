@@ -35,5 +35,7 @@ jobs:
             developments/tests/test_b31_local_context_complementary_pool.py \
             developments/tests/test_b32_dispersion_complementary_pool.py \
             developments/tests/test_b33_uniform_complementary_mean.py \
+            developments/tests/test_b34_training_only_context_scaffold.py \
             developments/tests/test_prospective_weak_v1.py \
-            developments/tests/test_pv1_b31_context_counterfactual.py
+            developments/tests/test_pv1_b31_context_counterfactual.py \
+            developments/tests/test_prospective_weak_v2.py
