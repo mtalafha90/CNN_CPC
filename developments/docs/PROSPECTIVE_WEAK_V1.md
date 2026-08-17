@@ -89,6 +89,33 @@ This surface is fresh with respect to the **supervised downstream B20--B33 archi
 
 A future B34 may be selected against this frozen surface only if it retains the exact shared frozen B16 encoder. The split itself, primary metric, fixed E2 endpoint, and matched-control protocol must not be changed in response to observed outcomes.
 
+## Evaluation memory-safety policy
+
+The first PV1 evaluation attempt was terminated by `systemd-oomd` after the terminal scope reached a 56.6 GiB memory peak. The failure was operational, not a model-selection outcome, and no final comparison was produced.
+
+PV1 evaluation v1.1 therefore freezes a lower-memory implementation while preserving the exact validation population, checkpoints, `[-1,0,1]` TTA, prediction semantics, and metrics. The evaluator now:
+
+```text
+loads one checkpoint at a time
+predicts the full 624-study validation surface
+stores predictions on CPU/disk
+releases the model/checkpoint payload
+gc.collect() + torch.cuda.empty_cache()
+then loads the next checkpoint
+```
+
+The evaluation loader is also fixed at:
+
+```text
+batch_size                1
+num_workers               1
+prefetch_factor           1
+persistent_workers        false
+series_cache_mb_per_worker 0
+```
+
+These settings are resource-management controls only and are not a new experimental degree of freedom. Per-model predictions are written immediately as `b20_predictions.csv`, `b31_predictions.csv`, and `b33_predictions.csv`, with matching metadata JSON files, so progress remains visible if an external process kill occurs again.
+
 ## Commands
 
 Create the frozen manifest:
@@ -117,7 +144,7 @@ for MODEL in b20 b31 b33; do
 done
 ```
 
-Evaluate all three together:
+Evaluate all three together with the frozen low-memory implementation:
 
 ```bash
 PYTHONPATH=developments/src python -m rsna_knee.prospective_weak_v1_eval \
@@ -144,6 +171,12 @@ runs/prospective_weak_v1/
 ├── b33/model.pt
 ├── b33/training_audit.json
 └── eval/
+    ├── b20_predictions.csv
+    ├── b20_prediction_meta.json
+    ├── b31_predictions.csv
+    ├── b31_prediction_meta.json
+    ├── b33_predictions.csv
+    ├── b33_prediction_meta.json
     ├── paired_predictions.csv
     └── comparison.json
 ```
