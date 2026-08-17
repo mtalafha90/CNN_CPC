@@ -57,10 +57,8 @@ def low_memory_eval_config(config: dict) -> dict:
     return safe
 
 
-def _release_model(model, payload) -> None:
-    """Drop checkpoint/model references before loading the next matched control."""
-    del model
-    del payload
+def _release_unused_memory() -> None:
+    """Collect Python objects and release unused CUDA allocator/cache memory."""
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -305,7 +303,10 @@ def evaluate_prospective_weak_v1(
             f"[PV1 eval] completed {name}: "
             f"weak-BCE={metrics[name]['primary']['macro_weighted_soft_bce']:.10f}; releasing model"
         )
-        _release_model(model, payload)
+        del pred_uids
+        del model
+        del payload
+        _release_unused_memory()
 
     if len(encoder_shas) != 1:
         raise RuntimeError("PV1 evaluation did not certify one shared encoder fingerprint")
