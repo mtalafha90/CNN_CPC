@@ -71,7 +71,10 @@ def test_b34_training_scaffold_receives_gradient_when_outer_gate_is_open():
     with torch.no_grad():
         model.complementary_gate.fill_(0.05)
     summary, _, _ = model._contextual_complementary_summary(active)
-    loss = summary.square().mean()
+    # A non-symmetric deterministic projection avoids the near-constant
+    # squared-norm objective induced by parameter-free LayerNorm.
+    probe = torch.linspace(-1.0, 1.0, summary.shape[-1], dtype=summary.dtype)
+    loss = (summary * probe[None, :]).mean()
     loss.backward()
     grad = model.local_context.weight.grad
     assert grad is not None
