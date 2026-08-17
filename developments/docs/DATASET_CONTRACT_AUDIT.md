@@ -88,19 +88,9 @@ Raw Phase-5 report text remains a local-only artifact and must not be committed.
 
 ## Phase 6 — COMPLETE/PASS: deterministic translation -> frozen B6
 
-Protocol:
+Protocol: `developments/docs/DATASET_CONTRACT_AUDIT_PHASE6_TRANSLATION_RESCUE.md`
 
-```text
-developments/docs/DATASET_CONTRACT_AUDIT_PHASE6_TRANSLATION_RESCUE.md
-```
-
-Result:
-
-```text
-developments/docs/DATASET_CONTRACT_AUDIT_PHASE6_RESULT.md
-```
-
-The exact frozen pilot passed every predeclared feasibility rule:
+Result: `developments/docs/DATASET_CONTRACT_AUDIT_PHASE6_RESULT.md`
 
 ```text
 translation failures                    0
@@ -114,31 +104,59 @@ added negative cells                   31
 active B6 controls preserved        25/25
 ```
 
-The translator was `qwen3:14b` under the frozen local deterministic provenance and the language model performed translation only. Frozen B6 v1.2.1 remained the target-state extractor.
+Phase 6 established coverage-mechanism feasibility, not independent clinical accuracy.
 
-Five Greek pilot reports remained unrecovered despite successful translations, demonstrating that translation solves much, but not all, of the frozen-B6 terminology/aggregation gap. No B6 rule changes are permitted from this result.
+## Phase 7 — COMPLETE: full 1,229-study inactive-population audit
 
-The reused-gold translation diagnostic produced 109 definite calls over 216 official cells (50.46% coverage), with 74.31% definite-call accuracy, 68.54% positive-call precision and 100% negative-call precision. These numbers are diagnostic only and are not independent validation or a promotion gate.
+Protocol: `developments/docs/DATASET_CONTRACT_AUDIT_PHASE7_FULL_TRANSLATION_RESCUE.md`
 
-Phase 6 therefore establishes **coverage-mechanism feasibility**, not clinical label accuracy.
+Result: `developments/docs/DATASET_CONTRACT_AUDIT_PHASE7_RESULT.md`
 
-## Phase 7 — FROZEN, READY TO RUN: full 1,229-study inactive-population audit
-
-Protocol:
+The exact Phase-6 translator was applied to all 1,229 originally zero-cell report-only studies:
 
 ```text
-developments/docs/DATASET_CONTRACT_AUDIT_PHASE7_FULL_TRANSLATION_RESCUE.md
+successful translations                1229 / 1229
+translation failures                       0
+rescued studies                         1053 / 1229 = 85.68%
+new usable cells                        3901
+new positive cells                      2719
+new negative cells                      1182
+candidate active report-only studies    4173 / 4349 = 95.95%
+candidate usable cells                 18024
 ```
 
-Implementation:
+By script:
 
 ```text
-developments/src/rsna_knee/report_translation_rescue_full.py
+Latin       610/733 = 83.22%
+Greek       228/280 = 81.43%
+Cyrillic    215/216 = 99.54%
 ```
 
-Phase 7 applies the exact Phase-6 translator only to the complete 1,229-study zero-original-cell population. The code aborts if the model digest, prompt hash, quantisation, seed or output budget differ from the successful pilot.
+The rescue also greatly reduces the acquisition-domain coverage gap. Combining original B6-active and rescued studies gives supervision for 652/655 report-only studies with known 3D series, 584/587 with >78 slices, 558/561 with >100 slices, and all 87 with >200 slices.
 
-The run is resumable through a local append-only translation cache. Phase 7 records overall/script/target recovery and optional acquisition-domain recovery. It does not create an authorized MRI training target file.
+Target-level recovery is not balanced. Synovitis adds 35 positives and zero negatives, while OA additions are strongly positive-skewed. These observed imbalances are recorded but may not be repaired through post-hoc target filtering from Phase-7 outcomes.
+
+## Phase 8 — FROZEN, READY TO RUN: global merged supervision artifact
+
+Protocol: `developments/docs/DATASET_CONTRACT_AUDIT_PHASE8_MERGED_SUPERVISION.md`
+
+Implementation: `developments/src/rsna_knee/translation_rescue_supervision_merge.py`
+
+Phase 8 creates one training-target artifact over all 4,349 report-only studies:
+
+```text
+3120 originally B6-active studies
+    -> frozen B6 unchanged
+
+1053 Phase-7 rescued zero-cell studies
+    -> all frozen recovered cells added
+
+176 still-unrecovered studies
+    -> remain zero-weight for supervised BCE
+```
+
+The 58 official gold studies remain excluded from training targets. The builder pins the exact Phase-7 recovered-cell SHA-256 and verifies that no original usable B6 cell or B6-active row changes.
 
 Run:
 
@@ -147,35 +165,41 @@ cd /media/talafha/Disk_1/CNN_CPC_current
 conda activate rsna-knee
 git pull --ff-only origin main
 
-export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
 export B6_ROOT="/media/talafha/Disk_1/CNN_CPC/runs/b6_report_labels_v121"
+export PHASE7_ROOT="runs/report_translation_rescue_full"
 
 PYTHONPATH=developments/src \
-python -m rsna_knee.report_translation_rescue_full \
-  --data-root "$DATA_ROOT" \
+python -m rsna_knee.translation_rescue_supervision_merge \
   --b6-root "$B6_ROOT" \
-  --domain-study-csv runs/dataset_domain_intersection_audit/study_domain_table.csv \
-  --out-root runs/report_translation_rescue_full \
-  --model qwen3:14b \
-  --num-ctx 8192 \
-  --max-new-tokens 4096 \
-  --seed 2026
+  --phase7-root "$PHASE7_ROOT" \
+  --out-root runs/translation_rescue_supervision_v1
 ```
 
-Raw translations in `translation_cache.jsonl` are local-only and must not be committed.
+Outputs:
+
+```text
+runs/translation_rescue_supervision_v1/
+├── training_targets.csv
+├── merge_audit.json
+└── policy.json
+```
+
+After these artifacts are generated and checked, the next permissible modelling step is a matched same-architecture original-B6 versus merged-supervision experiment. Architecture, encoder, crop, series exposure, optimizer, seed, epoch endpoint and evaluation must remain fixed; supervision is the only changed variable.
 
 ## Current decision boundary
 
 ```text
-globally increase 16 slice positions              NO-GO
-create adaptive 3D sampler now                     NO-GO
-modify frozen B6 v1.2.1                            NO-GO
-fill partially silent B6-active studies            NO-GO
-target/script-specific rescue tuning               NO-GO
-define B35                                         NO-GO
-run frozen Phase-7 full inactive-population audit  GO
-MRI training using translation rescue              NOT YET AUTHORIZED
-verify compressed-DICOM codec capability           GO before hidden submission
+globally increase 16 slice positions                 NO-GO
+create adaptive 3D sampler now                        NO-GO
+modify frozen B6 v1.2.1                               NO-GO
+fill partially silent B6-active studies               NO-GO
+target/script-specific rescue tuning                  NO-GO
+add 58 gold studies to matched training               NO-GO
+define B35                                             NO-GO
+build/fingerprint Phase-8 merged supervision          GO
+matched same-architecture B6 vs merged training       GO after Phase-8 artifact check
+promotion from Phase 7/8 alone                        NO-GO
+verify compressed-DICOM codec capability              GO before hidden submission
 ```
 
 B6 v1.2.1, PV1 and PV2 remain frozen historical evidence.
