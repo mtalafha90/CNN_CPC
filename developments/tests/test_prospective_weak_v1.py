@@ -12,6 +12,12 @@ from rsna_knee.prospective_weak_v1 import (
     validate_prospective_weak_v1_manifest,
 )
 from rsna_knee.prospective_weak_v1_eval import (
+    PV1_EVAL_BATCH_SIZE,
+    PV1_EVAL_NUM_WORKERS,
+    PV1_EVAL_PERSISTENT_WORKERS,
+    PV1_EVAL_PREFETCH_FACTOR,
+    PV1_EVAL_SERIES_CACHE_MB,
+    low_memory_eval_config,
     macro_weighted_soft_bce,
     paired_bootstrap_loss_difference,
     weak_state_auc,
@@ -102,3 +108,23 @@ def test_pv1_paired_bootstrap_sign_is_candidate_minus_reference():
     )
     assert result["median_difference"] < 0
     assert result["probability_candidate_better"] > 0.99
+
+
+def test_pv1_low_memory_eval_policy_is_frozen_and_nonmutating():
+    original = {
+        "num_workers": 6,
+        "persistent_workers": True,
+        "prefetch_factor": 2,
+        "series_cache_mb_per_worker": 256,
+        "b7_eval_batch_size": 2,
+        "device": "auto",
+    }
+    before = copy.deepcopy(original)
+    safe = low_memory_eval_config(original)
+    assert original == before
+    assert safe["device"] == "auto"
+    assert safe["b7_eval_batch_size"] == PV1_EVAL_BATCH_SIZE == 1
+    assert safe["num_workers"] == PV1_EVAL_NUM_WORKERS == 1
+    assert safe["prefetch_factor"] == PV1_EVAL_PREFETCH_FACTOR == 1
+    assert safe["persistent_workers"] is PV1_EVAL_PERSISTENT_WORKERS is False
+    assert safe["series_cache_mb_per_worker"] == PV1_EVAL_SERIES_CACHE_MB == 0
