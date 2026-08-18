@@ -119,3 +119,31 @@ def test_the_supported_path_still_builds_the_frozen_width_afterwards():
     model = build_network(spec, pretrained_weights=False)
     assert model.encoder.out_dim == 768
     assert model.local_context.weight.numel() == 2304
+
+
+def test_a_wide_checkpoint_round_trips_through_the_variant_loader(tmp_path):
+    from variants.dinov3_wide.model import load_wide_checkpoint, save_wide_checkpoint
+
+    spec = _small_spec("base")
+    model = build_wide_model(spec, pretrained_weights=False)
+    path = save_wide_checkpoint(model, spec, tmp_path / "model.pt", completed_epochs=2)
+
+    reloaded, payload = load_wide_checkpoint(path)
+    assert reloaded.encoder.out_dim == 1024
+    assert payload["completed_epochs"] == 2
+    assert payload["encoder"]["model_name"] == "convnext_base.dinov3_lvd1689m"
+    for a, b in zip(model.state_dict().values(), reloaded.state_dict().values()):
+        assert torch.equal(a, b)
+
+
+def test_the_supported_loader_refuses_a_wide_checkpoint(tmp_path):
+    """It must fail outright rather than partially loading a mismatched model."""
+    from model._implementation import load_checkpoint
+    from variants.dinov3_wide.model import save_wide_checkpoint
+
+    spec = _small_spec("base")
+    model = build_wide_model(spec, pretrained_weights=False)
+    path = save_wide_checkpoint(model, spec, tmp_path / "model.pt")
+
+    with pytest.raises(Exception):
+        load_checkpoint(path)

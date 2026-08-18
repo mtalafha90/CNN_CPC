@@ -60,14 +60,20 @@ def predict_test_set(
     *,
     checkpoint: str | Path,
     out_path: str | Path = "submission.csv",
+    loader=load,
 ) -> Path:
-    """Score every test study and write the submission and its manifest."""
+    """Score every test study and write the submission and its manifest.
+
+    `loader` rebuilds the model from its checkpoint. It defaults to the
+    supported one; a variant whose checkpoint is a different width supplies its
+    own, so inference stays shared rather than duplicated.
+    """
     crop_policy = resolve_crop_policy(config)
     runtime = resolve_runtime(config)
     print(runtime.describe())
 
     checkpoint = Path(checkpoint).resolve()
-    model, payload = load(checkpoint, device=runtime.device)
+    model, payload = loader(checkpoint, device=runtime.device)
 
     root = Path(config["data_root"])
     test = read_studies(root, config, split="test")

@@ -33,14 +33,25 @@ EVALUATION_ROLE = (
 )
 
 
-def evaluate(config: dict, *, checkpoint: str, device: str | None = None) -> dict:
-    """Predict the expert studies and report macro and per-target AUC."""
+def evaluate(
+    config: dict,
+    *,
+    checkpoint: str,
+    device: str | None = None,
+    loader=load,
+) -> dict:
+    """Predict the expert studies and report macro and per-target AUC.
+
+    `loader` rebuilds the model from its checkpoint. It defaults to the
+    supported one; a variant whose checkpoint is a different width supplies its
+    own, so the rest of this stage stays shared rather than duplicated.
+    """
     root = Path(config["data_root"])
     runtime = resolve_runtime(config)
     print(runtime.describe())
 
     crop_policy = resolve_crop_policy(config)
-    model, payload = load(checkpoint, device=device or runtime.device)
+    model, payload = loader(checkpoint, device=device or runtime.device)
 
     studies = read_studies(root, config, split="train")
     series, metadata_repair = read_series(root, config, split="train")

@@ -52,6 +52,23 @@ python -m variants.dinov3_wide.train \
 
 Output lands in the usual layout, `runs/dinov3_base/train/all-script/`.
 
+Validation and test-set prediction need the variant's own entry points, because
+the supported ones rebuild a model at 768-d and cannot reconstruct a wider
+checkpoint (they refuse it outright rather than half-loading it):
+
+```bash
+python -m variants.dinov3_wide.validate \
+  --data-root "$DATA_ROOT" --experiment dinov3_base \
+  --checkpoint runs/dinov3_base/train/all-script/model.pt
+
+python -m variants.dinov3_wide.predict \
+  --data-root "$DATA_ROOT" --experiment dinov3_base \
+  --checkpoint runs/dinov3_base/train/all-script/model.pt
+```
+
+Both reuse the supported scoring and submission code and only swap the loader,
+so the numbers and the manifest are produced the same way.
+
 No `--encoder-checkpoint`: DINOv3 resolves its own weights through `timm`.
 Confirm they download before spending a session:
 
