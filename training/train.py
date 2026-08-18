@@ -1,47 +1,66 @@
-"""Train the current B20 working model using the frozen recorded recipe."""
+"""Train the working model on the full report-only study population.
+
+Labels come from the radiology reports, never from the expert-annotated
+studies, which stay outside the gradient entirely.  Two label surfaces are
+available:
+
+    original   the frozen rule-parser labels
+    merged     the same labels plus the cells recovered by translating the
+               non-Latin-script reports before parsing
+
+Training stops at a fixed epoch.  No checkpoint is chosen by looking at a
+labelled score, so the run is decided before any result is seen.
+"""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-from model.bootstrap import ensure_developments_source
+from model._implementation import read_config, train_working_model
 
 
 def main() -> None:
-    ensure_developments_source()
-    from rsna_knee.b7_weak_supervision import _read_config
-    from rsna_knee.b20_crop_focus import train_b20
-
-    parser = argparse.ArgumentParser(
-        description="Train the active B20 CNN-based knee MRI model"
+    parser = argparse.ArgumentParser(description="Train the working knee MRI model")
+    parser.add_argument(
+        "--supervision",
+        choices=("original", "merged"),
+        required=True,
+        help="which report-label surface enters the gradient",
     )
     parser.add_argument("--config", default="config/current_model.yaml")
     parser.add_argument("--data-root", required=True)
-    parser.add_argument("--b6-root", default="runs/b6_report_labels_v121")
     parser.add_argument(
-        "--series-policy",
-        default="runs/b12_variable_series/audit/series_policy.json",
+        "--report-labels",
+        required=True,
+        help="directory holding the frozen rule-parser label export",
     )
     parser.add_argument(
-        "--report-ssl-checkpoint",
-        default="runs/b16_full_report/report_ssl/b16_report_encoder.pt",
+        "--translated-labels",
+        required=True,
+        help="directory holding the merged translated-report label export",
     )
-    parser.add_argument("--out-root", default="runs/current_model")
+    parser.add_argument("--series-policy", required=True)
+    parser.add_argument(
+        "--encoder",
+        required=True,
+        help="frozen report-aligned encoder checkpoint",
+    )
+    parser.add_argument("--out-root", default="runs/working_model")
     args = parser.parse_args()
 
-    config = _read_config(args.config)
-    config = dict(config)
+    config = read_config(args.config)
     config["data_root"] = str(Path(args.data_root).resolve())
 
-    checkpoint = train_b20(
+    train_working_model(
         config,
-        b6_root=args.b6_root,
+        supervision=args.supervision,
+        report_labels_root=args.report_labels,
+        translated_labels_root=args.translated_labels,
         series_policy_path=args.series_policy,
-        report_ssl_checkpoint=args.report_ssl_checkpoint,
+        encoder_checkpoint=args.encoder,
         out_root=args.out_root,
     )
-    print(f"current-model checkpoint: {checkpoint}")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,10 @@
-"""Validate the selected current-model checkpoint on the recorded expert surface.
+"""Score a trained checkpoint on the expert-annotated studies.
 
-This is development validation only. The 58 expert studies were reused during
-model development and B20 epoch selection, so the result must not be described
-as independent test performance.
+These 58 studies were reused throughout development, so the result is a
+development diagnostic and a plausibility check -- not independent test
+performance.  At this sample size a paired difference below roughly 0.03 macro
+AUC is not resolvable, so the number carries that limitation rather than being
+used to rank models.
 """
 
 from __future__ import annotations
@@ -13,70 +15,72 @@ from pathlib import Path
 
 import numpy as np
 
-from model.bootstrap import ensure_developments_source
+from data.dataset import read_series, read_studies
+from model._implementation import (
+    expert_loader,
+    macro_auc,
+    predict,
+    read_config,
+    resolve_runtime,
+)
+from model.architecture import TARGETS, load
+from model.preprocessing import resolve_crop_policy
+
+EVALUATION_ROLE = (
+    "reused expert development diagnostic; not independent test evidence and "
+    "not a promotion criterion"
+)
 
 
-def main() -> None:
-    ensure_developments_source()
-
-    from rsna_knee.b7_weak_supervision import _read_config
-    from rsna_knee.b12_1_gold_eval import predict_b12_1
-    from rsna_knee.b20_crop_focus import (
-        _expert_loader,
-        load_b20_checkpoint,
-        require_b20_contract,
-    )
-    from rsna_knee.constants import TARGETS
-    from rsna_knee.data import backfill_series_metadata, load_series_csv, load_train_csv
-    from rsna_knee.evaluation import macro_auc_from_arrays
-    from rsna_knee.runtime import resolve_runtime
-
-    parser = argparse.ArgumentParser(
-        description="Development validation for the active B20 checkpoint"
-    )
-    parser.add_argument("--config", default="config/current_model.yaml")
-    parser.add_argument("--data-root", required=True)
-    parser.add_argument(
-        "--checkpoint", default="runs/b20_crop_focus/b20_model.pt"
-    )
-    parser.add_argument("--out", default="runs/current_model/validation.json")
-    args = parser.parse_args()
-
-    config = dict(_read_config(args.config))
-    config["data_root"] = str(Path(args.data_root).resolve())
+def evaluate(config: dict, *, checkpoint: str, device: str | None = None) -> dict:
+    """Predict the expert studies and report macro and per-target AUC."""
     root = Path(config["data_root"])
-
     runtime = resolve_runtime(config)
     print(runtime.describe())
-    crop_policy = require_b20_contract(config)
-    model, payload = load_b20_checkpoint(args.checkpoint, device=runtime.device)
 
-    train = load_train_csv(root / config.get("train_csv", "train.csv"))
-    series = load_series_csv(root / config.get("train_series_csv", "train_series.csv"))
-    series, metadata_stats = backfill_series_metadata(series, root, split="train")
-    expert = _expert_loader(config, root, train, series, runtime, crop_policy)
+    crop_policy = resolve_crop_policy(config)
+    model, payload = load(checkpoint, device=device or runtime.device)
 
-    pred_uids, prediction = predict_b12_1(model, expert["loader"], runtime)
-    if pred_uids != expert["uids"]:
-        raise RuntimeError("expert validation order changed")
+    studies = read_studies(root, config, split="train")
+    series, metadata_repair = read_series(root, config, split="train")
+    expert = expert_loader(config, root, studies, series, runtime, crop_policy)
 
-    macro_auc, per_target = macro_auc_from_arrays(expert["truth"], prediction)
-    if not np.isfinite(macro_auc) or not np.isfinite(per_target).all():
-        raise RuntimeError("all 12 expert AUCs must be defined")
+    uids, prediction = predict(model, expert["loader"], runtime)
+    if uids != expert["uids"]:
+        raise RuntimeError("expert study order changed between loading and prediction")
 
-    result = {
-        "model": "B20_crop_only_joint_focus",
-        "checkpoint": str(Path(args.checkpoint).resolve()),
-        "selected_epoch": int(payload.get("selected_epoch", -1)),
-        "evaluation_role": "reused expert development validation; not independent test evidence",
+    macro, per_target = macro_auc(expert["truth"], prediction)
+    if not np.isfinite(macro) or not np.isfinite(per_target).all():
+        raise RuntimeError("every one of the 12 expert AUCs must be defined")
+
+    return {
+        "checkpoint": str(Path(checkpoint).resolve()),
+        "completed_epochs": int(payload.get("completed_epochs", -1)),
+        "evaluation_role": EVALUATION_ROLE,
         "n_studies": len(expert["uids"]),
-        "macro_auc": float(macro_auc),
+        "macro_auc": float(macro),
         "per_target_auc": {
             target: float(value) for target, value in zip(TARGETS, per_target)
         },
         "crop_policy": crop_policy,
-        "metadata_repair": metadata_stats,
+        "metadata_repair": metadata_repair,
     }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Score a checkpoint on the expert-annotated studies"
+    )
+    parser.add_argument("--config", default="config/current_model.yaml")
+    parser.add_argument("--data-root", required=True)
+    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--out", default="runs/working_model/validation.json")
+    args = parser.parse_args()
+
+    config = read_config(args.config)
+    config["data_root"] = str(Path(args.data_root).resolve())
+
+    result = evaluate(config, checkpoint=args.checkpoint)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -1,18 +1,25 @@
-"""Current B20 image preprocessing exposed without historical experiment names."""
+"""Image preprocessing for the working model."""
 
 from __future__ import annotations
 
-from .bootstrap import ensure_developments_source
+from ._implementation import apply_crop, crop_policy
 
-CURRENT_CROP_POLICY = {
+CROP_POLICY = {
     "version": "joint_focus_center_crop_only_v1",
     "crop_fraction": 0.90,
 }
 
 
-def apply_current_crop(volumes):
-    """Apply the active model's deterministic 90% center crop and resize."""
-    ensure_developments_source()
-    from rsna_knee.crop_focus import apply_crop_focus
+def resolve_crop_policy(config: dict) -> dict:
+    """Return the crop contract a configuration declares, rejecting mismatches."""
+    return crop_policy(config)
 
-    return apply_crop_focus(volumes, CURRENT_CROP_POLICY)
+
+def crop_to_joint(volumes, policy: dict | None = None):
+    """Apply the deterministic centred crop used by the working model.
+
+    Slices are resized to 224, cropped to the central 90%, then resized back to
+    224.  The crop is fixed rather than learned, so training and inference see
+    exactly the same geometry.
+    """
+    return apply_crop(volumes, policy or CROP_POLICY)

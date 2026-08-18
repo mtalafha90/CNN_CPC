@@ -1,5 +1,5 @@
-"""Clean interface for the active CNN-based knee MRI model."""
+"""The working CNN model for knee MRI abnormality detection."""
 
-from .architecture import CURRENT_MODEL, TARGETS, load_current_model
+from .architecture import TARGETS, WORKING_MODEL, build, describe, load
 
-__all__ = ["CURRENT_MODEL", "TARGETS", "load_current_model"]
+__all__ = ["TARGETS", "WORKING_MODEL", "build", "describe", "load"]
