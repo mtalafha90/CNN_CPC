@@ -65,6 +65,10 @@ for this and stops early with a clear message rather than wasting the run.
 
 ## If something goes wrong
 
+**Cell 1 takes forever** — you have an old copy of the notebook. Cell 1 must
+only list the top level of each folder. The competition data holds hundreds of
+thousands of scan files, and listing them all takes many minutes for nothing.
+
 **"could not find the repository"** — the folder name in cell 2 does not match
 what cell 1 printed. Fix the name.
 

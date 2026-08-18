@@ -22,6 +22,10 @@ Cell 1 prints where everything landed, so the later cells can be pointed at it.
 
 # ---------------------------------------------------------------- cell 1 ----
 # Look at what is attached. Run this first and read the output.
+#
+# Only the top level of each folder is listed, on purpose. The competition data
+# holds hundreds of thousands of scan files, and walking all of them takes many
+# minutes for no benefit -- the folder names are all the later cells need.
 
 import os
 from pathlib import Path
@@ -29,12 +33,12 @@ from pathlib import Path
 for root in sorted(Path("/kaggle/input").glob("*")):
     print("===", root.name)
     shown = 0
-    for path in sorted(root.rglob("*")):
-        if path.is_file():
-            print("   ", path.relative_to(root))
+    with os.scandir(root) as entries:
+        for entry in sorted(entries, key=lambda e: e.name):
+            print(f"    {'dir ' if entry.is_dir() else 'file'} {entry.name}")
             shown += 1
-            if shown >= 12:
-                print("    ... more files not shown")
+            if shown >= 15:
+                print("    ... more not shown")
                 break
 
 
