@@ -33,5 +33,5 @@ namespaces = false
 
 [tool.pytest.ini_options]
 pythonpath = [".", "developments/src"]
-testpaths = ["tests", "developments/tests"]
+testpaths = ["tests", "variants", "developments/tests"]
 addopts = "-ra"
