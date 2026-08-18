@@ -13,9 +13,10 @@ def test_hard_truth_ignores_zero_weight_cells():
 
 
 def test_paired_target_bootstrap_recovers_positive_direction():
-    # Four active examples, plus two inactive NaN truth entries.
+    # Four active examples, plus two inactive NaN truth entries. Control has one
+    # cross-class inversion; candidate ranks both positives above both negatives.
     truth = np.array([0, 0, 1, 1, np.nan, np.nan], dtype=float)
-    control = np.array([0.4, 0.3, 0.6, 0.5, 0.2, 0.8], dtype=float)
+    control = np.array([0.4, 0.7, 0.6, 0.5, 0.2, 0.8], dtype=float)
     candidate = np.array([0.1, 0.2, 0.8, 0.9, 0.9, 0.1], dtype=float)
     out = paired_target_bootstrap(truth, control, candidate, n_bootstrap=500, seed=7)
     assert out["candidate_auc"] > out["control_auc"]
