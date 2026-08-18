@@ -200,6 +200,29 @@ def study_dataset(uids, index, dataset_config, *, train: bool, policy: dict):
     )
 
 
+def training_dataset_config(config: dict, root: Path, *, train: bool = False):
+    """Dataset settings for the training population, with augmentation optional."""
+    return _resolve("b7_weak_supervision:make_b7_dataset_config")(
+        config, root, train=train
+    )
+
+
+def report_label_supervision(studies, *, surface: str, latin_root, all_root):
+    """Load the report-derived labels for one supervision surface."""
+    arm = SUPERVISION_SURFACES.get(surface)
+    if arm is None:
+        choices = ", ".join(sorted(SUPERVISION_SURFACES))
+        raise ValueError(f"surface must be one of: {choices}")
+    return _resolve("phase9_supervision:load_phase9_arm_supervision")(
+        studies, arm=arm, b6_root=str(latin_root), phase8_root=str(all_root)
+    )
+
+
+def collate_studies_fn():
+    """The collate function, for callers building their own DataLoader."""
+    return _resolve("b12_variable_series:collate_variable_series")
+
+
 def inference_dataset_config(config: dict, root: Path, offsets: tuple[int, ...]):
     return _resolve("b17_submission:_test_dataset_config")(config, root, offsets)
 
