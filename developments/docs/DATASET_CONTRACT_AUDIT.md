@@ -175,50 +175,52 @@ The merge preserves the original global rule:
 
 No target/script-specific filtering is permitted from the Phase-8 result. Phase 8 freezes a supervision candidate; it does not establish MRI performance or authorize model promotion.
 
-## Phase 9 — FROZEN, READY TO RUN: matched B34 supervision experiment
+## Phase 9 v1 — SUPERSEDED BEFORE RESULT
 
-Protocol: `developments/docs/DATASET_CONTRACT_AUDIT_PHASE9_MATCHED_SUPERVISION.md`
+The original protocol `developments/docs/DATASET_CONTRACT_AUDIT_PHASE9_MATCHED_SUPERVISION.md` kept all 4,349 report-only studies in both gradients. Its matched MRI exposure was valid, but this would consume the 499-study PV2 validation surface and leave only the repeatedly reused 58-study expert surface as the planned readout.
+
+No Phase-9 E2 checkpoint or Phase-9 validation result was used to make the revision. V1 remains in the repository for auditability but is no longer authorized for execution.
+
+## Phase 9 v2 — FROZEN, READY TO RUN: matched B34 supervision with PV2 holdout
+
+Protocol: `developments/docs/DATASET_CONTRACT_AUDIT_PHASE9_V2_PV2_HOLDOUT.md`
 
 Implementation:
 
 ```text
-developments/src/rsna_knee/phase9_supervision.py
-developments/src/rsna_knee/phase9_matched_supervision_training.py
-developments/src/rsna_knee/phase9_matched_supervision_eval.py
+developments/src/rsna_knee/phase9_v2_supervision.py
+developments/src/rsna_knee/phase9_matched_supervision_v2_training.py
+developments/src/rsna_knee/phase9_matched_supervision_v2_eval.py
 ```
 
-The old PV2 training split cannot test Phase 8 because it contains only original B6-active studies, and Phase 8 leaves those rows unchanged. Phase 9 therefore keeps the complete report-only MRI exposure identical in both arms:
+The exact frozen PV2 validation set is removed from both arms before gradients:
 
 ```text
-studies per arm                        4349
-eligible real MRI series per arm      24035
-batch size                                 2
-batches/full epoch                      2175
-fixed endpoint                            E2
-architecture                              B34
-encoder                         same frozen B16
-crop                                same B20 90%
+complete report-only population             4349 studies / 24035 series
+PV2 holdout                                  499 studies /  2775 series
+Phase-9 v2 training population              3850 studies / 21260 series
+batch size                                      2
+batches/full epoch                       1925
+fixed endpoint                                 E2
+architecture                                  B34
+encoder                             same frozen B16
+crop                                    same B20 90%
 ```
 
-Only supervision changes:
+The 499 holdout studies are all original B6-active. Phase 8 leaves their supervision unchanged. V2 explicitly verifies that the holdout targets and weights are identical to original B6 in both control and candidate before training can start.
+
+All 1,229 originally B6-inactive studies remain in both training loaders. They carry zero supervised weight in the control and gain only the frozen Phase-8 rescued cells in the candidate, so MRI acquisition-domain exposure remains matched.
+
+Primary Phase-9 v2 evaluation uses the held-out 499 studies with **original B6 supervision only**:
 
 ```text
-CONTROL: original B6 v1.2.1
-active studies        3120
-usable cells         14123
-positive cells        6871
-negative cells        7252
-
-CANDIDATE: frozen Phase-8 merge
-active studies        4173
-usable cells         18024
-positive cells        9590
-negative cells        8434
+primary metric   macro per-target B6-weighted soft-label BCE
+paired statistic candidate BCE - control BCE; negative favors candidate
+secondary        macro weak-state ROC AUC where both classes exist
+bootstrap        5000 paired study-level replicates
 ```
 
-The 1,229 B6-inactive studies remain inside the control dataloader with zero supervised BCE weight rather than being removed. This holds MRI acquisition-domain exposure constant between arms. Target-balance multipliers are recomputed mechanically from each arm using the unchanged frozen B7 formula; no manual target-specific adjustment is allowed.
-
-Both arms use the same B34 construction, optimizer, scheduler horizon, augmentation, seeds and fixed E2 endpoint. The 58 gold studies remain outside gradients and checkpoint selection. A paired reused-gold macro-AUC evaluation is diagnostic only; hidden competition or new external expert-labelled evidence remains required for promotion.
+PV2 is still weak-label and historically exposed and B34 was previously mechanistically evaluated on this surface. Therefore Phase-9 v2 is stronger evidence for the **global supervision-treatment effect**, but it is not independent clinical validation and cannot promote the model by itself.
 
 ## Current decision boundary
 
@@ -231,12 +233,15 @@ target/script-specific rescue tuning                     NO-GO
 add 58 gold studies to matched training                  NO-GO
 define B35                                                NO-GO
 rebuild/refilter frozen Phase-8 supervision               NO-GO
-run Phase-9 matched B34 control/candidate                 GO
-same 4349-study / 24035-series exposure in both arms      REQUIRED
-reuse PV2 active-only training split for Phase 9           NO-GO
-promotion from Phase 8 or reused-gold Phase 9 alone       NO-GO
+run original Phase-9 v1 all-4349-gradient protocol       NO-GO / superseded
+run Phase-9 v2 matched 3850-study control/candidate       GO
+hold exact PV2 499 out of both Phase-9 v2 arms            REQUIRED
+use original B6 labels only for PV2 holdout evaluation    REQUIRED
+change architecture/crop/sampling/optimizer/seeds         NO-GO
+use PV2 or gold for checkpoint selection                  NO-GO
+promotion from Phase-9 v2 alone                           NO-GO
 verify compressed-DICOM codec capability                  GO before hidden submission
-independent hidden competition comparison                 GO after Phase-9 checkpoints are frozen
+independent hidden competition comparison                 GO after Phase-9 v2 checkpoints freeze
 ```
 
 B6 v1.2.1, PV1, PV2 and the Phase-8 supervision artifact remain frozen historical evidence.
