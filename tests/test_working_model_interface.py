@@ -139,3 +139,81 @@ def test_checkpoint_without_weights_is_refused(tmp_path):
     torch.save({"model_spec": {"architecture": _implementation.WORKING_ARCHITECTURE}}, path)
     with pytest.raises(ValueError, match="model_state"):
         _implementation.load_checkpoint(path)
+
+
+def _tiny_spec():
+    from model._implementation import network_spec, read_config
+
+    spec = dict(network_spec(read_config("config/current_model.yaml")))
+    spec["n_slices"] = 2
+    spec["encoder_batch_size"] = 4
+    return spec
+
+
+def _save(spec, model, path, **extra):
+    import torch
+
+    from model._implementation import encoder_fingerprint, freeze_encoder
+
+    freeze_encoder(model)
+    torch.save(
+        {
+            "model_spec": spec,
+            "model_state": model.state_dict(),
+            "encoder_sha256_final": encoder_fingerprint(model),
+            **extra,
+        },
+        path,
+    )
+    return path
+
+
+@pytest.mark.parametrize("variant", ["tiny", "small"])
+def test_a_dinov3_checkpoint_reloads_with_its_own_encoder(variant, tmp_path):
+    """The loader must rebuild the encoder the checkpoint was trained with.
+
+    Both encoders are 768-d but their state dicts are differently named, so
+    rebuilding the wrong one fails on every encoder key.
+    """
+    import torch
+
+    from model._implementation import attach_dinov3, build_network, load_checkpoint
+
+    spec = _tiny_spec()
+    model = build_network(spec, pretrained_weights=False)
+    replacement = attach_dinov3(model, variant=variant, pretrained_weights=False)
+    spec["encoder_source"] = "dinov3"
+    spec["dinov3_variant"] = variant
+
+    path = _save(spec, model, tmp_path / "model.pt", encoder={"variant": variant})
+    reloaded, _ = load_checkpoint(path)
+
+    assert type(reloaded.encoder).__name__ == type(replacement).__name__
+    assert reloaded.encoder.out_dim == 768
+    for a, b in zip(model.state_dict().values(), reloaded.state_dict().values()):
+        assert torch.equal(a, b)
+
+
+def test_the_variant_can_come_from_the_payload_alone(tmp_path):
+    """Checkpoints written before the spec recorded the variant must still load."""
+    from model._implementation import attach_dinov3, build_network, load_checkpoint
+
+    spec = _tiny_spec()
+    model = build_network(spec, pretrained_weights=False)
+    attach_dinov3(model, variant="tiny", pretrained_weights=False)
+    spec["encoder_source"] = "dinov3"  # deliberately no dinov3_variant
+
+    path = _save(spec, model, tmp_path / "model.pt", encoder={"variant": "tiny"})
+    reloaded, _ = load_checkpoint(path)
+    assert reloaded.encoder.out_dim == 768
+
+
+def test_a_report_aligned_checkpoint_still_reloads_unchanged(tmp_path):
+    from model._implementation import build_network, load_checkpoint
+
+    spec = _tiny_spec()
+    model = build_network(spec, pretrained_weights=False)
+    path = _save(spec, model, tmp_path / "model.pt")
+
+    reloaded, _ = load_checkpoint(path)
+    assert type(reloaded.encoder).__name__ == "ConvNeXtSliceEncoder"

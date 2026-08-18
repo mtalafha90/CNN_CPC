@@ -132,6 +132,13 @@ def build_network(spec: dict, **kwargs):
     return _resolve(builder)(spec, **kwargs)
 
 
+def attach_dinov3(model, *, variant: str = "tiny", pretrained_weights: bool = True):
+    """Replace a built model's encoder with the DINOv3 one of the same width."""
+    return _resolve("dinov3_encoder:attach_dinov3_encoder")(
+        model, variant=variant, pretrained_weights=pretrained_weights
+    )
+
+
 def freeze_encoder(model) -> None:
     _resolve("b17_training:freeze_encoder")(model)
 
@@ -153,7 +160,20 @@ def load_checkpoint(path: str | Path, *, device: str = "cpu"):
         if key not in payload:
             raise ValueError(f"checkpoint is missing {key!r}")
 
-    model = build_network(payload["model_spec"], pretrained_weights=False)
+    spec = payload["model_spec"]
+    model = build_network(spec, pretrained_weights=False)
+
+    # A checkpoint trained with a swapped encoder carries a different encoder
+    # module, so it has to be reattached before the weights are loaded.  The
+    # weights come from the checkpoint itself, so nothing is downloaded here.
+    if str(spec.get("encoder_source", "report-aligned")) == "dinov3":
+        variant = (
+            payload.get("encoder", {}).get("variant")
+            or spec.get("dinov3_variant")
+            or "tiny"
+        )
+        attach_dinov3(model, variant=str(variant), pretrained_weights=False)
+
     model.load_state_dict(payload["model_state"], strict=True)
     freeze_encoder(model)
 

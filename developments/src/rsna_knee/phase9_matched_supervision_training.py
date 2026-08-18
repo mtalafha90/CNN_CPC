@@ -178,6 +178,7 @@ def train_phase9_arm(
     else:
         replacement = attach_dinov3_encoder(model, variant=dinov3_variant, pretrained_weights=True)
         encoder_description = {"source": "dinov3", **replacement.describe()}
+        spec["dinov3_variant"] = dinov3_variant
     spec["encoder_source"] = encoder_source
     freeze_encoder(model)
     model.gradient_checkpointing = False
