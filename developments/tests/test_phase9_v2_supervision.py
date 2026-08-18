@@ -129,3 +129,57 @@ def test_phase9_v2_rejects_candidate_change_on_holdout(monkeypatch):
             parent_pv1_manifest_path="pv1.json",
             pv2_manifest_path="pv2.json",
         )
+
+
+def test_phase9_v2_auc_hard_truth_masks_unsupervised_cells():
+    from rsna_knee.phase9_v2_auc_addendum import hard_truth_from_b6
+
+    y = np.full((2, len(TARGETS)), 0.5, dtype=np.float32)
+    w = np.zeros_like(y)
+    y[0, 0], w[0, 0] = 0.85, 0.50
+    y[1, 0], w[1, 0] = 0.05, 1.00
+    truth = hard_truth_from_b6(y, w)
+
+    assert truth[0, 0] == 1.0
+    assert truth[1, 0] == 0.0
+    assert np.isnan(truth[:, 1:]).all()
+
+
+def test_phase9_v2_auc_bootstrap_is_paired_and_strict_all_targets():
+    from rsna_knee.phase9_v2_auc_addendum import paired_bootstrap_macro_auc_difference
+
+    n = 40
+    truth = np.empty((n, len(TARGETS)), dtype=np.float64)
+    for j in range(len(TARGETS)):
+        truth[:, j] = ((np.arange(n) + j) % 2).astype(np.float64)
+    candidate = 0.1 + 0.8 * truth
+    control = 0.9 - 0.8 * truth
+
+    result = paired_bootstrap_macro_auc_difference(
+        truth,
+        control,
+        candidate,
+        n_bootstrap=300,
+        seed=7,
+    )
+
+    assert result["control_macro_auc"] == pytest.approx(0.0)
+    assert result["candidate_macro_auc"] == pytest.approx(1.0)
+    assert result["point_difference"] == pytest.approx(1.0)
+    assert result["ci_lower"] == pytest.approx(1.0)
+    assert result["ci_upper"] == pytest.approx(1.0)
+    assert result["probability_candidate_better"] == pytest.approx(1.0)
+    assert result["strict_all_12_targets_per_replicate"] is True
+    assert result["n_valid_replicates"] > 0
+
+
+def test_phase9_v2_auc_requires_all_targets_defined_on_full_holdout():
+    from rsna_knee.phase9_v2_auc_addendum import paired_bootstrap_macro_auc_difference
+
+    n = 20
+    truth = np.tile((np.arange(n) % 2)[:, None], (1, len(TARGETS))).astype(np.float64)
+    truth[:, 0] = 1.0
+    pred = np.tile(np.linspace(0.0, 1.0, n)[:, None], (1, len(TARGETS)))
+
+    with pytest.raises(RuntimeError, match="does not define AUC for all 12 targets"):
+        paired_bootstrap_macro_auc_difference(truth, pred, pred, n_bootstrap=20, seed=3)
