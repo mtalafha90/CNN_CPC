@@ -49,21 +49,32 @@ for root in sorted(Path("/kaggle/input").glob("*")):
 import sys
 from pathlib import Path
 
-CODE_ROOT = Path("/kaggle/input/cnn-cpc-code")      # <-- your code dataset
-MODEL_PATH = Path("/kaggle/input/cnn-cpc-model/model.pt")  # <-- your model.pt
+CODE_DATASET = Path("/kaggle/input/cnn-cpc-code")           # <-- your code dataset
+MODEL_PATH = Path("/kaggle/input/cnn-cpc-model/model.pt")   # <-- your model.pt
 
-# The repository may sit one level down inside the dataset.
-if not (CODE_ROOT / "model").is_dir():
-    candidates = [p for p in CODE_ROOT.glob("*") if (p / "model").is_dir()]
-    if not candidates:
-        raise FileNotFoundError(
-            f"could not find the repository under {CODE_ROOT}; "
-            "check the folder name printed by cell 1"
-        )
-    CODE_ROOT = candidates[0]
+# Kaggle sometimes wraps an uploaded zip in an extra folder, so search for the
+# repository rather than assuming how deeply it is nested.  The code dataset is
+# small, so walking all of it is cheap -- unlike the competition data.
+CODE_ROOT = None
+for marker in CODE_DATASET.rglob("architecture.py"):
+    if marker.parent.name == "model":
+        CODE_ROOT = marker.parent.parent
+        break
 
+if CODE_ROOT is None:
+    print("Could not find model/architecture.py. The dataset contains:")
+    for path in sorted(CODE_DATASET.rglob("*"))[:40]:
+        print("   ", path.relative_to(CODE_DATASET))
+    raise FileNotFoundError("repository not found -- see the listing above")
+
+# The checkpoint may have been uploaded under a different name.
 if not MODEL_PATH.is_file():
-    raise FileNotFoundError(f"no model file at {MODEL_PATH}")
+    found = sorted(Path("/kaggle/input").glob("*/*.pt"))
+    found += sorted(Path("/kaggle/input").glob("*/*/*.pt"))
+    if not found:
+        raise FileNotFoundError("no .pt file found -- is the model dataset attached?")
+    MODEL_PATH = found[0]
+    print(f"note: using {MODEL_PATH}")
 
 sys.path.insert(0, str(CODE_ROOT))
 sys.path.insert(0, str(CODE_ROOT / "developments" / "src"))

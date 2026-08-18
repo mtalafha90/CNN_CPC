@@ -69,8 +69,11 @@ for this and stops early with a clear message rather than wasting the run.
 only list the top level of each folder. The competition data holds hundreds of
 thousands of scan files, and listing them all takes many minutes for nothing.
 
-**"could not find the repository"** — the folder name in cell 2 does not match
-what cell 1 printed. Fix the name.
+**"repository not found"** — cell 2 prints what the dataset actually contains
+when this happens. Kaggle sometimes wraps an uploaded zip in an extra folder,
+so the code can end up one or two levels deeper than expected. Cell 2 searches
+for it rather than guessing, so this usually means the wrong dataset name in
+`CODE_DATASET`, or the zip did not upload fully.
 
 **"no attached folder contains test.csv"** — the competition data is not
 attached. Add it in the Add Input panel.
