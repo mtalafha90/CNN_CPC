@@ -4,6 +4,20 @@ One model sits at the top level of this repository. The complete research
 lineage that produced it is preserved under [`developments/`](../developments/README.md)
 and is not part of the working interface.
 
+## Status
+
+This interface targets the strongest candidate architecture on the project's
+internal surfaces. **That is an interface decision, not a promotion.** No model
+has been promoted on evidence since B20, because no experiment has yet cleared
+a promotion path and no competition submission has been made — so there is
+currently no measurement of this model that was not built in this repository.
+
+The frozen experiment records under `developments/docs/` therefore still name
+B20 as the last promoted model, and they are correct. The disagreement between
+those records and this interface is deliberate, and it resolves when an
+independent result exists. See
+[`developments/docs/CURRENT_STATUS.md`](../developments/docs/CURRENT_STATUS.md).
+
 ## What it does
 
 Each study is a knee MRI examination made up of several acquired series, and

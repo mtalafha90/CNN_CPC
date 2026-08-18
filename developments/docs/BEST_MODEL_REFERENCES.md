@@ -1,8 +1,42 @@
-# Scientific references for the current working-model lineage (B20)
+# Scientific references for the working-model lineage
 
-> **Scope — 2026-08-15.** This is the canonical bibliography for the **current active working-model lineage**, whose checkpoint remains **B20 (`B20_crop_only_joint_focus`)** at fixed epoch 2. The file also records which references remain relevant to the current B20-development path after B21--B25X.
+> **Scope — updated 2026-08-18.** The canonical bibliography for the
+> working-model lineage. The lineage below is unchanged: B29 through B34 modify
+> series pooling and slice context on top of the same B16 frozen encoder, B20
+> crop geometry and B6-derived supervision, so every reference here still
+> applies. The top-level interface now targets the B34/B31 architecture.
 >
-> **Important status distinction:** B20 is the working model. B21/B22 are closed negative experiments; B23-v1 failed its formal labeller gate; formal B24 remains blocked; B24X/B24X-Density and B25X are exploratory supervision experiments and do **not** replace B20. Their main current value is to identify supervision coverage and class-balance weaknesses that can guide development of the existing B20 family.
+> **Status distinction:** B20 is the last model promoted on evidence. B21/B22
+> are closed negative experiments; B23-v1 failed its formal labeller gate;
+> formal B24 remains blocked; B24X/B24X-Density and B25X are exploratory
+> supervision experiments; B26 through B34 all completed without a promotion
+> path. Their value is diagnostic — identifying supervision coverage, class
+> balance and measurement weaknesses that guide the current work.
+>
+> **Two later findings are not yet reflected in the reference list below**, and
+> should be when the manuscript is next revised:
+>
+> - The corpus is multilingual and the frozen parser reads Latin-script
+>   vocabulary only. The relevant literature is the multilingual report-labelling
+>   work (native-language CheXpert-style labellers, Spanish- and German-language
+>   programmes) rather than the English chest-X-ray labellers cited here. No
+>   published error rate for a machine-translation step inside a report-labelling
+>   pipeline was found, so the translate-then-parse approach used in Phases 6-8
+>   has no direct precedent to cite.
+> - Report labels and image labels are known to be different objects. The
+>   VisualCheXbert project (Jain et al., ACM CHIL 2021;
+>   github.com/stanfordmlgroup/VisualCheXbert) reports agreement with
+>   radiologists labelling *images* exceeding that of radiologists labelling the
+>   corresponding *reports*, by an average F1 of 0.12 to 0.21. That figure was
+>   read from the project README; the paper itself was not reachable from this
+>   environment, so it is recorded here as a lead to verify rather than a
+>   citation. It is the published framing for the cross-target correlation
+>   distortion measured in B26 and again in Phase 9.
+>
+> This file distinguishes **direct methodological references** from
+> **supporting/context references**. A paper being listed here does not mean its
+> implementation was reproduced exactly. Repository-specific choices with no
+> direct external-method claim are labelled explicitly.
 >
 > This file distinguishes **direct methodological references** from **supporting/context references**. A paper being listed here does not mean its implementation was reproduced exactly. Repository-specific choices with no direct external-method claim are labelled explicitly.
 

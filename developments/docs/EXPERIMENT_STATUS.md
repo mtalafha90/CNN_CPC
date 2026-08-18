@@ -1,24 +1,23 @@
 # Experiment status
 
-**Snapshot:** 2026-08-15  
-**Package:** `0.29.0`  
-**Active working model:** `B20_crop_only_joint_focus`  
-**Canonical B20 checkpoint:** `runs/b20_crop_focus/b20_model.pt`  
-**Canonical B20 epoch:** `2`  
+**Snapshot:** 2026-08-18
+**Package:** `0.30.0`
+**Last model promoted on evidence:** `B20_crop_only_joint_focus`, fixed epoch 2
+**Architecture targeted by the top-level interface:** B34 / B31
 **Primary metric:** macro ROC AUC across 12 targets
 
-The 58-study expert-labelled surface has been reused repeatedly and is therefore a **development/post-hoc surface, not independent validation**. Hidden competition evaluation remains the independent predictive-performance signal.
+The 58-study expert-labelled surface has been reused repeatedly and is therefore a **development/post-hoc surface, not independent validation**. Hidden competition evaluation remains the independent predictive-performance signal, and **no submission has been made**.
+
+Rows below are historical records. They are not revised when later work changes the project's understanding; see `CURRENT_STATUS.md` for the present position.
 
 ## Current headline
 
-- **B20 remains the active working model** at reused-expert macro AUC `0.6671593555`.
-- B21 weak-v2 improved but reused-gold acceptance failed; B22 showed no longer-training rescue.
-- B23-v1 improved report-label coverage/ranking but failed its formal specificity gate (`0.5678 < 0.6061`). Formal B24 remains blocked/not run.
-- B24X showed strong exploratory benefit from denser B23 supervision on the 692-study pilot.
-- B24X-Density resolved the pilot mechanism: preserving B6 and filling only B6-silent cells reached `0.7147994969` versus `0.7116126450` for full B23; replacements/drops were not required.
-- B25X scaled the experiment to the full leakage-safe 2,497-study weak-v2 training surface. Frozen weak-v2 scores were `B6=0.6723718048`, `Hybrid=0.7268784872`, `Fill=0.7308472686`.
-- B25X diagnosis showed that the aggregate gain is overwhelmingly Synovitis-specific. Excluding Synovitis, Fill improves the other eleven targets by only `+0.0023982627` macro AUC.
-- The next phase will develop the **current B20-family model**. DINOv2 replacement and soft-dense-label branches are not currently planned.
+- **Nothing has been promoted since B20.** B26 through B34 were all valid experiments; none cleared a promotion path.
+- The architecture ladder is essentially flat: eight experiments moved the reused-expert point estimate by roughly `+0.015`, with every interval crossing zero. B31 is highest at `0.6822797439`; B34 is statistically indistinguishable from it and has a simpler inference path.
+- **The reports are multilingual and the frozen parser reads Latin script only.** Phase 5 found target-relevant findings in every sampled zero-label report; apparent Greek/Cyrillic coverage was incidental embedded English. Translating before parsing raised coverage from `71.74%` to `95.95%` and usable cells from `14123` to `18024` (`+27.62%`).
+- **A powered validation surface now exists.** PV1/PV2 give 499-624 validation studies and produced a 95% interval entirely below zero (`P = 0.9998`) — never achieved on the 58-study surface.
+- **Phase 9 v2 tested the merged supervision under a proper holdout and came back inconclusive in aggregate.** Only Contusion survives correction for 12 comparisons, and removing it flips the macro sign.
+- The architecture direction is exhausted in its current form. The open questions are supervision provenance and the absence of any independent measurement.
 
 ## Experiment ladder
 
@@ -48,7 +47,7 @@ The 58-study expert-labelled surface has been reused repeatedly and is therefore
 | **B17** | frozen B16 encoder; fixed five passes | E5 `0.6425890153` gold | fixed-epoch reference |
 | **B18** | full-FOV comparator | replay E2 `0.6655517376` gold | frozen comparator |
 | **B19** | 90% crop + cosine vignette | E3 `0.6581308356` gold | rejected |
-| **B20** | post-resize 90% crop only | E2 `0.6671593555` gold | **ACTIVE WORKING MODEL** |
+| **B20** | post-resize 90% crop only | E2 `0.6671593555` gold | **last model promoted on evidence** |
 | B21 | pre-resize crop | weak-v2 passed; gold `0.6573196516` vs B20 replay `0.6674066371` | closed / not promoted |
 | B22 | B21 duration audit E1-E5 | best E2 `0.6574269018` | closed; no rescue |
 | B23-v1 | local Qwen report labeller | AUC `0.8125164416`; specificity `0.5678` | **formal gate FAILED** |
@@ -57,6 +56,49 @@ The 58-study expert-labelled surface has been reused repeatedly and is therefore
 | B24X-Density | B6 preserved + B23-only missing cells | `0.7147994969` weak-v2 | complete / no promotion |
 | **B25X** | B6 vs ChatGPT Hybrid vs B6+Hybrid-fill | `0.6723718048 / 0.7268784872 / 0.7308472686` weak-v2 | complete / no promotion |
 | FINAL | B17-style frozen encoder + all 58 expert labels in gradients | no gold evaluation permitted | implemented / deferred |
+| B26 / B26.1 | targeted Synovitis fill, raw then LLM-gated | — | label quality gate FAILED both times |
+| B26.2 | deterministic evidence gate, 171 cells added | gold `0.6662972442` | label gate passed; **not promoted**; family closed |
+| B27 / B27.1 | pathology-specific acquisition routing | gold `0.6599232994` | collinearity fixed in B27.1; not promoted; family closed |
+| B28 | zero-gated max-evidence series residual | gold `0.6383456190` | not promoted; formulation closed |
+| **B29** | zero-gated complementary softmax pool | gold `0.6768879224`, P(>B20) `0.9188` | frozen candidate; not promoted |
+| B30 | projected complementary attention | gold `0.6547034568` | not promoted; formulation closed |
+| **B31** | B29 + zero-init depthwise local slice context | gold `0.6822797439` | highest on the reused expert surface |
+| B32 | weighted-dispersion complementary summary | ~tied with B20 | not promoted; formulation closed |
+| B33 | uniform complementary mean | gold `0.6764460785` | simplification of B29; not promoted |
+| **B34** | B31 context scaffold in training, exact bypass at inference | PV2-equivalent to B31 within `±0.001` | architecture targeted by the top-level interface |
+
+## Prospective weak validation
+
+| Split | Purpose | Result | Status |
+|---|---|---|---|
+| PV1 | first prospective weak split, 624-study locked partition | B31 over B33 at `P = 0.0050`, near-identical macro AUC | complete |
+| PV2 | nested 1,997 train / 499 validation | B34 - B29 median `-0.00831`, CI `[-0.01257, -0.00399]`, `P = 0.9998`; B34 vs B31 inside the frozen `±0.001` band | complete; scaffold benefit supported |
+
+Both surfaces rank on macro per-target weighted soft-label BCE. Macro AUC is recorded as a secondary point estimate without an interval and is not used for ranking.
+
+## Dataset contract audit
+
+| Phase | Question | Result |
+|---|---|---|
+| 1-4 | population, DICOM headers, acquisition-domain intersection | complete |
+| **5** | why 1,229 studies had zero usable cells | **parser language coverage, not clinical silence**; all sampled zero-cell reports carried target-relevant findings |
+| 6 | translation-rescue feasibility pilot | passed |
+| **7** | full-population rescue | `1053 / 1229 = 85.68%` rescued; `+3901` cells (`+27.62%`); coverage `71.74% -> 95.95%` |
+| 8 | frozen global merge | artifact fingerprinted; `4173 / 4349` studies active; `18024` usable cells |
+| 9 | matched B6-vs-merged MRI experiment, full population | superseded by v2 |
+| **9 v2** | same, with the 499-study PV2 partition held out of both arms | aggregate inconclusive; only Contusion survives correction for 12 comparisons |
+
+### Phase 9 v2 detail
+
+```text
+BCE        -0.00988   CI [-0.01990, +0.00008]   P = 0.9742
+macro AUC  +0.00322   CI [-0.00847, +0.01508]   P = 0.6897
+
+Contusion  +0.0554  CI [+0.0206, +0.0933]   two-sided p ~ 0.0020  survives Bonferroni and BH
+Effusion   -0.0262  CI [-0.0483, -0.0052]   two-sided p ~ 0.0164  survives neither
+```
+
+Removing Contusion flips the macro sign (`+0.0032 -> -0.0015`).
 
 ## B21/B22 retained conclusion
 

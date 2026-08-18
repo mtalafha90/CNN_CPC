@@ -1,4 +1,19 @@
-# Active working model
+# Active working model — decision record, 2026-08-15
+
+> **SUPERSEDED as a status document.** This is the frozen record of the
+> decision taken on 2026-08-15 and the evidence available at that time. It is
+> preserved unrevised. It is **not** the current position.
+>
+> For the model the code actually builds and runs, see the top-level
+> [`docs/WORKING_MODEL.md`](../../docs/WORKING_MODEL.md).
+> For where the project stands, see [`CURRENT_STATUS.md`](CURRENT_STATUS.md).
+>
+> What changed since: B26 through B34 all ran and none was promoted; the
+> top-level interface now targets the B34/B31 architecture as an interface
+> choice rather than a promotion; the 58-study expert surface was retired as a
+> design surface in favour of the prospective weak splits; and the dataset
+> contract audit found that the reports are multilingual and the frozen parser
+> reads Latin script only.
 
 > **Decision — 2026-08-15:** **B20 remains the active working model.** B25X has completed as an exploratory supervision experiment and provides a useful diagnosis of a Synovitis class-coverage failure, but it has no gold/promotion path and does not replace B20.
 

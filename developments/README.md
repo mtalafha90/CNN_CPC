@@ -2,7 +2,7 @@
 
 This directory preserves the complete research/development history that previously occupied the repository root.
 
-It contains the B0--B33 experiment lineage, historical configurations, documentation, scripts, source modules, tests, Kaggle methodology notes, fixtures, manuscript material and the previous GitHub workflows.
+It contains the B0--B34 experiment lineage, the prospective weak-validation splits, the nine-phase dataset contract audit, historical configurations, documentation, scripts, source modules, tests, Kaggle methodology notes, fixtures, manuscript material and the previous GitHub workflows.
 
 ## Layout
 
@@ -28,19 +28,42 @@ The files are preserved for reproducibility. New work on the active model should
 
 ## Current development status
 
-**B20 remains the active working model.**
+`docs/CURRENT_STATUS.md` is the authoritative snapshot. In brief:
 
-B26 supervision repair is closed and not promoted. B27.1, B28 and B30 were valid experiments but were not promoted. B30's projected complementary-attention formulation is closed.
+**Nothing has been promoted since B20.** B26 through B34 were all valid
+experiments and none cleared a promotion path. The B26 supervision-repair,
+B27 routing, B28 residual, B30 projected-attention and B32 dispersion
+formulations are closed. B29, B31, B33 and B34 are frozen candidates.
 
-B29 tested a zero-gated second learned softmax summary of the same 16 B20 slice tokens. Its fixed-E2 run completed the exact B20 surface. On the reused 58-study expert development surface, B29 reached macro AUC 0.676888 versus B20 0.667407 (delta +0.009481; paired 95% CI [-0.003749, +0.024188]; P[B29>B20]=0.9188). This is encouraging but not independent validation. B29 remains a **frozen promising candidate, not promoted**.
+**The architecture ladder is essentially flat.** Eight experiments moved the
+reused-expert point estimate by roughly `+0.015`, with every interval crossing
+zero. B31 is numerically highest at `0.682280`; B34 is statistically
+indistinguishable from it on PV2 and bypasses its local context exactly at
+inference, so the top-level interface targets B34. That is an interface
+decision, not a promotion.
 
-B31 kept B29's simple query and added a zero-init depthwise Conv1d(k=3) local-context perturbation to the attention scorer only. Its fixed-E2 run was valid and reached macro AUC 0.682280 on the reused expert surface, versus B29 0.676888 and B20 0.667407. The raw B31-B29 delta was +0.005392 and raw B31-B20 delta +0.014873. However, B31's prospective mechanism audit showed almost no attention redistribution at E2 (normalized JS divergence 3.56e-9, top-1 agreement 98.9%, top-3 overlap 99.63%). B31 is therefore a **frozen leading development candidate, not independently validated**. No B31.1 is permitted from the reused result.
+**The 58-study expert surface is retired as a design surface.** It was reused
+throughout development, and a paired difference below roughly 0.03 macro AUC
+is not resolvable at that sample size. The prospective weak-validation splits
+(PV1, PV2) replace it for architecture selection: 499-624 validation studies,
+membership assigned by UID hash without reference to labels, predictions or
+prior scores. PV2 produced a 95% interval entirely below zero (`P = 0.9998`),
+which the expert surface has never achieved. Both PV surfaces rank on soft
+BCE; macro AUC is recorded there without an interval and is not used to rank.
 
-B32 added a same-weight second-order feature standard-deviation summary alongside B29's mean-like residual. The training/mechanism run was valid and the dispersion residual was non-redundant, but the reused expert macro was only 0.668699, versus B29 0.676888 and B31 0.682280. B32-B31 was -0.013580 raw with P[B32>B31]=0.0946. B32 is **not promoted and its weighted-dispersion formulation is closed**. See `docs/B32_REUSED_GOLD_RESULT.md`.
+**The dataset contract audit found the largest single issue in the project.**
+The reports are multilingual and the frozen parser reads Latin-script
+vocabulary only, so 1,229 of 4,349 studies produced no usable labels at all —
+not because the reports were silent, but because the parser could not read
+them. Translating before running the unchanged parser raised coverage from
+`71.74%` to `95.95%` and usable cells from `14123` to `18024` (`+27.62%`).
+Whether that improves the model is unresolved: Phase 9 v2 tested it under a
+proper holdout and came back inconclusive in aggregate, with only Contusion
+surviving correction for 12 comparisons and removing Contusion flipping the
+macro sign.
 
-B33 removed the learned complementary query entirely and used the exact arithmetic mean of the 16 B20 slice tokens behind one zero-init 768-D gate. On the reused 58-study expert surface B33 reached 0.676446, essentially matching B29 0.676888 (raw delta -0.000442; paired 95% CI [-0.023312, +0.022036]; P[B33>B29]=0.4800). B31 remained numerically highest at 0.682280. B33 is therefore a **successful frozen simplification, not independently validated and not promoted**. Its result supports the interpretation that most of B29's development gain may come from a second broad global series representation rather than learned slice selection. See `docs/B33_REUSED_GOLD_RESULT.md`.
-
-The repeatedly reused 58-study expert surface is now retired as the primary architecture-design surface. Before any B34 experiment, the repository freezes **prospective weak-validation v1**: a StudyInstanceUID-hash 80/20 split of the 3,120 active B6 studies, with 2,496 studies for matched fixed-E2 training and 624 untouched studies for weak-label validation. Split membership uses UID hashes only and does not use B6 labels, expert labels, model predictions or previous scores. B20, B31 and B33 are retrained as matched controls on the 80% subset before B34. This is architecture-selection evidence only, not independent clinical validation. See `docs/PROSPECTIVE_WEAK_V1.md`.
+No competition submission has been made, so no independent measurement of any
+of this exists yet.
 
 Canonical result/design records include:
 

@@ -1,195 +1,149 @@
 # Current project status
 
-**Snapshot:** 2026-08-15  
-**Package:** `0.29.0`  
-**Active working model:** `B20_crop_only_joint_focus`  
-**Canonical B20 checkpoint:** `runs/b20_crop_focus/b20_model.pt`  
-**Canonical B20 epoch:** `2`  
+**Snapshot:** 2026-08-18
+**Package:** `0.30.0`
 **Primary metric:** macro ROC AUC across 12 targets
+**Independent evidence to date:** none — no competition submission has been made
 
-> **B20 remains the active working model.** B23/B24X/B25X results are development evidence about supervision quality and mechanism. None of them has a valid promotion path.
+## Where things stand
 
-## Current headline
+**Nothing has been promoted.** Every result below comes from surfaces built in
+this repository. The frozen governance position remains that B20 is the last
+model promoted on evidence, and no later experiment has cleared a promotion
+path.
 
-- **B20 remains active and unchanged.** Canonical reused-expert macro AUC: `0.6671593555` at epoch 2.
-- **B23-v1 formal gate FAILED** because specificity `0.5678` did not exceed B6 `0.6061`; no canonical B23 holdout exists and formal B24 remains blocked/not run.
-- **B24X pilot completed:** B23/Qwen supervision improved frozen weak-v2 from `0.6148488366` to `0.7116126450` on the matched 692-study pilot.
-- **B24X-Density completed:** preserving all B6 cells and adding only B23-silent-cell supervision reached `0.7147994969`, slightly above full B23 `0.7116126450`; the B23-vs-Density interval crossed zero. This showed that almost all of the B24X gain came from supervision recovery rather than replacing B6 decisions.
-- **B25X completed on the full 2,497-study weak-v2 training surface** using the ChatGPT-created hybrid cache as an explicitly mixed/unknown-provenance exploratory source.
-- B25X frozen weak-v2: `B6=0.6723718048`, `Hybrid=0.7268784872`, `B6+Hybrid-fill=0.7308472686`.
-- The B25X macro gain is **overwhelmingly a Synovitis effect**. Excluding Synovitis, the 11-target macro changes are `Hybrid-B6=-0.0028167951` and `Fill-B6=+0.0023982627`.
-- Synovitis diagnosis: B6 training had only `13` negatives versus `322` positives; Hybrid-fill added `136` negatives and `66` positives. The Synovitis weak-v2 AUC rose from `0.2370` to `0.9123` for Fill and remained `0.8874–0.9610` under leave-one-negative-out checks.
-- The current plan is **not** to move to DINOv2 or soft-dense labels. The next phase will develop the current B20-family working model, using the B25X class-coverage finding as a diagnostic.
+**The top-level interface targets the B34/B31 architecture.** That is an
+interface decision recorded in `docs/WORKING_MODEL.md`, made because B34 is the
+strongest candidate on both internal surfaces and has the simplest inference
+path. It is not a promotion, and it does not change any frozen experiment
+record. The interface and the governance record therefore disagree on purpose,
+and the disagreement resolves when a hidden-evaluation result exists.
 
-## Experiment state
+## The two findings that matter
 
-| ID | Purpose | Current result | Status |
-|---|---|---|---|
-| **B20** | active historical knee-focused model | expert macro AUC `0.6671593555` | **ACTIVE WORKING MODEL** |
-| B21 | pre-resize crop correction | weak-v2 improved; expert acceptance failed | closed / not promoted |
-| B22 | B21 duration audit E1-E5 | E2 best; longer training did not rescue | closed |
-| **B23-v1** | local Qwen report labeller | state-only AUC `0.8125164416`; specificity `0.5678` | **formal gate FAILED** |
-| **B24 formal** | matched B6-vs-B23 supervision | not run | **blocked by B23 gate** |
-| **B24X** | matched B6-vs-B23 pilot | `0.6148488366 -> 0.7116126450` weak-v2 | exploratory complete |
-| **B24X-Density** | B6 preserved + B23-only missing cells | `0.7147994969` weak-v2 | exploratory complete |
-| **B25X** | full matched B6 / Hybrid / B6+Hybrid-fill | `0.6723718048 / 0.7268784872 / 0.7308472686` | exploratory complete; mechanism diagnosed |
+**1. The reports are multilingual, and the parser could not read a quarter of
+them.** Phase 5 inspected the zero-cell population and found every sampled
+report contained clear target-relevant statements. Their zero-label status was
+parser coverage, not clinical silence. The decisive detail: all 12 sampled
+Greek B6-active reports had exactly one usable cell, `Contusion = positive`,
+each from the incidental English phrase `bone bruise`. Apparent non-Latin
+coverage was embedded English, not parsing.
 
-## B24X-Density final result
+Translating before running the unchanged parser (Phases 6-8) produced:
 
 ```text
-B6 control       0.6148488366
-Density          0.7147994969
-Full B23         0.7116126450
-
-Density - B6       +0.0999506603
-Full B23 - B6      +0.0967638083
-Full B23 - Density -0.0031868519
-
-B6 -> Density
-median             +0.0998800219
-95% CI             [+0.0642300469,+0.1348991590]
-P(Density > B6)     1.0000
-
-B23 - Density
-median             -0.0031277652
-95% CI             [-0.0099855349,+0.0034718378]
-P(B23 > Density)    0.1799
+rescued studies      1053 / 1229 = 85.68%
+coverage             71.74% -> 95.95%
+usable cells         14123 -> 18024   (+3901, +27.62%)
+by script            Cyrillic 99.54%   Latin 83.22%   Greek 81.43%
 ```
 
-Interpretation: the point-estimate gain is explained almost entirely by **adding supervision where B6 was silent**. There is no evidence that B23 replacements/drops are required.
+**2. A powered validation surface now exists.** The prospective weak splits
+(PV1/PV2) give 499-624 validation studies, against 58 for the expert surface.
+PV2's primary test returned a 95% interval entirely below zero
+(`[-0.01257, -0.00399]`, P = 0.9998) — something the expert surface has never
+produced in 34 experiments.
 
-## B25X full matched hybrid experiment
+## Architecture ladder: essentially flat
 
-### Training surface
+Reused 58-study expert surface, paired against B20 `0.6674066371`:
+
+| Experiment | Macro AUC | Outcome |
+|---|---:|---|
+| B26.2 supervision repair | 0.6663 | closed, not promoted |
+| B27.1 pathology routing | 0.6599 | closed, not promoted |
+| B28 max-evidence residual | 0.6383 | closed, not promoted |
+| B29 complementary pool | 0.6769 | frozen candidate, not promoted |
+| B30 projected complementary | 0.6547 | formulation closed |
+| B31 local context | **0.6823** | highest on this surface |
+| B32 dispersion summary | ~tied | formulation closed |
+| B33 uniform mean | 0.6764 | simplification of B29 |
+| B34 train-only scaffold | — | B31-equivalent, simpler inference |
+
+Eight experiments, roughly +0.015 of point estimate, every interval crossing
+zero. The architecture direction is exhausted in its current form.
+
+## Phase 9 v2 — the matched supervision test
+
+Both arms trained on 3,850 studies with the 499-study PV2 partition held out,
+and scored on original frozen labels only, so the evaluation is not circular.
 
 ```text
-shared studies              2497
-possible cells             29964
-B6 usable cells            11248  (37.5%)
-
-Pure Hybrid
-usable cells               20001  (66.8%)
-added                       9542
-dropped                      789
-disagreements               1120 / 10459 = 10.7%
-
-B6 + Hybrid-fill
-usable cells               20790  (69.4%)
-B6 cells preserved         11248
-Hybrid-only cells added     9542
-B6 cells dropped               0
-B6 cells overridden            0
+BCE        -0.00988   CI [-0.01990, +0.00008]   P = 0.9742
+macro AUC  +0.00322   CI [-0.00847, +0.01508]   P = 0.6897
 ```
 
-All arms used the same 2,497 studies/order, frozen weak-v2-safe B16-v2 encoder, B20 post-resize crop and fixed E2 endpoint. The 623-study weak-v2 holdout and all 58 expert-gold studies were excluded from gradients.
+Both aggregates favour the merged supervision; both intervals include zero. The
+BCE upper bound sits at `+0.000084`, about as close to excluding zero as is
+possible without doing so.
 
-### Training
+Two per-target results reached significance, but **only one survives correction
+for testing 12 targets**:
 
 ```text
-Control: E1 0.7601064120 | E2 0.6592396402 | 45m50s
-Fill:    E1 0.6799390770 | E2 0.5913315904 | 46m43s
-Hybrid:  E1 0.6557762888 | E2 0.5718413529 | 46m03s
+Contusion  +0.0554  CI [+0.0206, +0.0933]  P=0.9990  two-sided p ~ 0.0020
+           survives Bonferroni (0.05/12 = 0.00417) and Benjamini-Hochberg
+
+Effusion   -0.0262  CI [-0.0483, -0.0052]  P=0.0082  two-sided p ~ 0.0164
+           survives neither
 ```
 
-### Frozen weak-v2 result
+Removing Contusion flips the macro sign (`+0.0032 -> -0.0015`). The entire
+aggregate rests on one target.
+
+**This is the third time an aggregate has dissolved into a single target under
+audit** — B25X was 96.4% Synovitis, B24X-Density showed the gain was coverage
+rather than correction, and Phase 9 is Contusion. Leave-one-target-out belongs
+in the standing protocol, not in a post-hoc check.
+
+## Open hypothesis on the Contusion result
+
+Contusion is the only target where the non-Latin population had any
+pre-existing label coverage — the incidental `bone bruise` positives from
+Phase 5. It is also the only target driving the Phase 9 macro result. That
+coincidence is untested.
+
+If the control arm learned a site shortcut from a single-target, positive-only
+signal in a distinct scanner population, the +0.055 would be partly the
+*removal of a control artefact* rather than new signal in the candidate.
+
+The discriminating check is cheap and non-circular: stratify the stored PV2
+per-target results by report script (Latin / Greek / Cyrillic). No retraining,
+no change to the rescue set. Concentration in the non-Latin strata supports the
+shortcut reading; an even spread across Latin studies does not.
+
+## Blocked
+
+The Phase-7 rescue evidence — `translation_cache.jsonl`,
+`full_population_rescue_audit.csv`, `recovered_cells.csv` — was not found at
+the attempted local path, so the label-generation mechanism audit cannot run.
+`phase9_v2_rescue_mechanism_audit.py` exists and is ready; unlike the other
+modules in this campaign it has no test file.
+
+The same path ambiguity affects training: the merged-label export is recorded
+under two different roots across the archive. Verify with the pinned
+fingerprints before launching anything:
 
 ```text
-B6 control          0.6723718048
-Pure Hybrid         0.7268784872
-B6 + Hybrid-fill    0.7308472686
-
-Hybrid - B6
-raw                 +0.0545066824
-median              +0.0557034913
-95% CI              [+0.0269870416,+0.0750180195]
-P(>0)                1.0000
-
-Fill - B6
-raw                 +0.0584754637
-median              +0.0591551676
-95% CI              [+0.0301804537,+0.0814020218]
-P(>0)                1.0000
-
-Hybrid - Fill
-raw                 -0.0039687813
-median              -0.0039491728
-95% CI              [-0.0137571379,+0.0058102163]
-P(Hybrid > Fill)     0.2037
+training_targets.csv   c59d78c74743112f09946fd18b64d7726947e6f75b83aabd1f585389a89d045a
+recovered_cells.csv    ed094e5d6f77b1558fe63921f2f22b8e1006443c506f00f921d842cde72025d0
 ```
 
-Fill has the best 12-target point estimate while preserving every B6 decision. The Hybrid-vs-Fill interval crosses zero.
+## Next
 
-## B25X Synovitis diagnosis
+1. **Submit.** Zero submissions after 34 experiments and 9 audit phases. A
+   Kaggle-run notebook costs none of the 9-hour session budget, and the
+   leaderboard is the only measurement not built here. Submitting a *matched
+   pair* — original versus merged supervision — resolves what Phase 9 could
+   not.
+2. **Script stratification** of the stored PV2 predictions (CPU, minutes).
+3. **Re-score PV1/PV2 on macro AUC with paired bootstrap.** Those surfaces
+   currently rank on soft BCE only; macro AUC is recorded without an interval
+   and is never used to rank. PV1 itself notes B31 and B33 had near-identical
+   macro AUC while the primary metric separated them at P = 0.0050 — so the
+   ladder that selected B31 and B34 has never been checked on the metric the
+   competition scores.
+4. **Locate the Phase-7 artifacts** and run the mechanism audit.
 
-Per-target analysis showed that the full macro gain is dominated by Synovitis:
-
-```text
-Synovitis AUC
-B6       0.2370
-Hybrid   0.9221
-Fill     0.9123
-```
-
-Excluding Synovitis:
-
-```text
-11-target macro
-B6       0.7119498792
-Hybrid   0.7091330840
-Fill     0.7143481419
-
-Hybrid - B6   -0.0028167951
-Fill - B6     +0.0023982627
-```
-
-Training-label audit:
-
-```text
-B6 Synovitis                  322 positive / 13 negative
-Hybrid-only additions          66 positive / 136 negative
-Final Fill                    388 positive / 149 negative
-```
-
-Frozen weak-v2 Synovitis has only `77` positives and `4` negatives. Nevertheless, the effect is not controlled by one lucky negative:
-
-```text
-leave-one-negative-out AUC range
-B6       0.177489 -- 0.259740
-Hybrid   0.900433 -- 0.978355
-Fill     0.887446 -- 0.961039
-```
-
-The current interpretation is therefore narrow: **Hybrid-fill repaired a severe negative-class coverage failure for Synovitis. Across the other eleven targets, the net effect is approximately neutral.**
-
-## Current scientific position
-
-1. More downstream epochs are not the next lever under the current recipe.
-2. B23-v1 remains formally rejected by its own specificity gate.
-3. B24X/B24X-Density show that recovering B6-silent supervision can be useful, and that replacing B6 decisions is unnecessary on the measured development surface.
-4. B25X scales that finding to 2,497 studies but shows that the aggregate gain is highly target-specific, dominated by Synovitis class coverage.
-5. B20 remains the active working model. The next phase should improve the current B20-family model rather than switching architecture wholesale.
-6. No DINOv2 or soft-dense-label branch is currently planned.
-
-## Governance
-
-```text
-B20 remains ACTIVE WORKING MODEL
-B23-v1 formal gate FAILED
-formal B24 has NOT been run
-B24X/B24X-Density/B25X are exploratory only
-no B24X/B25X gold acceptance
-no B24X/B25X promotion
-weak-v2 measures B6 teacher agreement, not expert truth
-58-study expert surface is reused/post-hoc, not independent validation
-hidden competition evaluation remains the independent predictive signal
-```
-
-## Canonical records
-
-- [`WORKING_MODEL.md`](WORKING_MODEL.md) — active working model and governance.
-- [`EXPERIMENT_STATUS.md`](EXPERIMENT_STATUS.md) — experiment ledger.
-- [`B23_LLM_REPORT_LABELS.md`](B23_LLM_REPORT_LABELS.md) — B23 protocol/background.
-- [`B24_SUPERVISION_SOURCE.md`](B24_SUPERVISION_SOURCE.md) — formal B24 protocol.
-- [`B24X_EXPLORATORY_SUPERVISION.md`](B24X_EXPLORATORY_SUPERVISION.md) — B24X/B24X-Density record.
-- [`B25X_HYBRID_SUPERVISION.md`](B25X_HYBRID_SUPERVISION.md) — full hybrid experiment and Synovitis mechanism audit.
-- [`VALIDATION.md`](VALIDATION.md) — validation governance.
+Detailed records for every experiment named here are in this directory and are
+frozen; they are not revised when the project's understanding moves on.
