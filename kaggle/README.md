@@ -49,11 +49,14 @@ The file is large, so this upload takes a while. Do it once and reuse it.
 3. Turn the **GPU on** in the settings panel.
 4. Turn the **internet off**. Code competitions require this, and your model
    does not need it.
-5. Copy the blocks from [`submission_notebook.py`](submission_notebook.py) into
-   cells, in order.
-6. Run cell 1 and read what it prints. Fix the two paths in cell 2 to match.
-7. **Save & Run All**.
+5. Copy the five blocks from [`submission_notebook.py`](submission_notebook.py)
+   into cells, in order.
+6. Run cells 1 to 3. They finish in seconds and print where everything was
+   found. Nothing needs editing -- the cells search rather than assume.
+7. **Save & Run All**. Cell 4 is the long one; that is where the scans are read.
 8. When it finishes, open the notebook's Output tab and click **Submit**.
+
+Cells 1, 2, 3 and 5 take seconds. Only cell 4 is slow, and it should be.
 
 ## Which model to submit
 

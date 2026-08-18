@@ -43,69 +43,56 @@ for root in sorted(Path("/kaggle/input").glob("*")):
 
 
 # ---------------------------------------------------------------- cell 2 ----
-# Point the notebook at your code and your model.
-# Change these two lines to match the folder names printed by cell 1.
+# Find your code, your model and the competition data.
+#
+# Nothing is hard-coded except the competition name, because Kaggle nests
+# inputs differently depending on how they were attached.  Your own datasets
+# are small, so searching them is cheap; the competition folder is not, so it
+# is only checked at the top level.
 
 import sys
 from pathlib import Path
 
-CODE_DATASET = Path("/kaggle/input/cnn-cpc-code")           # <-- your code dataset
-MODEL_PATH = Path("/kaggle/input/cnn-cpc-model/model.pt")   # <-- your model.pt
+BASE = Path("/kaggle/input")
+MINE = BASE / "datasets" if (BASE / "datasets").is_dir() else BASE
+COMP = BASE / "competitions" / "rsna-knee-abnormality-detection"
 
-# Kaggle sometimes wraps an uploaded zip in an extra folder, so search for the
-# repository rather than assuming how deeply it is nested.  The code dataset is
-# small, so walking all of it is cheap -- unlike the competition data.
 CODE_ROOT = None
-for marker in CODE_DATASET.rglob("architecture.py"):
+for marker in MINE.rglob("architecture.py"):
     if marker.parent.name == "model":
         CODE_ROOT = marker.parent.parent
         break
-
 if CODE_ROOT is None:
-    print("Could not find model/architecture.py. The dataset contains:")
-    for path in sorted(CODE_DATASET.rglob("*"))[:40]:
-        print("   ", path.relative_to(CODE_DATASET))
+    print("Could not find model/architecture.py. Your datasets contain:")
+    for path in sorted(MINE.rglob("*"))[:40]:
+        print("   ", path.relative_to(MINE))
     raise FileNotFoundError("repository not found -- see the listing above")
 
-# The checkpoint may have been uploaded under a different name.
-if not MODEL_PATH.is_file():
-    found = sorted(Path("/kaggle/input").glob("*/*.pt"))
-    found += sorted(Path("/kaggle/input").glob("*/*/*.pt"))
-    if not found:
-        raise FileNotFoundError("no .pt file found -- is the model dataset attached?")
-    MODEL_PATH = found[0]
-    print(f"note: using {MODEL_PATH}")
+weights = sorted(MINE.rglob("*.pt"))
+if not weights:
+    raise FileNotFoundError("no .pt file found -- is the model dataset attached?")
+MODEL_PATH = weights[0]
+
+DATA_ROOT = COMP if (COMP / "test.csv").is_file() else None
+if DATA_ROOT is None:
+    for child in sorted(COMP.glob("*")):
+        if child.is_dir() and (child / "test.csv").is_file():
+            DATA_ROOT = child
+            break
+if DATA_ROOT is None:
+    print("test.csv not found. The competition folder holds:")
+    for item in sorted(COMP.glob("*"))[:20]:
+        print("   ", "dir " if item.is_dir() else "file", item.name)
+    raise FileNotFoundError("could not find test.csv")
 
 sys.path.insert(0, str(CODE_ROOT))
 sys.path.insert(0, str(CODE_ROOT / "developments" / "src"))
 print("code :", CODE_ROOT)
 print("model:", MODEL_PATH)
+print("data :", DATA_ROOT)
 
 
 # ---------------------------------------------------------------- cell 3 ----
-# Find the competition data. It is whichever attached folder holds test.csv.
-
-DATA_ROOT = None
-for root in sorted(Path("/kaggle/input").glob("*")):
-    if (root / "test.csv").is_file():
-        DATA_ROOT = root
-        break
-    nested = [p for p in root.glob("*") if (p / "test.csv").is_file()]
-    if nested:
-        DATA_ROOT = nested[0]
-        break
-
-if DATA_ROOT is None:
-    raise FileNotFoundError(
-        "no attached folder contains test.csv -- attach the competition data"
-    )
-
-print("data :", DATA_ROOT)
-for name in ("test.csv", "test_series.csv", "sample_submission.csv"):
-    print(f"   {name}: {'found' if (DATA_ROOT / name).is_file() else 'MISSING'}")
-
-
-# ---------------------------------------------------------------- cell 4 ----
 # Check the model loads before spending time on the images.
 
 from model._implementation import read_config
@@ -128,7 +115,7 @@ if str(payload.get("encoder_source", "report-aligned")) == "dinov3":
 del model  # the next cell rebuilds it on the GPU
 
 
-# ---------------------------------------------------------------- cell 5 ----
+# ---------------------------------------------------------------- cell 4 ----
 # Predict the hidden test set and write the submission.
 
 from testing.test import predict_test_set
@@ -141,7 +128,7 @@ submission = predict_test_set(
 print("wrote", submission)
 
 
-# ---------------------------------------------------------------- cell 6 ----
+# ---------------------------------------------------------------- cell 5 ----
 # Look at the result before submitting.
 
 import pandas as pd
