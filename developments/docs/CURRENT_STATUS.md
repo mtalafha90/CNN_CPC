@@ -134,8 +134,8 @@ recovered_cells.csv    ed094e5d6f77b1558fe63921f2f22b8e1006443c506f00f921d842cde
 1. **Submit.** Zero submissions after 34 experiments and 9 audit phases. A
    Kaggle-run notebook costs none of the 9-hour session budget, and the
    leaderboard is the only measurement not built here. Submitting a *matched
-   pair* — original versus merged supervision — resolves what Phase 9 could
-   not.
+   pair* — `latin-script` versus `all-script` supervision — resolves what
+   Phase 9 could not.
 2. **Script stratification** of the stored PV2 predictions (CPU, minutes).
 3. **Re-score PV1/PV2 on macro AUC with paired bootstrap.** Those surfaces
    currently rank on soft BCE only; macro AUC is recorded without an interval

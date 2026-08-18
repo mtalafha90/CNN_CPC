@@ -70,8 +70,8 @@ Two label surfaces exist:
 
 | Surface    | What it contains                                                        |
 |------------|-------------------------------------------------------------------------|
-| `original` | the frozen rule-parser labels                                            |
-| `merged`   | the same labels plus cells recovered by translating non-Latin-script reports before parsing |
+| `latin-script` | the frozen rule-parser labels; multilingual within Latin script, not English-only |
+| `all-script`   | the same labels plus cells recovered by translating the Greek- and Cyrillic-script reports before parsing |
 
 The reports are multilingual. The rule parser covers Latin-script vocabulary,
 so a substantial share of studies produced no usable labels at all — not
@@ -80,7 +80,7 @@ Translating before parsing recovers most of that population. Whether the extra
 labels improve the model is an open question that the aggregate result has not
 resolved; see the audit records under `developments/docs/`.
 
-Selecting `merged` therefore changes what the model learns from, and is a real
+Selecting `all-script` therefore changes what the model learns from, and is a real
 experimental choice rather than a formatting detail.
 
 ## Interface

@@ -1,12 +1,16 @@
 """Train the working model on the full report-only study population.
 
 Labels come from the radiology reports, never from the expert-annotated
-studies, which stay outside the gradient entirely.  Two label surfaces are
-available:
+studies, which stay outside the gradient entirely.  The reports are
+multilingual, and the two label surfaces are named for the reports each one
+can actually read:
 
-    original   the frozen rule-parser labels
-    merged     the same labels plus the cells recovered by translating the
-               non-Latin-script reports before parsing
+    latin-script   the frozen rule parser alone.  It matches Latin-script
+                   vocabulary across several languages, so this is not an
+                   English-only surface, but the Greek- and Cyrillic-script
+                   reports yield almost nothing.
+    all-script     the same labels plus the cells recovered by translating
+                   the Greek- and Cyrillic-script reports before parsing.
 
 Training stops at a fixed epoch.  No checkpoint is chosen by looking at a
 labelled score, so the run is decided before any result is seen.
@@ -24,19 +28,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train the working knee MRI model")
     parser.add_argument(
         "--supervision",
-        choices=("original", "merged"),
+        choices=("latin-script", "all-script"),
         required=True,
         help="which report-label surface enters the gradient",
     )
     parser.add_argument("--config", default="config/current_model.yaml")
     parser.add_argument("--data-root", required=True)
     parser.add_argument(
-        "--report-labels",
+        "--latin-script-labels",
         required=True,
         help="directory holding the frozen rule-parser label export",
     )
     parser.add_argument(
-        "--translated-labels",
+        "--all-script-labels",
         required=True,
         help="directory holding the merged translated-report label export",
     )
@@ -55,8 +59,8 @@ def main() -> None:
     train_working_model(
         config,
         supervision=args.supervision,
-        report_labels_root=args.report_labels,
-        translated_labels_root=args.translated_labels,
+        latin_script_labels_root=args.latin_script_labels,
+        all_script_labels_root=args.all_script_labels,
         series_policy_path=args.series_policy,
         encoder_checkpoint=args.encoder,
         out_root=args.out_root,

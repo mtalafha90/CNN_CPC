@@ -35,9 +35,14 @@ _ARCHITECTURE_BUILDERS: dict[str, str] = {
 
 WORKING_ARCHITECTURE = "b31_training_only_local_context_scaffold_eval_bypass_v1"
 
-SUPERVISION_ARMS = {
-    "original": "control",
-    "merged": "candidate",
+# The two label surfaces, named for the reports each one can actually read.
+# The frozen rule parser matches Latin-script vocabulary across several
+# languages -- it is not English-only -- and translation extends that to the
+# Greek- and Cyrillic-script reports.  The values are the arm names the
+# preserved trainer uses internally.
+SUPERVISION_SURFACES = {
+    "latin-script": "control",
+    "all-script": "candidate",
 }
 
 
@@ -210,8 +215,8 @@ def train_working_model(
     config: dict,
     *,
     supervision: str,
-    report_labels_root: str | Path,
-    translated_labels_root: str | Path,
+    latin_script_labels_root: str | Path,
+    all_script_labels_root: str | Path,
     series_policy_path: str | Path,
     encoder_checkpoint: str | Path,
     out_root: str | Path,
@@ -219,19 +224,20 @@ def train_working_model(
     """Train the working model on the full report-only study population.
 
     `supervision` selects which label surface enters the gradient:
-    `"original"` uses the frozen rule-parser labels only, `"merged"` adds the
-    translated cells recovered from the non-Latin-script reports.
+    `"latin-script"` uses the frozen rule-parser labels only, `"all-script"`
+    adds the cells recovered by translating the Greek- and Cyrillic-script
+    reports before parsing.
     """
-    arm = SUPERVISION_ARMS.get(supervision)
+    arm = SUPERVISION_SURFACES.get(supervision)
     if arm is None:
-        choices = ", ".join(sorted(SUPERVISION_ARMS))
+        choices = ", ".join(sorted(SUPERVISION_SURFACES))
         raise ValueError(f"supervision must be one of: {choices}")
 
     return _resolve("phase9_matched_supervision_training:train_phase9_arm")(
         config,
         arm=arm,
-        b6_root=str(report_labels_root),
-        phase8_root=str(translated_labels_root),
+        b6_root=str(latin_script_labels_root),
+        phase8_root=str(all_script_labels_root),
         series_policy_path=str(series_policy_path),
         report_ssl_checkpoint=str(encoder_checkpoint),
         out_root=str(out_root),

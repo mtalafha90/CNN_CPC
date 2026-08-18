@@ -17,22 +17,22 @@ The dataset and run artefacts are not stored in Git. Set the paths explicitly.
 cd /media/talafha/Disk_1/CNN_CPC
 
 export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
-export REPORT_LABELS="/media/talafha/Disk_1/CNN_CPC/runs/b6_report_labels_v121"
-export TRANSLATED_LABELS="/media/talafha/Disk_1/CNN_CPC_current/runs/translation_rescue_supervision_v1"
+export LATIN_SCRIPT_LABELS="/media/talafha/Disk_1/CNN_CPC/runs/b6_report_labels_v121"
+export ALL_SCRIPT_LABELS="/media/talafha/Disk_1/CNN_CPC_current/runs/translation_rescue_supervision_v1"
 export SERIES_POLICY="/media/talafha/Disk_1/CNN_CPC/runs/b12_variable_series/audit/series_policy.json"
 export ENCODER="/media/talafha/Disk_1/CNN_CPC/runs/b16_full_report/report_ssl/b16_report_encoder.pt"
 ```
 
-### Check `TRANSLATED_LABELS` before launching
+### Check `ALL_SCRIPT_LABELS` before launching
 
 This path is recorded under two different roots in the experiment archive —
 `CNN_CPC/runs/...` in the earlier documents and `CNN_CPC_current/runs/...` in
-the run that most recently completed. The merged-supervision export is
+the run that most recently completed. The all-script export is
 fingerprinted, so confirm which one is real rather than guessing:
 
 ```bash
-ls -la "$TRANSLATED_LABELS"     # expect training_targets.csv, merge_audit.json, policy.json
-sha256sum "$TRANSLATED_LABELS/training_targets.csv"
+ls -la "$ALL_SCRIPT_LABELS"     # expect training_targets.csv, merge_audit.json, policy.json
+sha256sum "$ALL_SCRIPT_LABELS/training_targets.csv"
 # c59d78c74743112f09946fd18b64d7726947e6f75b83aabd1f585389a89d045a
 ```
 
@@ -41,7 +41,7 @@ A mismatch aborts the run rather than training on the wrong labels.
 ### Pre-flight
 
 ```bash
-for p in "$DATA_ROOT" "$REPORT_LABELS" "$TRANSLATED_LABELS" "$SERIES_POLICY" "$ENCODER"; do
+for p in "$DATA_ROOT" "$LATIN_SCRIPT_LABELS" "$ALL_SCRIPT_LABELS" "$SERIES_POLICY" "$ENCODER"; do
   [ -e "$p" ] && echo "OK   $p" || echo "MISS $p"
 done
 python -m model.architecture
@@ -49,16 +49,21 @@ python -m model.architecture
 
 ## 2. Training
 
-`--supervision` chooses which report-label surface enters the gradient:
-`original` is the frozen rule-parser labels, `merged` adds the cells recovered
-by translating the non-Latin-script reports first.
+The reports are multilingual, and `--supervision` chooses which of them the
+gradient can actually learn from:
+
+- `latin-script` — the frozen rule parser alone. It matches Latin-script
+  vocabulary across several languages, so this is **not** an English-only
+  surface, but the Greek- and Cyrillic-script reports yield almost nothing.
+- `all-script` — the same labels plus the cells recovered by translating the
+  Greek- and Cyrillic-script reports before parsing.
 
 ```bash
 python -m training.train \
-  --supervision original \
+  --supervision latin-script \
   --data-root "$DATA_ROOT" \
-  --report-labels "$REPORT_LABELS" \
-  --translated-labels "$TRANSLATED_LABELS" \
+  --latin-script-labels "$LATIN_SCRIPT_LABELS" \
+  --all-script-labels "$ALL_SCRIPT_LABELS" \
   --series-policy "$SERIES_POLICY" \
   --encoder "$ENCODER" \
   --out-root runs/working_model
@@ -66,10 +71,10 @@ python -m training.train \
 
 ```bash
 python -m training.train \
-  --supervision merged \
+  --supervision all-script \
   --data-root "$DATA_ROOT" \
-  --report-labels "$REPORT_LABELS" \
-  --translated-labels "$TRANSLATED_LABELS" \
+  --latin-script-labels "$LATIN_SCRIPT_LABELS" \
+  --all-script-labels "$ALL_SCRIPT_LABELS" \
   --series-policy "$SERIES_POLICY" \
   --encoder "$ENCODER" \
   --out-root runs/working_model
@@ -90,10 +95,10 @@ The directory names remain `control` and `candidate` because the underlying
 frozen trainer writes them:
 
 ```text
-runs/working_model/control/model.pt              <- --supervision original
+runs/working_model/control/model.pt              <- --supervision latin-script
 runs/working_model/control/training_audit.json
 runs/working_model/control/history.json
-runs/working_model/candidate/model.pt            <- --supervision merged
+runs/working_model/candidate/model.pt            <- --supervision all-script
 runs/working_model/candidate/training_audit.json
 runs/working_model/candidate/history.json
 ```
@@ -122,11 +127,11 @@ the model behaving sensibly — not as a comparison between the two arms.
 ```bash
 python -m testing.test --data-root "$DATA_ROOT" \
   --checkpoint runs/working_model/control/model.pt \
-  --out submissions/original_labels.csv
+  --out submissions/latin_script.csv
 
 python -m testing.test --data-root "$DATA_ROOT" \
   --checkpoint runs/working_model/candidate/model.pt \
-  --out submissions/merged_labels.csv
+  --out submissions/all_script.csv
 ```
 
 Every study is scored at slice offsets `[-1, 0, 1]` and the probabilities are
@@ -140,8 +145,8 @@ apart afterwards.
 
 Submit both files. The architecture, study population, series exposure,
 optimiser and seeds are identical across the two arms, so the difference
-between their scores isolates the effect of the translated supervision on the
-only surface that is not reused development data.
+between their scores isolates the effect of the translated Greek and Cyrillic
+reports on the only surface that is not reused development data.
 
 ## 6. Model information
 
@@ -158,9 +163,9 @@ Earlier notes and scripts use the experiment-era names:
 | Previously | Now |
 |---|---|
 | `-m rsna_knee.phase9_matched_supervision_training` | `-m training.train` |
-| `--arm control` / `--arm candidate` | `--supervision original` / `--supervision merged` |
-| `--b6-root` | `--report-labels` |
-| `--phase8-root` | `--translated-labels` |
+| `--arm control` / `--arm candidate` | `--supervision latin-script` / `--supervision all-script` |
+| `--b6-root` | `--latin-script-labels` |
+| `--phase8-root` | `--all-script-labels` |
 | `--report-ssl-checkpoint` | `--encoder` |
 | `PYTHONPATH=developments/src` | no longer required |
 

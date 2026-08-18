@@ -72,8 +72,18 @@ def test_crop_policy_is_the_deterministic_ninety_percent_crop():
 
 
 def test_supervision_choices_map_to_label_surfaces():
-    assert set(_implementation.SUPERVISION_ARMS) == {"original", "merged"}
-    assert len(set(_implementation.SUPERVISION_ARMS.values())) == 2
+    assert set(_implementation.SUPERVISION_SURFACES) == {"latin-script", "all-script"}
+    assert len(set(_implementation.SUPERVISION_SURFACES.values())) == 2
+
+
+def test_supervision_surfaces_are_not_described_as_english():
+    """Phase 5 established the frozen parser is multilingual within Latin script.
+
+    It matched South-Slavic, Turkish and Spanish reports; calling that surface
+    English-only would contradict the finding the naming exists to convey.
+    """
+    for name in _implementation.SUPERVISION_SURFACES:
+        assert "english" not in name.lower()
 
 
 def test_unknown_supervision_is_rejected_before_training():
@@ -81,8 +91,8 @@ def test_unknown_supervision_is_rejected_before_training():
         _implementation.train_working_model(
             {},
             supervision="translated",
-            report_labels_root="a",
-            translated_labels_root="b",
+            latin_script_labels_root="a",
+            all_script_labels_root="b",
             series_policy_path="c",
             encoder_checkpoint="d",
             out_root="e",

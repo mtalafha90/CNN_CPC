@@ -61,7 +61,7 @@ The dataset and run artefacts are deliberately not stored in Git.
 
 ```bash
 # train on a chosen report-label surface
-python -m training.train --supervision merged --data-root ... --out-root runs/working_model
+python -m training.train --supervision all-script --data-root ... --out-root runs/working_model
 
 # score the expert-annotated studies (a diagnostic, not a test)
 python -m validation.validate --data-root ... --checkpoint runs/working_model/candidate/model.pt
@@ -86,7 +86,7 @@ behaving sensibly", not "is this model better".
 parser reads Latin-script vocabulary, so a large share of studies yielded no
 usable labels — the parser could not read them, rather than the reports being
 silent. Translating before parsing recovers most of that population, which is
-what `--supervision merged` selects. Whether it produces a better model is
+what `--supervision all-script` selects. Whether it produces a better model is
 still open; the audit records are under `developments/docs/`.
 
 ## Tests
