@@ -40,6 +40,7 @@ from .b18_fisher_selection import B18_CANDIDATE_EPOCHS
 from .b20_crop_focus import CropFocusedVariableSeriesKneeDataset, require_b20_contract
 from .b34_training_only_context_scaffold import B34_EXPECTED_NEW_PARAMETERS, b34_model_spec, build_b34_model
 from .budget import RuntimeBudget
+from .dinov3_encoder import attach_dinov3_encoder
 from .data import backfill_series_metadata, load_series_csv, load_train_csv
 from .phase9_supervision import PHASE9_VERSION, REPORT_ONLY_STUDIES, load_phase9_arm_supervision
 from .policy import validate_competition_config
@@ -47,6 +48,7 @@ from .runtime import autocast, make_scaler, resolve_runtime
 
 PHASE9_EXPERIMENT = "phase9_matched_b34_b6_vs_phase8_supervision"
 PHASE9_ARMS = ("control", "candidate")
+PHASE9_ENCODER_SOURCES = ("report-aligned", "dinov3")
 PHASE9_FIXED_EPOCHS = 2
 PHASE9_EXPECTED_REPORT_ONLY_SERIES = 24035
 PHASE9_EXPECTED_BATCHES_BATCH2 = 2175
@@ -71,6 +73,8 @@ def train_phase9_arm(
     report_ssl_checkpoint: str | Path,
     out_root: str | Path = "runs/phase9_matched_supervision",
     out_dirname: str | None = None,
+    encoder_source: str = "report-aligned",
+    dinov3_variant: str = "tiny",
 ) -> Path:
     """Train one matched supervision arm to the fixed endpoint.
 
@@ -85,9 +89,16 @@ def train_phase9_arm(
     directory = str(out_dirname) if out_dirname else arm
     if "/" in directory or "\\" in directory or directory in (".", ".."):
         raise ValueError("out_dirname must be a single directory name")
+    if encoder_source not in PHASE9_ENCODER_SOURCES:
+        known = ", ".join(sorted(PHASE9_ENCODER_SOURCES))
+        raise ValueError(f"encoder_source must be one of: {known}")
     validate_competition_config(config, purpose="train")
     crop_policy = require_b20_contract(config)
-    report_payload = load_b16_report_encoder(report_ssl_checkpoint)
+    report_payload = (
+        load_b16_report_encoder(report_ssl_checkpoint)
+        if encoder_source == "report-aligned"
+        else None
+    )
 
     seed = int(config.get("seed", 2026))
     construction_seed = seed + PHASE9_CONSTRUCTION_SEED_OFFSET
@@ -161,7 +172,13 @@ def train_phase9_arm(
 
     spec = b34_model_spec(config, normalize_input=True)
     model = build_b34_model(spec, pretrained_weights=False)
-    model.encoder.load_state_dict(report_payload["encoder"], strict=True)
+    if encoder_source == "report-aligned":
+        model.encoder.load_state_dict(report_payload["encoder"], strict=True)
+        encoder_description = {"source": "report-aligned", "checkpoint": str(report_ssl_checkpoint)}
+    else:
+        replacement = attach_dinov3_encoder(model, variant=dinov3_variant, pretrained_weights=True)
+        encoder_description = {"source": "dinov3", **replacement.describe()}
+    spec["encoder_source"] = encoder_source
     freeze_encoder(model)
     model.gradient_checkpointing = False
     encoder_sha_initial = encoder_state_sha256(model.encoder)
@@ -328,6 +345,8 @@ def train_phase9_arm(
         "initialization_experiment": B16_REPORT_SSL_EXPERIMENT,
         "initialization_objective": B16_REPORT_SSL_OBJECTIVE,
         "input_normalization": B13_INPUT_NORMALIZATION,
+        "encoder_source": encoder_source,
+        "encoder": encoder_description,
         "encoder_frozen": True,
         "encoder_sha256_initial": encoder_sha_initial,
         "encoder_sha256_final": encoder_sha_final,

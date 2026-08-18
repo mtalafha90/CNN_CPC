@@ -45,6 +45,11 @@ SUPERVISION_SURFACES = {
     "all-script": "candidate",
 }
 
+# Which pretrained weights the frozen encoder starts from.  "report-aligned" is
+# the frozen working model's encoder; "dinov3" swaps in DINOv3 self-supervised
+# ConvNeXt weights of the same width, leaving everything above it untouched.
+ENCODERS = ("report-aligned", "dinov3")
+
 
 RUNS_ROOT = "runs"
 STAGES = ("train", "validate", "test")
@@ -239,8 +244,10 @@ def train_working_model(
     latin_script_labels_root: str | Path,
     all_script_labels_root: str | Path,
     series_policy_path: str | Path,
-    encoder_checkpoint: str | Path,
+    encoder_checkpoint: str | Path | None,
     out_root: str | Path,
+    encoder: str = "report-aligned",
+    dinov3_variant: str = "tiny",
 ):
     """Train the working model on the full report-only study population.
 
@@ -260,7 +267,9 @@ def train_working_model(
         b6_root=str(latin_script_labels_root),
         phase8_root=str(all_script_labels_root),
         series_policy_path=str(series_policy_path),
-        report_ssl_checkpoint=str(encoder_checkpoint),
+        report_ssl_checkpoint=str(encoder_checkpoint or ""),
         out_root=str(out_root),
         out_dirname=supervision,
+        encoder_source=encoder,
+        dinov3_variant=dinov3_variant,
     )

@@ -21,7 +21,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from model._implementation import read_config, run_directory, train_working_model
+from model._implementation import (
+    ENCODERS,
+    read_config,
+    run_directory,
+    train_working_model,
+)
 
 
 def main() -> None:
@@ -47,8 +52,19 @@ def main() -> None:
     parser.add_argument("--series-policy", required=True)
     parser.add_argument(
         "--encoder",
-        required=True,
-        help="frozen report-aligned encoder checkpoint",
+        choices=ENCODERS,
+        default="report-aligned",
+        help="which pretrained weights the frozen encoder starts from",
+    )
+    parser.add_argument(
+        "--encoder-checkpoint",
+        help="report-aligned encoder checkpoint; required for --encoder report-aligned",
+    )
+    parser.add_argument(
+        "--dinov3-variant",
+        choices=("tiny", "small"),
+        default="tiny",
+        help="DINOv3 ConvNeXt size; both are 768-d and drop in unchanged",
     )
     parser.add_argument(
         "--experiment",
@@ -56,6 +72,9 @@ def main() -> None:
         help="run name; everything it produces lands under runs/<experiment>/",
     )
     args = parser.parse_args()
+
+    if args.encoder == "report-aligned" and not args.encoder_checkpoint:
+        parser.error("--encoder report-aligned requires --encoder-checkpoint")
 
     config = read_config(args.config)
     config["data_root"] = str(Path(args.data_root).resolve())
@@ -66,7 +85,9 @@ def main() -> None:
         latin_script_labels_root=args.latin_script_labels,
         all_script_labels_root=args.all_script_labels,
         series_policy_path=args.series_policy,
-        encoder_checkpoint=args.encoder,
+        encoder_checkpoint=args.encoder_checkpoint,
+        encoder=args.encoder,
+        dinov3_variant=args.dinov3_variant,
         out_root=run_directory(args.experiment, "train"),
     )
     print(f"checkpoint: {checkpoint}")

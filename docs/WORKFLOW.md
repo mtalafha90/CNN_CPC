@@ -65,7 +65,7 @@ python -m training.train \
   --latin-script-labels "$LATIN_SCRIPT_LABELS" \
   --all-script-labels "$ALL_SCRIPT_LABELS" \
   --series-policy "$SERIES_POLICY" \
-  --encoder "$ENCODER" \
+  --encoder-checkpoint "$ENCODER" \
   --experiment experiment_1
 ```
 
@@ -76,7 +76,7 @@ python -m training.train \
   --latin-script-labels "$LATIN_SCRIPT_LABELS" \
   --all-script-labels "$ALL_SCRIPT_LABELS" \
   --series-policy "$SERIES_POLICY" \
-  --encoder "$ENCODER" \
+  --encoder-checkpoint "$ENCODER" \
   --experiment experiment_1
 ```
 
@@ -109,6 +109,33 @@ runs/experiment_1/
 
 The validate and test filenames default to the checkpoint's directory name, so
 they line up with the training arm automatically. Override with `--name`.
+
+### Swapping the encoder
+
+`--encoder` selects which pretrained weights the frozen encoder starts from.
+It defaults to `report-aligned`, the frozen working model. `dinov3` swaps in
+DINOv3 self-supervised ConvNeXt weights of the same width, which leaves
+everything above the encoder untouched, and needs no checkpoint path:
+
+```bash
+python -m training.train \
+  --supervision all-script \
+  --encoder dinov3 \
+  --data-root "$DATA_ROOT" \
+  --latin-script-labels "$LATIN_SCRIPT_LABELS" \
+  --all-script-labels "$ALL_SCRIPT_LABELS" \
+  --series-policy "$SERIES_POLICY" \
+  --experiment dinov3_tiny
+```
+
+Confirm the weights actually resolve before spending a session on them:
+
+```bash
+python -c "import timm; m=timm.create_model('convnext_tiny.dinov3_lvd1689m', pretrained=True, num_classes=0); print('loaded', m.num_features)"
+```
+
+See [`DINOV3_ENCODER.md`](DINOV3_ENCODER.md) for the rationale and what the
+comparison does and does not establish.
 
 ## 3. Validation
 
@@ -173,7 +200,7 @@ Earlier notes and scripts use the experiment-era names:
 | `--arm control` / `--arm candidate` | `--supervision latin-script` / `--supervision all-script` |
 | `--b6-root` | `--latin-script-labels` |
 | `--phase8-root` | `--all-script-labels` |
-| `--report-ssl-checkpoint` | `--encoder` |
+| `--report-ssl-checkpoint` | `--encoder-checkpoint` |
 | `--out-root` / `--out` | `--experiment` |
 | `PYTHONPATH=developments/src` | no longer required |
 
