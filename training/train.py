@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from model._implementation import read_config, train_working_model
+from model._implementation import read_config, run_directory, train_working_model
 
 
 def main() -> None:
@@ -50,21 +50,26 @@ def main() -> None:
         required=True,
         help="frozen report-aligned encoder checkpoint",
     )
-    parser.add_argument("--out-root", default="runs/working_model")
+    parser.add_argument(
+        "--experiment",
+        required=True,
+        help="run name; everything it produces lands under runs/<experiment>/",
+    )
     args = parser.parse_args()
 
     config = read_config(args.config)
     config["data_root"] = str(Path(args.data_root).resolve())
 
-    train_working_model(
+    checkpoint = train_working_model(
         config,
         supervision=args.supervision,
         latin_script_labels_root=args.latin_script_labels,
         all_script_labels_root=args.all_script_labels,
         series_policy_path=args.series_policy,
         encoder_checkpoint=args.encoder,
-        out_root=args.out_root,
+        out_root=run_directory(args.experiment, "train"),
     )
+    print(f"checkpoint: {checkpoint}")
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ from model._implementation import (
     predict,
     read_config,
     resolve_runtime,
+    run_directory,
 )
 from model.architecture import TARGETS, load
 from model.preprocessing import resolve_crop_policy
@@ -74,7 +75,15 @@ def main() -> None:
     parser.add_argument("--config", default="config/current_model.yaml")
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--out", default="runs/working_model/validation.json")
+    parser.add_argument(
+        "--experiment",
+        required=True,
+        help="run name; the report lands under runs/<experiment>/validate/",
+    )
+    parser.add_argument(
+        "--name",
+        help="report filename stem; defaults to the checkpoint's directory name",
+    )
     args = parser.parse_args()
 
     config = read_config(args.config)
@@ -82,8 +91,8 @@ def main() -> None:
 
     result = evaluate(config, checkpoint=args.checkpoint)
 
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    stem = args.name or Path(args.checkpoint).resolve().parent.name
+    out = run_directory(args.experiment, "validate") / f"{stem}.json"
     out.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))
     print(out)

@@ -70,10 +70,21 @@ def train_phase9_arm(
     series_policy_path: str | Path,
     report_ssl_checkpoint: str | Path,
     out_root: str | Path = "runs/phase9_matched_supervision",
+    out_dirname: str | None = None,
 ) -> Path:
+    """Train one matched supervision arm to the fixed endpoint.
+
+    `out_dirname` names the subdirectory of `out_root` the run is written to,
+    defaulting to the arm name, which is the historical layout.  It affects
+    only where the files land: the recorded arm, the supervision that arm
+    selects and every audited quantity are unchanged.
+    """
     arm = str(arm).lower()
     if arm not in PHASE9_ARMS:
         raise ValueError(f"Phase 9 arm must be one of {PHASE9_ARMS}")
+    directory = str(out_dirname) if out_dirname else arm
+    if "/" in directory or "\\" in directory or directory in (".", ".."):
+        raise ValueError("out_dirname must be a single directory name")
     validate_competition_config(config, purpose="train")
     crop_policy = require_b20_contract(config)
     report_payload = load_b16_report_encoder(report_ssl_checkpoint)
@@ -282,7 +293,7 @@ def train_phase9_arm(
     if encoder_sha_final != encoder_sha_initial:
         raise RuntimeError("Phase 9 encoder changed after training")
 
-    out = Path(out_root) / arm
+    out = Path(out_root) / directory
     out.mkdir(parents=True, exist_ok=True)
     checkpoint = out / "model.pt"
     payload = {

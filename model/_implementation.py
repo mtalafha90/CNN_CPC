@@ -46,6 +46,27 @@ SUPERVISION_SURFACES = {
 }
 
 
+RUNS_ROOT = "runs"
+STAGES = ("train", "validate", "test")
+
+
+def run_directory(experiment: str, stage: str, *, runs_root: str | Path = RUNS_ROOT) -> Path:
+    """Return `runs/<experiment>/<stage>`, creating it if needed.
+
+    Everything one experiment produces lives under a single directory, split by
+    the stage that produced it, so a run can be inspected, archived or deleted
+    as one thing.
+    """
+    if stage not in STAGES:
+        raise ValueError(f"stage must be one of: {', '.join(STAGES)}")
+    name = str(experiment).strip()
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        raise ValueError("experiment must be a single directory name")
+    path = Path(runs_root) / name / stage
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _resolve(path: str) -> Callable[..., Any]:
     """Import `module:attribute` from the preserved implementation."""
     ensure_developments_source()
@@ -241,4 +262,5 @@ def train_working_model(
         series_policy_path=str(series_policy_path),
         report_ssl_checkpoint=str(encoder_checkpoint),
         out_root=str(out_root),
+        out_dirname=supervision,
     )

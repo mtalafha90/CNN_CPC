@@ -66,7 +66,7 @@ python -m training.train \
   --all-script-labels "$ALL_SCRIPT_LABELS" \
   --series-policy "$SERIES_POLICY" \
   --encoder "$ENCODER" \
-  --out-root runs/working_model
+  --experiment experiment_1
 ```
 
 ```bash
@@ -77,7 +77,7 @@ python -m training.train \
   --all-script-labels "$ALL_SCRIPT_LABELS" \
   --series-policy "$SERIES_POLICY" \
   --encoder "$ENCODER" \
-  --out-root runs/working_model
+  --experiment experiment_1
 ```
 
 Both arms take all five paths even though each trains on one label surface
@@ -91,28 +91,35 @@ both.
 
 ### Outputs
 
-The directory names remain `control` and `candidate` because the underlying
-frozen trainer writes them:
+Everything one experiment produces lives under a single directory, split by the
+stage that produced it, so a run can be inspected, archived or deleted whole:
 
 ```text
-runs/working_model/control/model.pt              <- --supervision latin-script
-runs/working_model/control/training_audit.json
-runs/working_model/control/history.json
-runs/working_model/candidate/model.pt            <- --supervision all-script
-runs/working_model/candidate/training_audit.json
-runs/working_model/candidate/history.json
+runs/experiment_1/
+├── train/
+│   ├── latin-script/{model.pt, training_audit.json, history.json}
+│   └── all-script/{model.pt, training_audit.json, history.json}
+├── validate/
+│   ├── latin-script.json
+│   └── all-script.json
+└── test/
+    ├── latin-script.csv  + latin-script.csv.manifest.json
+    └── all-script.csv    + all-script.csv.manifest.json
 ```
+
+The validate and test filenames default to the checkpoint's directory name, so
+they line up with the training arm automatically. Override with `--name`.
 
 ## 3. Validation
 
 ```bash
 python -m validation.validate --data-root "$DATA_ROOT" \
-  --checkpoint runs/working_model/control/model.pt \
-  --out runs/working_model/control/validation.json
+  --experiment experiment_1 \
+  --checkpoint runs/experiment_1/train/latin-script/model.pt
 
 python -m validation.validate --data-root "$DATA_ROOT" \
-  --checkpoint runs/working_model/candidate/model.pt \
-  --out runs/working_model/candidate/validation.json
+  --experiment experiment_1 \
+  --checkpoint runs/experiment_1/train/all-script/model.pt
 ```
 
 **Read the result carefully.** These 58 expert-annotated studies were reused
@@ -126,12 +133,12 @@ the model behaving sensibly — not as a comparison between the two arms.
 
 ```bash
 python -m testing.test --data-root "$DATA_ROOT" \
-  --checkpoint runs/working_model/control/model.pt \
-  --out submissions/latin_script.csv
+  --experiment experiment_1 \
+  --checkpoint runs/experiment_1/train/latin-script/model.pt
 
 python -m testing.test --data-root "$DATA_ROOT" \
-  --checkpoint runs/working_model/candidate/model.pt \
-  --out submissions/all_script.csv
+  --experiment experiment_1 \
+  --checkpoint runs/experiment_1/train/all-script/model.pt
 ```
 
 Every study is scored at slice offsets `[-1, 0, 1]` and the probabilities are
@@ -167,9 +174,11 @@ Earlier notes and scripts use the experiment-era names:
 | `--b6-root` | `--latin-script-labels` |
 | `--phase8-root` | `--all-script-labels` |
 | `--report-ssl-checkpoint` | `--encoder` |
+| `--out-root` / `--out` | `--experiment` |
 | `PYTHONPATH=developments/src` | no longer required |
 
-`--data-root`, `--series-policy`, `--out-root` and `--config` are unchanged.
+`--data-root`, `--series-policy` and `--config` are unchanged. `--out-root` and
+`--out` are replaced by `--experiment`, which fixes the whole layout.
 
 ## Historical work
 

@@ -34,6 +34,7 @@ from model._implementation import (
     inference_slice_offsets,
     read_config,
     resolve_runtime,
+    run_directory,
     runtime_budget,
     validate_against_sample,
     validate_submission,
@@ -195,12 +196,23 @@ def main() -> None:
     parser.add_argument("--config", default="config/current_model.yaml")
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--out", default="submission.csv")
+    parser.add_argument(
+        "--experiment",
+        required=True,
+        help="run name; the submission lands under runs/<experiment>/test/",
+    )
+    parser.add_argument(
+        "--name",
+        help="submission filename stem; defaults to the checkpoint's directory name",
+    )
     args = parser.parse_args()
 
     config = read_config(args.config)
     config["data_root"] = str(Path(args.data_root).resolve())
-    predict_test_set(config, checkpoint=args.checkpoint, out_path=args.out)
+
+    stem = args.name or Path(args.checkpoint).resolve().parent.name
+    out_path = run_directory(args.experiment, "test") / f"{stem}.csv"
+    predict_test_set(config, checkpoint=args.checkpoint, out_path=out_path)
 
 
 if __name__ == "__main__":

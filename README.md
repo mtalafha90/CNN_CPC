@@ -37,6 +37,7 @@ CNN_CPC/
 ├── validation/      scoring against the expert-annotated studies
 ├── testing/         competition test-set prediction
 ├── tests/           contract tests for the interface above
+├── runs/            one directory per experiment: train/, validate/, test/
 ├── docs/            model and workflow documentation
 ├── developments/    the complete research archive
 ├── requirements.txt
@@ -61,13 +62,15 @@ The dataset and run artefacts are deliberately not stored in Git.
 
 ```bash
 # train on a chosen report-label surface
-python -m training.train --supervision all-script --data-root ... --out-root runs/working_model
+python -m training.train --supervision all-script --data-root ... --experiment experiment_1
 
 # score the expert-annotated studies (a diagnostic, not a test)
-python -m validation.validate --data-root ... --checkpoint runs/working_model/candidate/model.pt
+python -m validation.validate --data-root ... --experiment experiment_1 \
+  --checkpoint runs/experiment_1/train/all-script/model.pt
 
 # predict the competition test set
-python -m testing.test --data-root ... --checkpoint runs/working_model/candidate/model.pt --out submission.csv
+python -m testing.test --data-root ... --experiment experiment_1 \
+  --checkpoint runs/experiment_1/train/all-script/model.pt
 
 # print the architecture and training contract
 python -m model.architecture

@@ -108,6 +108,30 @@ def test_unknown_architecture_is_refused_with_the_supported_list():
         _implementation.build_network({"architecture": "something_else_v1"})
 
 
+def test_run_directory_groups_every_stage_under_one_experiment(tmp_path):
+    made = {
+        stage: _implementation.run_directory("experiment_1", stage, runs_root=tmp_path)
+        for stage in _implementation.STAGES
+    }
+    for stage, path in made.items():
+        assert path.is_dir()
+        assert path.name == stage
+        assert path.parent.name == "experiment_1"
+    # One experiment is one directory, so it can be archived or removed whole.
+    assert len({path.parent for path in made.values()}) == 1
+
+
+def test_run_directory_rejects_an_unknown_stage(tmp_path):
+    with pytest.raises(ValueError, match="stage must be one of"):
+        _implementation.run_directory("experiment_1", "predict", runs_root=tmp_path)
+
+
+@pytest.mark.parametrize("name", ["", "  ", "a/b", "..", "."])
+def test_run_directory_rejects_paths_masquerading_as_names(name, tmp_path):
+    with pytest.raises(ValueError, match="single directory name"):
+        _implementation.run_directory(name, "train", runs_root=tmp_path)
+
+
 def test_checkpoint_without_weights_is_refused(tmp_path):
     import torch
 
