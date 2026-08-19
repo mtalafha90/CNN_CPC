@@ -8,19 +8,37 @@ fine-tuned one stage, all-script supervision), submitted 2026-08-19
 
 ## The rulers are now calibrated
 
-The first submission ends the project's central measurement problem. The
-frozen-encoder model, on three surfaces:
+The first submission ends the project's central measurement problem for the
+expert surface. The frozen-encoder model, trained on all 4,349 report-only
+studies:
 
 ```text
 58 expert studies (local)     0.652     understates by about 0.036
 hidden competition test       0.688     the reference
-499 weak studies (local)      0.743     overstates by about 0.055
 ```
 
-Both local surfaces are biased, in opposite directions, and the truth sits
-between them slightly nearer the expert one. Neither should be quoted as an
-estimate of competition performance again; they remain useful for ordering
-models, not for predicting the score.
+The expert surface is biased low rather than merely noisy. It should not be
+quoted as an estimate of competition performance; it remains useful for
+ordering models, not for predicting the score.
+
+**The 499-study surface is not yet calibrated, and an earlier version of this
+page said otherwise.** It listed 0.743 as a third row of the table above, as
+though one model had been measured on three surfaces. It had not. The 0.743 is
+`candidate_macro_auc` from the Phase-9 v2 comparison, and that model was trained
+on **3,850** studies with the 499 held out -- necessarily, since scoring a
+full-population model on those studies would be scoring it on its own training
+data. Subtracting a 3,850-study model's local score from a 4,349-study model's
+hidden score does not measure a surface's bias; it measures two different
+models. The "overstates by about 0.055" that followed from it was not supported.
+
+Calibrating it properly needs the hidden score of the *same* model that scored
+0.743 locally, which is what the third submission is for:
+
+```text
+Phase-9 v2 candidate (all-script, 3,850 studies, 499 held out)
+    499 weak studies (local)    0.7434
+    hidden competition test     pending
+```
 
 ## Two submissions, and what the pair adds
 
