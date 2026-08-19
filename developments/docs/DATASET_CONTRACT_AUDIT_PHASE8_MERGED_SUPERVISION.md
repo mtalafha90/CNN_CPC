@@ -81,7 +81,7 @@ The builder verifies:
 ## Run
 
 ```bash
-cd /media/talafha/Disk_1/CNN_CPC_current
+cd /media/talafha/Disk_1/CNN_CPC
 conda activate rsna-knee
 git pull --ff-only origin main
 

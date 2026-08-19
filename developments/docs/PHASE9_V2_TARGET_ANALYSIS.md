@@ -92,7 +92,7 @@ With only 12 targets, these are not inferential evidence and must not drive poli
 ## Command
 
 ```bash
-cd /media/talafha/Disk_1/CNN_CPC_current
+cd /media/talafha/Disk_1/CNN_CPC
 conda activate rsna-knee
 git pull --ff-only origin main
 

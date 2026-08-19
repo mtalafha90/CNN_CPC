@@ -149,7 +149,7 @@ use hidden competition / new external expert data for promotion YES
 ```bash
 export DATA_ROOT="/media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection"
 export B6_ROOT="/media/talafha/Disk_1/CNN_CPC/runs/b6_report_labels_v121"
-export PHASE8_ROOT="/media/talafha/Disk_1/CNN_CPC_current/runs/translation_rescue_supervision_v1"
+export PHASE8_ROOT="/media/talafha/Disk_1/CNN_CPC/runs/translation_rescue_supervision_v1"
 export SERIES_POLICY="/media/talafha/Disk_1/CNN_CPC/runs/b12_variable_series/audit/series_policy.json"
 export B16_ENCODER="/media/talafha/Disk_1/CNN_CPC/runs/b16_full_report/report_ssl/b16_report_encoder.pt"
 export PV1_MANIFEST="runs/prospective_weak_v1/split_manifest.json"
