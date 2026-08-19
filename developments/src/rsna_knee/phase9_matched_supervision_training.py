@@ -409,6 +409,9 @@ def train_phase9_arm(
         "target_balance_rule": "frozen B7 mean target mass / target mass; recomputed mechanically from each arm's supervision",
         "target_balance_multipliers": [float(x) for x in target_multiplier],
         "candidate_added_parameters": int(B34_EXPECTED_NEW_PARAMETERS),
+        # Non-zero means the seed was varied on purpose to build an ensemble
+        # member, so this run is not stochastically matched to the others.
+        "ensemble_member": int(config.get("ensemble_member", 0) or 0),
         "construction_seed": construction_seed,
         "loader_seed": loader_seed,
         "post_construction_training_seed": post_seed,

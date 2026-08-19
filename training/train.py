@@ -26,6 +26,7 @@ from model._implementation import (
     read_config,
     run_directory,
     set_label_confidence,
+    set_seed,
     train_working_model,
 )
 
@@ -114,9 +115,14 @@ def main() -> None:
 
     config = read_config(args.config)
     config["data_root"] = str(Path(args.data_root).resolve())
+    config = set_seed(config, args.seed)
     if args.seed is not None:
-        config["seed"] = int(args.seed)
-        print(f"[seed] {args.seed} (default is {read_config(args.config).get('seed')})")
+        print(
+            f"[seed] {args.seed} (the matched protocol uses "
+            f"{read_config(args.config).get('seed')})"
+        )
+        if config.get("ensemble_member"):
+            print("[seed] recorded as an ensemble member, not a matched arm")
 
     config = set_label_confidence(
         config,

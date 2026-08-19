@@ -93,10 +93,20 @@ def _require_b13_contract(config: dict) -> None:
         "b7_eval_batch_size": 2,
         "b7_n_bootstrap": 5000,
     }
+    # An ensemble member deliberately varies the stochastic path: that is the
+    # entire point of it, since averaging models that shared a seed gains
+    # nothing. The contract still refuses an undeclared seed change, which is
+    # what it exists to catch -- a run that drifted off the protocol without
+    # anyone noticing. Declaring `ensemble_member` is the deviation being made
+    # on purpose and on the record.
+    declared_member = int(config.get("ensemble_member", 0) or 0)
     for key, expected in integer_contract.items():
         value = int(config.get(key, expected))
-        if value != expected:
-            raise ValueError(f"B13-v1 freezes {key}={expected}; got {value}")
+        if value == expected:
+            continue
+        if key == "seed" and declared_member:
+            continue
+        raise ValueError(f"B13-v1 freezes {key}={expected}; got {value}")
 
     bool_contract = {
         "competition_mode": True,

@@ -321,6 +321,29 @@ def set_label_confidence(config: dict, **targets: float | None) -> dict:
     return updated
 
 
+# The seed every protocol-matched experiment has used. A run that varies it is
+# not protocol-matched, and has to say so rather than quietly differ.
+FROZEN_PROTOCOL_SEED = 2026
+
+
+def set_seed(config: dict, seed: int | None) -> dict:
+    """Return `config` with the seed set, declared as an ensemble member.
+
+    Changing the seed is how a genuinely different model gets trained, which is
+    the only thing that makes an ensemble worth averaging. It is also a
+    departure from the matched protocol every comparison so far has relied on,
+    so the run records itself as an ensemble member: the frozen contract then
+    permits the change while still refusing an undeclared one.
+    """
+    if seed is None:
+        return config
+    updated = dict(config)
+    updated["seed"] = int(seed)
+    if int(seed) != FROZEN_PROTOCOL_SEED:
+        updated["ensemble_member"] = int(seed)
+    return updated
+
+
 def train_working_model(
     config: dict,
     *,
