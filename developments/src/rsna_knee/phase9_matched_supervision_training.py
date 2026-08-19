@@ -41,6 +41,12 @@ from .b20_crop_focus import CropFocusedVariableSeriesKneeDataset, require_b20_co
 from .b34_training_only_context_scaffold import B34_EXPECTED_NEW_PARAMETERS, b34_model_spec, build_b34_model
 from .budget import RuntimeBudget
 from .dinov3_encoder import attach_dinov3_encoder
+from .encoder_finetune import (
+    DEFAULT_ENCODER_LR_SCALE,
+    parameter_groups,
+    split_parameters,
+    unfreeze_encoder_tail,
+)
 from .data import backfill_series_metadata, load_series_csv, load_train_csv
 from .phase9_supervision import PHASE9_VERSION, REPORT_ONLY_STUDIES, load_phase9_arm_supervision
 from .policy import validate_competition_config
@@ -75,6 +81,8 @@ def train_phase9_arm(
     out_dirname: str | None = None,
     encoder_source: str = "report-aligned",
     dinov3_variant: str = "tiny",
+    encoder_trainable_stages: int = 0,
+    encoder_lr_scale: float = DEFAULT_ENCODER_LR_SCALE,
 ) -> Path:
     """Train one matched supervision arm to the fixed endpoint.
 
@@ -181,6 +189,14 @@ def train_phase9_arm(
         spec["dinov3_variant"] = dinov3_variant
     spec["encoder_source"] = encoder_source
     freeze_encoder(model)
+    finetune = unfreeze_encoder_tail(model, encoder_trainable_stages)
+    spec.update(finetune)
+    if encoder_trainable_stages:
+        print(
+            f"[encoder] freeing {finetune['encoder_trainable_parameters']:,} parameters "
+            f"in the last {encoder_trainable_stages} block(s) at "
+            f"{encoder_lr_scale:g}x the head learning rate"
+        )
     model.gradient_checkpointing = False
     encoder_sha_initial = encoder_state_sha256(model.encoder)
     model = model.to(runtime.device)
@@ -188,9 +204,14 @@ def train_phase9_arm(
     # Ensure both arms see identical dropout/augmentation RNG after construction.
     seed_everything(post_seed)
 
-    head_params = [p for n, p in model.named_parameters() if not n.startswith("encoder.") and p.requires_grad]
-    if not head_params or any(p.requires_grad for p in model.encoder.parameters()):
+    head_params, encoder_params = split_parameters(model)
+    if not head_params:
+        raise RuntimeError("Phase 9 found no trainable head parameters")
+    if encoder_trainable_stages == 0 and encoder_params:
         raise RuntimeError("Phase 9 frozen-encoder contract failed")
+    if encoder_trainable_stages and not encoder_params:
+        raise RuntimeError("Phase 9 was asked to fine-tune the encoder but freed nothing")
+    trainable_params = head_params + encoder_params
     named = dict(model.named_parameters())
     gradient_names = _candidate_gradient_names()
     for name in gradient_names:
@@ -198,7 +219,11 @@ def train_phase9_arm(
             raise RuntimeError(f"Phase 9 B34 missing trainable parameter {name}")
 
     optimizer = torch.optim.AdamW(
-        [{"params": head_params, "lr": float(config.get("b7_head_lr", B17_HEAD_LR))}],
+        parameter_groups(
+            model,
+            head_lr=float(config.get("b7_head_lr", B17_HEAD_LR)),
+            encoder_lr_scale=encoder_lr_scale,
+        ),
         weight_decay=float(config.get("b7_weight_decay", 1e-4)),
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -258,7 +283,7 @@ def train_phase9_arm(
 
             if clip > 0:
                 scaler.unscale_(optimizer)
-                nn.utils.clip_grad_norm_(head_params, clip)
+                nn.utils.clip_grad_norm_(trainable_params, clip)
             scaler.step(optimizer)
             scaler.update()
 
@@ -308,8 +333,14 @@ def train_phase9_arm(
         print(f"[Phase9/{arm}] E{epoch} loss={row['loss']:.10f} time={row['epoch_seconds']/60:.1f} min")
 
     encoder_sha_final = encoder_state_sha256(model.encoder)
-    if encoder_sha_final != encoder_sha_initial:
-        raise RuntimeError("Phase 9 encoder changed after training")
+    encoder_moved = encoder_sha_final != encoder_sha_initial
+    if encoder_trainable_stages == 0 and encoder_moved:
+        raise RuntimeError("Phase 9 encoder changed after training despite being frozen")
+    if encoder_trainable_stages and not encoder_moved:
+        raise RuntimeError(
+            "Phase 9 fine-tuned the encoder but its weights are unchanged; "
+            "the parameters were not reaching the optimizer"
+        )
 
     out = Path(out_root) / directory
     out.mkdir(parents=True, exist_ok=True)
@@ -348,6 +379,9 @@ def train_phase9_arm(
         "input_normalization": B13_INPUT_NORMALIZATION,
         "encoder_source": encoder_source,
         "encoder": encoder_description,
+        "encoder_trainable_stages": int(encoder_trainable_stages),
+        "encoder_lr_scale": float(encoder_lr_scale),
+        "encoder_finetune": finetune,
         "encoder_frozen": True,
         "encoder_sha256_initial": encoder_sha_initial,
         "encoder_sha256_final": encoder_sha_final,
@@ -401,7 +435,9 @@ def load_phase9_checkpoint(
         raise ValueError("Phase-9 checkpoint lacks matched RNG reset")
     initial_sha = str(payload.get("encoder_sha256_initial", ""))
     final_sha = str(payload.get("encoder_sha256_final", ""))
-    if not initial_sha or initial_sha != final_sha:
+    if not initial_sha or not final_sha:
+        raise ValueError("Phase-9 checkpoint is missing an encoder fingerprint")
+    if int(payload.get("encoder_trainable_stages", 0)) == 0 and initial_sha != final_sha:
         raise ValueError("Phase-9 checkpoint encoder fingerprint changed")
 
     model = build_b34_model(payload["model_spec"], pretrained_weights=False)

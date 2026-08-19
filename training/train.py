@@ -61,6 +61,18 @@ def main() -> None:
         help="report-aligned encoder checkpoint; required for --encoder report-aligned",
     )
     parser.add_argument(
+        "--encoder-trainable-stages",
+        type=int,
+        default=0,
+        help="let the last N encoder blocks learn (0 keeps the encoder frozen)",
+    )
+    parser.add_argument(
+        "--encoder-lr-scale",
+        type=float,
+        default=0.05,
+        help="learning rate for those blocks, as a fraction of the head's",
+    )
+    parser.add_argument(
         "--dinov3-variant",
         choices=("tiny", "small"),
         default="tiny",
@@ -88,6 +100,8 @@ def main() -> None:
         encoder_checkpoint=args.encoder_checkpoint,
         encoder=args.encoder,
         dinov3_variant=args.dinov3_variant,
+        encoder_trainable_stages=args.encoder_trainable_stages,
+        encoder_lr_scale=args.encoder_lr_scale,
         out_root=run_directory(args.experiment, "train"),
     )
     print(f"checkpoint: {checkpoint}")

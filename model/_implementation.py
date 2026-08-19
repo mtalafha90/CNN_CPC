@@ -291,6 +291,8 @@ def train_working_model(
     out_root: str | Path,
     encoder: str = "report-aligned",
     dinov3_variant: str = "tiny",
+    encoder_trainable_stages: int = 0,
+    encoder_lr_scale: float = 0.05,
 ):
     """Train the working model on the full report-only study population.
 
@@ -315,4 +317,6 @@ def train_working_model(
         out_dirname=supervision,
         encoder_source=encoder,
         dinov3_variant=dinov3_variant,
+        encoder_trainable_stages=encoder_trainable_stages,
+        encoder_lr_scale=encoder_lr_scale,
     )
