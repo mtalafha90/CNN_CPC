@@ -217,3 +217,32 @@ def test_a_report_aligned_checkpoint_still_reloads_unchanged(tmp_path):
 
     reloaded, _ = load_checkpoint(path)
     assert type(reloaded.encoder).__name__ == "ConvNeXtSliceEncoder"
+
+
+def test_the_seed_can_be_varied_from_the_command_line():
+    """Ensembling only pays when the members differ.
+
+    Two runs that share a seed share their initialisation, data order and
+    augmentation, so they make the same mistakes and averaging them gains
+    nothing. Varying the seed is what makes an ensemble worth building.
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "training.train", "--help"],
+        capture_output=True, text=True,
+    )
+    assert "--seed" in result.stdout
+
+
+@pytest.mark.parametrize("stage", ["validate", "test"])
+def test_both_scoring_stages_accept_several_models(stage):
+    import subprocess
+    import sys
+
+    module = "validation.validate" if stage == "validate" else "testing.test"
+    result = subprocess.run(
+        [sys.executable, "-m", module, "--help"], capture_output=True, text=True
+    )
+    assert "repeat the flag" in result.stdout

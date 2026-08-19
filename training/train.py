@@ -79,6 +79,15 @@ def main() -> None:
         help="DINOv3 ConvNeXt size; both are 768-d and drop in unchanged",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        help=(
+            "random seed; change it to train a genuinely different model. "
+            "Averaging models that share a seed gains nothing, because they "
+            "make the same mistakes"
+        ),
+    )
+    parser.add_argument(
         "--experiment",
         required=True,
         help="run name; everything it produces lands under runs/<experiment>/",
@@ -90,6 +99,9 @@ def main() -> None:
 
     config = read_config(args.config)
     config["data_root"] = str(Path(args.data_root).resolve())
+    if args.seed is not None:
+        config["seed"] = int(args.seed)
+        print(f"[seed] {args.seed} (default is {read_config(args.config).get('seed')})")
 
     checkpoint = train_working_model(
         config,
