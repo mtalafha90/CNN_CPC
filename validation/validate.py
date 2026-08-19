@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -36,7 +37,7 @@ EVALUATION_ROLE = (
 def evaluate(
     config: dict,
     *,
-    checkpoint: str,
+    checkpoint: str | Path | Sequence[str | Path],
     device: str | None = None,
     loader=load,
 ) -> dict:
@@ -51,22 +52,39 @@ def evaluate(
     print(runtime.describe())
 
     crop_policy = resolve_crop_policy(config)
-    model, payload = loader(checkpoint, device=device or runtime.device)
+    paths = (
+        [Path(checkpoint)]
+        if isinstance(checkpoint, (str, Path))
+        else [Path(p) for p in checkpoint]
+    )
+    models, payloads = [], []
+    for path in paths:
+        built, built_payload = loader(path, device=device or runtime.device)
+        built.eval()
+        models.append(built)
+        payloads.append(built_payload)
+    model, payload = models[0], payloads[0]
 
     studies = read_studies(root, config, split="train")
     series, metadata_repair = read_series(root, config, split="train")
     expert = expert_loader(config, root, studies, series, runtime, crop_policy)
 
-    uids, prediction = predict(model, expert["loader"], runtime)
-    if uids != expert["uids"]:
-        raise RuntimeError("expert study order changed between loading and prediction")
+    predictions = []
+    for member in models:
+        uids, member_prediction = predict(member, expert["loader"], runtime)
+        if uids != expert["uids"]:
+            raise RuntimeError("expert study order changed between loading and prediction")
+        predictions.append(member_prediction)
+    prediction = np.mean(predictions, axis=0)
 
     macro, per_target = macro_auc(expert["truth"], prediction)
     if not np.isfinite(macro) or not np.isfinite(per_target).all():
         raise RuntimeError("every one of the 12 expert AUCs must be defined")
 
     return {
-        "checkpoint": str(Path(checkpoint).resolve()),
+        "checkpoints": [str(p.resolve()) for p in paths],
+        "ensemble_size": len(paths),
+        "checkpoint": str(paths[0].resolve()),
         "completed_epochs": int(payload.get("completed_epochs", -1)),
         "evaluation_role": EVALUATION_ROLE,
         "n_studies": len(expert["uids"]),
@@ -85,7 +103,12 @@ def main() -> None:
     )
     parser.add_argument("--config", default="config/current_model.yaml")
     parser.add_argument("--data-root", required=True)
-    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument(
+        "--checkpoint",
+        required=True,
+        action="append",
+        help="model to score; repeat the flag to average several",
+    )
     parser.add_argument(
         "--experiment",
         required=True,
@@ -102,7 +125,10 @@ def main() -> None:
 
     result = evaluate(config, checkpoint=args.checkpoint)
 
-    stem = args.name or Path(args.checkpoint).resolve().parent.name
+    default_stem = Path(args.checkpoint[0]).resolve().parent.name
+    if len(args.checkpoint) > 1:
+        default_stem = f"ensemble_{len(args.checkpoint)}"
+    stem = args.name or default_stem
     out = run_directory(args.experiment, "validate") / f"{stem}.json"
     out.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))

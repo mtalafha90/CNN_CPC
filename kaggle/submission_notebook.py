@@ -68,10 +68,12 @@ if CODE_ROOT is None:
         print("   ", path.relative_to(MINE))
     raise FileNotFoundError("repository not found -- see the listing above")
 
-weights = sorted(MINE.rglob("*.pt"))
-if not weights:
+# Every .pt found is used. One model scores on its own; several are averaged,
+# which is the cheapest reliable way to gain a little accuracy.
+MODEL_PATHS = sorted(MINE.rglob("*.pt"))
+if not MODEL_PATHS:
     raise FileNotFoundError("no .pt file found -- is the model dataset attached?")
-MODEL_PATH = weights[0]
+MODEL_PATH = MODEL_PATHS[0]
 
 DATA_ROOT = COMP if (COMP / "test.csv").is_file() else None
 if DATA_ROOT is None:
@@ -88,7 +90,8 @@ if DATA_ROOT is None:
 sys.path.insert(0, str(CODE_ROOT))
 sys.path.insert(0, str(CODE_ROOT / "developments" / "src"))
 print("code :", CODE_ROOT)
-print("model:", MODEL_PATH)
+for path in MODEL_PATHS:
+    print("model:", path)
 print("data :", DATA_ROOT)
 
 
@@ -122,7 +125,7 @@ from testing.test import predict_test_set
 
 submission = predict_test_set(
     config,
-    checkpoint=str(MODEL_PATH),
+    checkpoint=[str(p) for p in MODEL_PATHS],
     out_path="/kaggle/working/submission.csv",
 )
 print("wrote", submission)

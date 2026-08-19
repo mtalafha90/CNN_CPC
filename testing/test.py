@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -58,22 +59,46 @@ def _file_digest(path: str | Path) -> str:
 def predict_test_set(
     config: dict,
     *,
-    checkpoint: str | Path,
+    checkpoint: str | Path | Sequence[str | Path],
     out_path: str | Path = "submission.csv",
     loader=load,
 ) -> Path:
     """Score every test study and write the submission and its manifest.
 
-    `loader` rebuilds the model from its checkpoint. It defaults to the
-    supported one; a variant whose checkpoint is a different width supplies its
-    own, so inference stays shared rather than duplicated.
+    `checkpoint` may name several models. Their probabilities are averaged,
+    which is the cheapest reliable way to gain a little accuracy: independent
+    models make different mistakes, and averaging cancels some of them. Every
+    model sees each study once, in one pass over the scans, so the expensive
+    part -- reading and decoding MRI -- is paid once no matter how many models
+    are averaged.
+
+    `loader` rebuilds a model from its checkpoint. It defaults to the supported
+    one; a variant whose checkpoint differs supplies its own, so inference stays
+    shared rather than duplicated.
     """
     crop_policy = resolve_crop_policy(config)
     runtime = resolve_runtime(config)
     print(runtime.describe())
 
-    checkpoint = Path(checkpoint).resolve()
-    model, payload = loader(checkpoint, device=runtime.device)
+    paths = (
+        [Path(checkpoint).resolve()]
+        if isinstance(checkpoint, (str, Path))
+        else [Path(p).resolve() for p in checkpoint]
+    )
+    if not paths:
+        raise ValueError("no checkpoint given")
+
+    models, payloads = [], []
+    for path in paths:
+        built, payload = loader(path, device=runtime.device)
+        built.eval()
+        models.append(built)
+        payloads.append(payload)
+        print(f"[ensemble] loaded {path.name} from {path.parent.name}")
+    model, payload = models[0], payloads[0]
+    checkpoint = paths[0]
+    if len(models) > 1:
+        print(f"[ensemble] averaging {len(models)} models")
 
     root = Path(config["data_root"])
     test = read_studies(root, config, split="test")
@@ -142,13 +167,11 @@ def predict_test_set(
 
         views = []
         for view in range(volumes.shape[1]):
-            with autocast(runtime):
-                logits = model(
-                    volumes[:, view].to(runtime.device, non_blocking=True),
-                    present,
-                    series_meta,
-                )
-            views.append(torch.sigmoid(logits.float()))
+            frame = volumes[:, view].to(runtime.device, non_blocking=True)
+            for member in models:
+                with autocast(runtime):
+                    logits = member(frame, present, series_meta)
+                views.append(torch.sigmoid(logits.float()))
 
         probability_blocks.append(torch.stack(views, dim=0).mean(dim=0).cpu().numpy())
         scored_uids.extend(str(uid) for uid in batch["study_uid"])
@@ -167,8 +190,11 @@ def predict_test_set(
     frame.to_csv(output, index=False)
 
     manifest = {
+        "checkpoints": [str(p) for p in paths],
+        "ensemble_size": len(paths),
         "checkpoint": str(checkpoint),
         "checkpoint_sha256": _file_digest(checkpoint),
+        "checkpoint_sha256_all": [_file_digest(p) for p in paths],
         "submission_sha256": _file_digest(output),
         "completed_epochs": int(payload.get("completed_epochs", -1)),
         "fixed_endpoint": bool(payload.get("fixed_endpoint", False)),
@@ -201,7 +227,12 @@ def main() -> None:
     )
     parser.add_argument("--config", default="config/current_model.yaml")
     parser.add_argument("--data-root", required=True)
-    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument(
+        "--checkpoint",
+        required=True,
+        action="append",
+        help="model to score with; repeat the flag to average several",
+    )
     parser.add_argument(
         "--experiment",
         required=True,
@@ -216,7 +247,10 @@ def main() -> None:
     config = read_config(args.config)
     config["data_root"] = str(Path(args.data_root).resolve())
 
-    stem = args.name or Path(args.checkpoint).resolve().parent.name
+    default_stem = Path(args.checkpoint[0]).resolve().parent.name
+    if len(args.checkpoint) > 1:
+        default_stem = f"ensemble_{len(args.checkpoint)}"
+    stem = args.name or default_stem
     out_path = run_directory(args.experiment, "test") / f"{stem}.csv"
     predict_test_set(config, checkpoint=args.checkpoint, out_path=out_path)
 
