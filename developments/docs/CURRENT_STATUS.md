@@ -1,15 +1,15 @@
 # Current project status
 
-**Snapshot:** 2026-08-18
+**Snapshot:** 2026-08-19
 **Package:** `0.30.0`
 **Primary metric:** macro ROC AUC across 12 targets
-**First independent evidence:** hidden-test macro AUC **0.688** (frozen-encoder,
-all-script supervision), submitted 2026-08-19
+**Best independent evidence:** hidden-test macro AUC **0.694** (encoder
+fine-tuned one stage, all-script supervision), submitted 2026-08-19
 
 ## The rulers are now calibrated
 
-The first submission ends the project's central measurement problem. The same
-model, on three surfaces:
+The first submission ends the project's central measurement problem. The
+frozen-encoder model, on three surfaces:
 
 ```text
 58 expert studies (local)     0.652     understates by about 0.036
@@ -21,6 +21,34 @@ Both local surfaces are biased, in opposite directions, and the truth sits
 between them slightly nearer the expert one. Neither should be quoted as an
 estimate of competition performance again; they remain useful for ordering
 models, not for predicting the score.
+
+## Two submissions, and what the pair adds
+
+```text
+                        58 expert    hidden    offset
+frozen encoder            0.652       0.688    +0.036
+fine-tuned, 1 stage       0.663       0.694    +0.031
+difference               +0.011      +0.006
+```
+
+The offset held to within 0.005 across the two, the first sign that the expert
+surface is biased rather than merely noisy. If that survives a third point,
+differences measured on it can be read as roughly tracking hidden differences,
+and `hidden ~ expert + 0.033` becomes a usable rough predictor. Two points
+cannot establish it.
+
+**Encoder fine-tuning is not established by this.** Both gaps are smaller than
+either surface can resolve: 58 studies carry an error near +/-0.16 per target,
+and a single hidden score of this size has an uncertainty of roughly +/-0.01.
+What can be said is that two surfaces moved the same way by a similar amount,
+which is weak positive evidence and a reason to keep probing the line, not a
+result. The honest summary is that the recipe has not been shown to hurt and
+may help a little.
+
+The practical consequence is a ceiling on this style of experiment. A change
+worth roughly +0.005 cannot be told from noise one submission at a time, so the
+remaining work should favour changes carrying a mechanism and a measurement
+over further small architectural variations.
 
 For context, published work on this task shape - twelve knee findings from MRI
 - reports roughly 0.73 to 0.81. A first submission at 0.688 is within reach of
