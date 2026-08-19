@@ -3,7 +3,29 @@
 **Snapshot:** 2026-08-18
 **Package:** `0.30.0`
 **Primary metric:** macro ROC AUC across 12 targets
-**Independent evidence to date:** none — no competition submission has been made
+**First independent evidence:** hidden-test macro AUC **0.688** (frozen-encoder,
+all-script supervision), submitted 2026-08-19
+
+## The rulers are now calibrated
+
+The first submission ends the project's central measurement problem. The same
+model, on three surfaces:
+
+```text
+58 expert studies (local)     0.652     understates by about 0.036
+hidden competition test       0.688     the reference
+499 weak studies (local)      0.743     overstates by about 0.055
+```
+
+Both local surfaces are biased, in opposite directions, and the truth sits
+between them slightly nearer the expert one. Neither should be quoted as an
+estimate of competition performance again; they remain useful for ordering
+models, not for predicting the score.
+
+For context, published work on this task shape - twelve knee findings from MRI
+- reports roughly 0.73 to 0.81. A first submission at 0.688 is within reach of
+that band, and the long-standing 0.94 target has no published precedent for
+this problem.
 
 ## Where things stand
 
