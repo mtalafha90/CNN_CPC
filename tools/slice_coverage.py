@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
 from pathlib import Path
 
 import numpy as np
 
-from data.dataset import read_series, read_studies
-from model._implementation import read_config
+from data.dataset import read_series
+from model._implementation import ensure_developments_source, read_config
+
+ensure_developments_source()
 
 # Roughly how many consecutive slices a small focal structure spans. The exact
 # value is not critical -- the report shows a range so the conclusion does not
@@ -36,16 +37,26 @@ FOCAL_SPANS = (3, 5, 8)
 SAMPLED_SLICES = 16
 
 
-def _frame_counts(root: Path, series, limit: int | None) -> dict[str, int]:
-    """Count frames per series by looking at what is on disk."""
+def _frame_counts(root: Path, series, limit: int | None, *, split: str = "train") -> dict[str, int]:
+    """Count frames per series, using the repository's own folder resolution.
+
+    The layout is `<root>/<split>_series/<study>/<series>/`, but that is the
+    loader's business rather than this tool's, so ask the loader.
+    """
+    from rsna_knee.dicom import DICOM_SUFFIXES, find_series_dir
+
     counts: dict[str, int] = {}
     rows = series if limit is None else series.head(limit)
-    for row in rows.itertuples():
-        folder = root / "train" / row.StudyInstanceUID / row.SeriesInstanceUID
-        if not folder.is_dir():
-            folder = root / row.StudyInstanceUID / row.SeriesInstanceUID
-        if folder.is_dir():
-            counts[row.SeriesInstanceUID] = sum(1 for _ in folder.glob("*.dcm"))
+    total = len(rows)
+    for seen, row in enumerate(rows.itertuples(), start=1):
+        folder = find_series_dir(root, split, row.StudyInstanceUID, row.SeriesInstanceUID)
+        if folder is not None:
+            counts[row.SeriesInstanceUID] = sum(
+                1 for p in folder.iterdir()
+                if p.is_file() and p.suffix.lower() in DICOM_SUFFIXES
+            )
+        if seen % 2000 == 0:
+            print(f"   counted {seen}/{total} series", flush=True)
     return counts
 
 
@@ -63,6 +74,7 @@ def main() -> None:
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--limit", type=int, default=None,
                         help="only inspect this many series (leave off for all)")
+    parser.add_argument("--split", default="train", choices=("train", "test"))
     parser.add_argument("--out", default="runs/slice_coverage.json")
     args = parser.parse_args()
 
@@ -70,15 +82,14 @@ def main() -> None:
     config["data_root"] = str(Path(args.data_root).resolve())
     root = Path(config["data_root"])
 
-    studies = read_studies(root, config, split="train")
-    series, _ = read_series(root, config, split="train")
+    series, _ = read_series(root, config, split=args.split)
     print(f"series in table: {len(series)}")
 
-    counts = _frame_counts(root, series, args.limit)
+    counts = _frame_counts(root, series, args.limit, split=args.split)
     if not counts:
         raise SystemExit(
-            "found no series folders on disk -- check --data-root points at the "
-            "folder holding the study directories"
+            f"found no series folders under {root} -- expected "
+            f"{root}/{args.split}_series/<study>/<series>/"
         )
     print(f"series measured : {len(counts)}")
 
