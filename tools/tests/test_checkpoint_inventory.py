@@ -123,3 +123,40 @@ def test_a_file_that_is_not_a_checkpoint_is_refused(tmp_path):
 def test_an_empty_folder_still_reports_nothing_found(tmp_path):
     """A folder with no checkpoints is a real answer, unlike a mistyped file."""
     assert checkpoints_under(tmp_path) == []
+
+
+def test_a_plain_supervision_name_is_used_as_is(tmp_path):
+    path = _write(tmp_path / "model.pt", supervision="all-script")
+    assert describe_checkpoint(path)["supervision"] == "all-script"
+
+
+def test_an_older_checkpoint_names_its_surface_from_the_arm(tmp_path):
+    """Earlier runs store the whole supervision summary, not a surface name.
+
+    Printing that dict raw buries the one word the reader wants in several
+    hundred characters of per-target cell counts.
+    """
+    path = _write(
+        tmp_path / "model.pt",
+        supervision={"training_studies": 3850, "held_out_pv2_studies": 499},
+        supervision_source={"arm": "candidate"},
+    )
+    record = describe_checkpoint(path)
+    assert record["supervision"] == "all-script (candidate arm)"
+    assert "3,850" in record["training_population"]
+    assert "499 held out" in record["training_population"]
+
+
+def test_the_control_arm_maps_to_the_latin_script_surface(tmp_path):
+    path = _write(tmp_path / "model.pt", supervision={}, arm="control")
+    assert describe_checkpoint(path)["supervision"] == "latin-script (control arm)"
+
+
+def test_a_full_population_model_reports_no_holdout(tmp_path):
+    path = _write(tmp_path / "model.pt", supervision="all-script")
+    assert describe_checkpoint(path)["training_population"] is None
+
+
+def test_an_unrecorded_surface_says_so_rather_than_guessing(tmp_path):
+    path = _write(tmp_path / "model.pt")
+    assert describe_checkpoint(path)["supervision"] == "unrecorded"

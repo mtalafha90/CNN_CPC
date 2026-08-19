@@ -44,6 +44,47 @@ def _content_hash(path: Path) -> str:
     return digest.hexdigest()[:12]
 
 
+# Which label surface each experiment arm trained on. The arm names are the
+# older vocabulary; the surface names say what the arm actually read.
+ARM_SURFACES = {"control": "latin-script", "candidate": "all-script"}
+
+
+def supervision_label(payload: dict) -> str:
+    """Name the label surface, whatever shape the checkpoint recorded it in.
+
+    Later runs store a plain surface name. Earlier ones store the full
+    supervision summary -- a nested dict of per-target cell counts -- and put
+    the arm in a separate field. Printing that dict raw buries the one word the
+    reader is looking for in several hundred characters of counts.
+    """
+    supervision = payload.get("supervision")
+    if isinstance(supervision, str) and supervision:
+        return supervision
+
+    arm = str(payload.get("arm") or payload.get("supervision_source", {}).get("arm", ""))
+    if arm in ARM_SURFACES:
+        return f"{ARM_SURFACES[arm]} ({arm} arm)"
+    return arm or "unrecorded"
+
+
+def training_population(payload: dict) -> str | None:
+    """How many studies trained this model, when it held some out.
+
+    A model trained on a subset is not comparable with one trained on the whole
+    population, and that difference is invisible in a filename.
+    """
+    supervision = payload.get("supervision")
+    if not isinstance(supervision, dict):
+        return None
+    trained = supervision.get("training_studies")
+    held_out = supervision.get("held_out_pv2_studies")
+    if trained is None:
+        return None
+    if held_out:
+        return f"{trained:,} studies ({held_out} held out)"
+    return f"{trained:,} studies"
+
+
 def describe_checkpoint(path: Path) -> dict:
     """Read one checkpoint's own record of the run that produced it."""
     record: dict = {
@@ -72,7 +113,8 @@ def describe_checkpoint(path: Path) -> dict:
             "readable": True,
             "encoder": str(payload.get("encoder_source", "report-aligned")),
             "epochs": payload.get("completed_epochs"),
-            "supervision": payload.get("supervision"),
+            "supervision": supervision_label(payload),
+            "training_population": training_population(payload),
             "seed": (payload.get("config") or {}).get("seed"),
             "stages_free": payload.get("encoder_trainable_stages", 0),
             # The fingerprints outrank any stored flag: `encoder_frozen` was
@@ -148,9 +190,10 @@ def _report(records: list[dict], roots: list[Path] | None = None) -> None:
             f" | stages free {record['stages_free']}"
             f" | epochs {record['epochs']}"
         )
-        print(
-            f"    supervision {record['supervision']} | seed {record['seed']}"
-        )
+        line = f"    supervision {record['supervision']} | seed {record['seed']}"
+        if record.get("training_population"):
+            line += f" | trained on {record['training_population']}"
+        print(line)
         print()
 
     copies = duplicates(records)
