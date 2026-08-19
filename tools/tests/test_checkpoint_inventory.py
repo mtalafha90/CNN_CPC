@@ -10,7 +10,14 @@ from __future__ import annotations
 
 import torch
 
-from tools.checkpoint_inventory import describe_checkpoint, duplicates, inventory
+import pytest
+
+from tools.checkpoint_inventory import (
+    checkpoints_under,
+    describe_checkpoint,
+    duplicates,
+    inventory,
+)
 
 
 def _write(path, **payload):
@@ -87,3 +94,32 @@ def test_the_same_file_reached_twice_is_counted_once(tmp_path):
     _write(tmp_path / "runs" / "model.pt", encoder_sha256_final="x")
     records = inventory([tmp_path, tmp_path / "runs"])
     assert len(records) == 1
+
+
+def test_naming_one_checkpoint_describes_that_checkpoint(tmp_path):
+    """"Is this the file I think it is" is the question this tool is for.
+
+    Pointing it at a single .pt used to report "no .pt files found", because
+    rglob on a file yields nothing. That reads as an answer and is not one.
+    """
+    path = _write(tmp_path / "model_pv2.pt", encoder_sha256_final="x")
+    records = inventory([path])
+    assert len(records) == 1
+    assert records[0]["name"] == "model_pv2.pt"
+
+
+def test_a_missing_path_says_so_rather_than_reporting_nothing(tmp_path):
+    with pytest.raises(FileNotFoundError, match="no such file or folder"):
+        checkpoints_under(tmp_path / "not_here.pt")
+
+
+def test_a_file_that_is_not_a_checkpoint_is_refused(tmp_path):
+    other = tmp_path / "notes.txt"
+    other.write_text("hello", encoding="utf-8")
+    with pytest.raises(ValueError, match="not a checkpoint"):
+        checkpoints_under(other)
+
+
+def test_an_empty_folder_still_reports_nothing_found(tmp_path):
+    """A folder with no checkpoints is a real answer, unlike a mistyped file."""
+    assert checkpoints_under(tmp_path) == []

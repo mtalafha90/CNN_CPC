@@ -85,13 +85,28 @@ def describe_checkpoint(path: Path) -> dict:
     return record
 
 
+def checkpoints_under(root: Path) -> list[Path]:
+    """The checkpoints a given path refers to.
+
+    A single checkpoint is as reasonable a thing to ask about as a folder full
+    of them -- "is this the file I think it is" is the question this tool
+    exists for. `rglob` on a file quietly yields nothing, so naming one used to
+    report "no .pt files found", which reads as an answer and is not one.
+    """
+    if not root.exists():
+        raise FileNotFoundError(f"no such file or folder: {root}")
+    if root.is_file():
+        if root.suffix != ".pt":
+            raise ValueError(f"not a checkpoint: {root} (expected a .pt file)")
+        return [root]
+    return sorted(root.rglob("*.pt"))
+
+
 def inventory(roots: list[Path]) -> list[dict]:
     found: list[dict] = []
     seen: set[Path] = set()
     for root in roots:
-        if not root.exists():
-            raise FileNotFoundError(f"no such folder: {root}")
-        for path in sorted(root.rglob("*.pt")):
+        for path in checkpoints_under(root):
             resolved = path.resolve()
             if resolved in seen:  # the same file reached by two paths
                 continue
@@ -108,9 +123,13 @@ def duplicates(records: list[dict]) -> dict[str, list[str]]:
     return {k: v for k, v in by_content.items() if len(v) > 1}
 
 
-def _report(records: list[dict]) -> None:
+def _report(records: list[dict], roots: list[Path] | None = None) -> None:
     if not records:
-        print("no .pt files found")
+        # Say where the search looked. "Nothing found" without that is a
+        # statement the reader cannot act on or check.
+        print("no .pt files found under:")
+        for root in roots or []:
+            print(f"    {Path(root).resolve()}")
         return
 
     print(f"{len(records)} checkpoint(s)\n")
@@ -167,7 +186,7 @@ def main() -> None:
     args = parser.parse_args()
 
     records = inventory(args.roots)
-    _report(records)
+    _report(records, args.roots)
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(records, indent=2), encoding="utf-8")
