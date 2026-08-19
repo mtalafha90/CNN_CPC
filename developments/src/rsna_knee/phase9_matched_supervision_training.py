@@ -48,6 +48,7 @@ from .encoder_finetune import (
     unfreeze_encoder_tail,
 )
 from .data import backfill_series_metadata, load_series_csv, load_train_csv
+from .label_confidence import rescale_label_confidence
 from .phase9_supervision import PHASE9_VERSION, REPORT_ONLY_STUDIES, load_phase9_arm_supervision
 from .policy import validate_competition_config
 from .runtime import autocast, make_scaler, resolve_runtime
@@ -158,6 +159,18 @@ def train_phase9_arm(
     expected_batches = int(math.ceil(REPORT_ONLY_STUDIES / batch_size))
     if expected_batches != PHASE9_EXPECTED_BATCHES_BATCH2:
         raise RuntimeError("Phase 9 expected-batch contract changed")
+
+    # The exported supervision carries the frozen B7 targets, 0.85 and 0.05,
+    # baked in when the labels were written. Restating them here is what makes
+    # them adjustable at all: nothing downstream reads the config for them, so
+    # a config-only setting would be silently ignored.
+    targets, confidence = rescale_label_confidence(targets, weights, config)
+    if confidence["changed"]:
+        print(
+            f"[labels] positive cells train towards {confidence['positive_target']:g} "
+            f"(was {confidence['exported_positive_target']:g}), negative towards "
+            f"{confidence['negative_target']:g} (was {confidence['exported_negative_target']:g})"
+        )
 
     target_multiplier = target_balance_multipliers(weights)
     ds = CropFocusedVariableSeriesKneeDataset(
@@ -392,6 +405,7 @@ def train_phase9_arm(
         "training_positive_cells": positive_cells,
         "training_negative_cells": negative_cells,
         "zero_weight_studies_retained": int((weights.sum(axis=1) == 0).sum()),
+        "label_confidence": confidence,
         "target_balance_rule": "frozen B7 mean target mass / target mass; recomputed mechanically from each arm's supervision",
         "target_balance_multipliers": [float(x) for x in target_multiplier],
         "candidate_added_parameters": int(B34_EXPECTED_NEW_PARAMETERS),

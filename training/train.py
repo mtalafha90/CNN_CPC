@@ -25,6 +25,7 @@ from model._implementation import (
     ENCODERS,
     read_config,
     run_directory,
+    set_label_confidence,
     train_working_model,
 )
 
@@ -79,6 +80,20 @@ def main() -> None:
         help="DINOv3 ConvNeXt size; both are 768-d and drop in unchanged",
     )
     parser.add_argument(
+        "--positive-target",
+        type=float,
+        help=(
+            "how confident a report's 'yes' should make the model. The shipped "
+            "value is 0.85, but auditing the parser against the expert labels "
+            "measured 69%% agreement, so a lower target matches the evidence"
+        ),
+    )
+    parser.add_argument(
+        "--negative-target",
+        type=float,
+        help="the same for a report's 'no', whose measured agreement is 96%%",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         help=(
@@ -102,6 +117,18 @@ def main() -> None:
     if args.seed is not None:
         config["seed"] = int(args.seed)
         print(f"[seed] {args.seed} (default is {read_config(args.config).get('seed')})")
+
+    config = set_label_confidence(
+        config,
+        positive_target=args.positive_target,
+        negative_target=args.negative_target,
+    )
+    for name, value in (
+        ("positive", args.positive_target),
+        ("negative", args.negative_target),
+    ):
+        if value is not None:
+            print(f"[labels] a report's '{name}' now trains towards {value:g}")
 
     checkpoint = train_working_model(
         config,

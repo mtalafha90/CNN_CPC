@@ -280,6 +280,43 @@ def validate_against_sample(root, frame) -> dict:
 
 # --- training --------------------------------------------------------------
 
+# How confident the labels are allowed to make the model. A report saying a
+# finding is present is not proof it is present, so the training target sits
+# below 1.0 and the loss stops pushing once it is reached.
+LABEL_CONFIDENCE_KEYS = {
+    "positive_target": "b7_positive_target",
+    "negative_target": "b7_negative_target",
+}
+
+
+def set_label_confidence(config: dict, **targets: float | None) -> dict:
+    """Return `config` with the label targets that were actually given.
+
+    These are a claim about how often the report parser is right, so they
+    should be set from a measurement rather than left at a value nobody has
+    checked. `tools.label_audit` provides the measurement.
+    """
+    updated = dict(config)
+    for name, value in targets.items():
+        if value is None:
+            continue
+        key = LABEL_CONFIDENCE_KEYS.get(name)
+        if key is None:
+            choices = ", ".join(sorted(LABEL_CONFIDENCE_KEYS))
+            raise ValueError(f"unknown label target {name!r}; expected one of: {choices}")
+        if not 0.0 < float(value) < 1.0:
+            raise ValueError(f"{name} must lie between 0 and 1, not {value}")
+        # A cell is positive or negative by which side of 0.5 it falls, in the
+        # loss and in the audit counts alike. A target that crosses over would
+        # not just be wrong, it would recount the labels.
+        if name == "positive_target" and float(value) <= 0.5:
+            raise ValueError(f"positive_target must stay above 0.5, not {value}")
+        if name == "negative_target" and float(value) >= 0.5:
+            raise ValueError(f"negative_target must stay below 0.5, not {value}")
+        updated[key] = float(value)
+    return updated
+
+
 def train_working_model(
     config: dict,
     *,
