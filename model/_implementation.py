@@ -283,9 +283,13 @@ def validate_against_sample(root, frame) -> dict:
 # How confident the labels are allowed to make the model. A report saying a
 # finding is present is not proof it is present, so the training target sits
 # below 1.0 and the loss stops pushing once it is reached.
+#
+# These are deliberately not the keys naming the frozen label export. Those
+# describe what the export contains and are contract-checked; these describe
+# what training aims at, which is a separate choice applied after loading.
 LABEL_CONFIDENCE_KEYS = {
-    "positive_target": "b7_positive_target",
-    "negative_target": "b7_negative_target",
+    "positive_target": "label_confidence_positive_target",
+    "negative_target": "label_confidence_negative_target",
 }
 
 

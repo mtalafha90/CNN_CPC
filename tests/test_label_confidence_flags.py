@@ -23,21 +23,34 @@ def test_a_measured_target_replaces_the_shipped_one():
 
 def test_the_original_config_is_left_alone():
     """A run that changes its caller's config is a run that taints the next one."""
-    original = {"b7_positive_target": 0.85}
+    key = LABEL_CONFIDENCE_KEYS["positive_target"]
+    original = {key: 0.85}
     set_label_confidence(original, positive_target=0.70)
-    assert original["b7_positive_target"] == pytest.approx(0.85)
+    assert original[key] == pytest.approx(0.85)
 
 
 def test_targets_not_given_are_not_touched():
-    updated = set_label_confidence({"b7_positive_target": 0.85}, positive_target=None)
-    assert updated["b7_positive_target"] == pytest.approx(0.85)
-    assert "b7_negative_target" not in updated
+    key = LABEL_CONFIDENCE_KEYS["positive_target"]
+    updated = set_label_confidence({key: 0.85}, positive_target=None)
+    assert updated[key] == pytest.approx(0.85)
+    assert LABEL_CONFIDENCE_KEYS["negative_target"] not in updated
 
 
 def test_both_targets_can_be_set_together():
     updated = set_label_confidence({}, positive_target=0.70, negative_target=0.04)
-    assert updated["b7_positive_target"] == pytest.approx(0.70)
-    assert updated["b7_negative_target"] == pytest.approx(0.04)
+    assert updated[LABEL_CONFIDENCE_KEYS["positive_target"]] == pytest.approx(0.70)
+    assert updated[LABEL_CONFIDENCE_KEYS["negative_target"]] == pytest.approx(0.04)
+
+
+def test_the_frozen_export_keys_are_never_written():
+    """Writing those is what the B7-v1 contract rejected, and rightly.
+
+    They state what the exported labels contain. Training aiming somewhere else
+    is a separate choice and must not restate it as a claim about the export.
+    """
+    updated = set_label_confidence({}, positive_target=0.70, negative_target=0.04)
+    assert "b7_positive_target" not in updated
+    assert "b7_negative_target" not in updated
 
 
 @pytest.mark.parametrize("value", [0.0, 1.0, -0.2, 1.5, 85])
