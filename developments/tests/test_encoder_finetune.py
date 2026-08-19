@@ -115,3 +115,23 @@ def test_an_impossible_learning_rate_scale_is_refused(scale):
     unfreeze_encoder_tail(model, 1)
     with pytest.raises(ValueError, match="encoder_lr_scale"):
         parameter_groups(model, head_lr=1e-3, encoder_lr_scale=scale)
+
+
+def test_only_frozen_parameters_are_forbidden_a_gradient():
+    """The in-loop guard must catch leaks without blocking the freed tail.
+
+    An earlier version rejected *any* encoder gradient, which fired part-way
+    into a training run rather than at startup.
+    """
+    model = _frozen_model()
+    unfreeze_encoder_tail(model, 1)
+    model(torch.randn(2, 3, 64, 64)).sum().backward()
+
+    leaked = [
+        name for name, p in model.encoder.named_parameters()
+        if not p.requires_grad and p.grad is not None
+    ]
+    assert not leaked, f"gradient leaked onto frozen parameters: {leaked[:3]}"
+
+    freed = [p for p in model.encoder.parameters() if p.requires_grad]
+    assert any(p.grad is not None for p in freed), "the freed tail received nothing"

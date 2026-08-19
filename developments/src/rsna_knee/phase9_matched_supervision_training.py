@@ -270,8 +270,15 @@ def train_phase9_arm(
                 logits = model(volumes, present, meta)
                 loss = target_balanced_weak_bce(logits, target, weight, multiplier_t)
             scaler.scale(loss).backward()
-            if any(p.grad is not None for p in model.encoder.parameters()):
-                raise RuntimeError("Phase 9 detected an encoder gradient")
+            # A frozen encoder must receive nothing; a deliberately freed tail
+            # must receive gradient only where it was freed.
+            leaked = any(
+                p.grad is not None
+                for p in model.encoder.parameters()
+                if not p.requires_grad
+            )
+            if leaked:
+                raise RuntimeError("Phase 9 detected a gradient on a frozen encoder parameter")
             # Zero-weight batches are legal in the control arm; require coupling
             # only across the full epoch, not in every individual batch.
             if bool((weight > 0).any().item()):

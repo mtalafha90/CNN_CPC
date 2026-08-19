@@ -114,6 +114,9 @@ class HierarchicalSeriesKneeMILNet(nn.Module):
             study_layer,
             num_layers=int(transformer_layers),
             norm=nn.LayerNorm(d),
+            # norm_first=True already forces this off inside PyTorch; saying so
+            # explicitly keeps the behaviour identical and drops the warning.
+            enable_nested_tensor=False,
         )
 
         self.pathology_tokens = nn.Parameter(torch.randn(N_TARGETS, d) * 0.02)
@@ -130,6 +133,7 @@ class HierarchicalSeriesKneeMILNet(nn.Module):
             pathology_layer,
             num_layers=int(pathology_layers),
             norm=nn.LayerNorm(d),
+            enable_nested_tensor=False,
         )
         self.cross_attention = nn.MultiheadAttention(
             d,
