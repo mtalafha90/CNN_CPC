@@ -143,6 +143,20 @@ submit that.
 called `model.pt`, so one overwrote the other, or the notebook is still on the
 old version of the dataset. Rename the files and click **Check for updates**.
 
+## Where Kaggle puts the notebooks it saves
+
+If the notebook is linked to this repository, Kaggle commits a copy of it on
+every **Save & Run All** — one file per version, named for the date. Left
+alone, those pile up in the repository root and bury the four files that
+actually belong there.
+
+Point Kaggle at `kaggle/notebooks/` instead: in the notebook, open **File →
+Link to GitHub**, and set the folder path. Saved versions then land beside
+this page, which is where anyone looking for them would think to look.
+
+They are kept rather than ignored on purpose. A saved notebook is the record
+of what an actual submission ran, which the repository cannot otherwise show.
+
 ## What a submission costs you
 
 Nothing on your own machine. Kaggle runs it on theirs. The only limit is how
