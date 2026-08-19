@@ -70,13 +70,34 @@ invisible.
 
 Cells 1, 2, 3 and 5 take seconds. Only cell 4 is slow, and it should be.
 
+## Choosing which models to submit
+
+Cell 2 has one line you edit, and it is the only one:
+
+```python
+SUBMIT = ["model_finetuned.pt"]
+```
+
+Name the checkpoints this run should use. Anything else in the dataset is
+listed as `not submitting:` and ignored. To average two models, name both.
+
+The notebook used to take every `.pt` it found. That sounds convenient and is
+a trap: a model dataset gathers checkpoints as a competition goes on, so
+uploading one for next week silently turns this week's single-model run into
+an ensemble. Naming them keeps the run under your control.
+
+Cell 3 then prints, for each named checkpoint, whether its encoder was
+fine-tuned. It works this out from the fingerprints taken before and after
+training, not from the filename -- a filename is a label somebody typed, and
+it can be wrong.
+
 ## Read the output before you spend a submission
 
 A submission slot is the one thing here you cannot get back, so check three
 things in the run you are about to submit:
 
-- **Cell 2** lists one `model:` line per checkpoint. Count them. If you meant
-  to average two models and only one is listed, stop.
+- **Cell 3** prints `submitting N model(s)`, and one block per model saying
+  whether its encoder was fine-tuned. Check that it matches the run you meant.
 - **Cell 4** prints `[ensemble] averaging N models` when there is more than one.
 - The manifest cell 4 prints has `"ensemble_size"`. If the key is missing
   entirely, the notebook is running an old copy of the code dataset — upload a

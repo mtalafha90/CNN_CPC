@@ -15,9 +15,12 @@ Before running: attach three things to the notebook, using the Add Input panel.
 
     1. the competition data
     2. a dataset holding this repository
-    3. a dataset holding your trained model.pt
+    3. a dataset holding your trained checkpoints
 
 Cell 1 prints where everything landed, so the later cells can be pointed at it.
+
+Cell 2 has the one setting worth editing: `SUBMIT`, the list of checkpoint
+filenames this run should use. Everything else searches rather than assumes.
 """
 
 # ---------------------------------------------------------------- cell 1 ----
@@ -68,12 +71,34 @@ if CODE_ROOT is None:
         print("   ", path.relative_to(MINE))
     raise FileNotFoundError("repository not found -- see the listing above")
 
-# Every .pt found is used. One model scores on its own; several are averaged,
-# which is the cheapest reliable way to gain a little accuracy.
-MODEL_PATHS = sorted(MINE.rglob("*.pt"))
-if not MODEL_PATHS:
+# Name the models you are submitting, and nothing else is used. One model
+# scores on its own; several are averaged, which is the cheapest reliable way
+# to gain a little accuracy -- when the members genuinely differ.
+#
+# This is a list rather than "whatever .pt is attached" on purpose. A model
+# dataset accumulates checkpoints over a competition, so sweeping up all of
+# them lets the dataset's contents decide the experiment: adding a file for
+# later turns today's single-model run into an ensemble without saying so.
+# Naming them means the notebook submits what you meant to submit.
+SUBMIT = ["model_finetuned.pt"]
+
+available = {path.name: path for path in sorted(MINE.rglob("*.pt"))}
+if not available:
     raise FileNotFoundError("no .pt file found -- is the model dataset attached?")
+
+missing = [name for name in SUBMIT if name not in available]
+if missing:
+    raise FileNotFoundError(
+        f"SUBMIT names {missing}, which is not attached. Available: "
+        f"{sorted(available)}"
+    )
+
+MODEL_PATHS = [available[name] for name in SUBMIT]
 MODEL_PATH = MODEL_PATHS[0]
+
+unused = sorted(set(available) - set(SUBMIT))
+if unused:
+    print("not submitting:", ", ".join(unused))
 
 DATA_ROOT = COMP if (COMP / "test.csv").is_file() else None
 if DATA_ROOT is None:
@@ -104,18 +129,29 @@ from model.architecture import load
 config = read_config(str(CODE_ROOT / "config" / "current_model.yaml"))
 config["data_root"] = str(DATA_ROOT)
 
-model, payload = load(str(MODEL_PATH), device="cpu")
-print("encoder     :", payload.get("encoder_source", "report-aligned"))
-print("epochs done :", payload.get("completed_epochs"))
-print("frozen      :", payload.get("encoder_frozen"))
+# A checkpoint's filename is a label someone typed; the payload is the record
+# the training run wrote. When the two disagree, the payload is right -- so
+# print what each file actually is before spending an hour proving it later.
+for path in MODEL_PATHS:
+    model, payload = load(str(path), device="cpu")
+    before = payload.get("encoder_sha256_initial")
+    after = payload.get("encoder_sha256_final")
+    print(f"--- {path.name}")
+    print("  encoder    :", payload.get("encoder_source", "report-aligned"))
+    print("  epochs done:", payload.get("completed_epochs"))
+    # The fingerprints are taken before and after training, so they cannot
+    # agree unless the encoder really did stay still.
+    print("  fine-tuned :", bool(before and after and before != after))
+    print("  stages free:", payload.get("encoder_trainable_stages", 0))
 
-if str(payload.get("encoder_source", "report-aligned")) == "dinov3":
-    raise RuntimeError(
-        "this checkpoint uses DINOv3, whose weights download on demand; "
-        "the notebook runs offline, so submit the report-aligned model"
-    )
+    if str(payload.get("encoder_source", "report-aligned")) == "dinov3":
+        raise RuntimeError(
+            f"{path.name} uses DINOv3, whose weights download on demand; "
+            "the notebook runs offline, so submit the report-aligned model"
+        )
+    del model  # cell 4 rebuilds it on the GPU
 
-del model  # the next cell rebuilds it on the GPU
+print(f"\nsubmitting {len(MODEL_PATHS)} model(s)")
 
 
 # ---------------------------------------------------------------- cell 4 ----
