@@ -321,8 +321,8 @@ def train_phase9_arm(
             seen_neg += int((active & (target < 0.5)).sum().item())
 
         scheduler.step()
-        if encoder_state_sha256(model.encoder) != encoder_sha_initial:
-            raise RuntimeError("Phase 9 encoder fingerprint changed")
+        if encoder_trainable_stages == 0 and encoder_state_sha256(model.encoder) != encoder_sha_initial:
+            raise RuntimeError("Phase 9 encoder fingerprint changed despite being frozen")
         full = (
             steps == expected_batches
             and seen_studies == REPORT_ONLY_STUDIES
@@ -475,7 +475,9 @@ def load_phase9_checkpoint(
     model = build_b34_model(payload["model_spec"], pretrained_weights=False)
     model.load_state_dict(payload["model_state"], strict=True)
     freeze_encoder(model)
-    if encoder_state_sha256(model.encoder) != initial_sha:
+    # The state dict holds the encoder as it ended, which equals the initial
+    # fingerprint only when the encoder was frozen throughout.
+    if encoder_state_sha256(model.encoder) != final_sha:
         raise ValueError("Phase-9 reconstructed encoder fingerprint mismatch")
     return model.to(device), payload
 
