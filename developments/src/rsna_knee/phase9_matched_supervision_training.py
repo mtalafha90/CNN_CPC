@@ -414,7 +414,9 @@ def train_phase9_arm(
         "encoder_trainable_stages": int(encoder_trainable_stages),
         "encoder_lr_scale": float(encoder_lr_scale),
         "encoder_finetune": finetune,
-        "encoder_frozen": True,
+        # True for every run before encoder fine-tuning existed, so it used to be
+        # written as a constant. It is a claim about this run, not a house rule.
+        "encoder_frozen": not encoder_moved,
         "encoder_sha256_initial": encoder_sha_initial,
         "encoder_sha256_final": encoder_sha_final,
         "history": history,

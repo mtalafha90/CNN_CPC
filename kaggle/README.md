@@ -27,25 +27,37 @@ Call the dataset something like `cnn-cpc-code`.
 You do not need `runs/`, `developments/docs/`, `developments/tests/` or the
 dataset itself. Keeping it small makes the notebook start faster.
 
-### 2. Your trained model
+### 2. Your trained models
 
-Upload the checkpoint on its own as a second private dataset:
+Put every checkpoint you want to submit into one folder first, each with its
+own name. The notebook averages every `.pt` it finds, so two files with the
+same name means one silently replaces the other and you submit a single model
+by accident.
 
-```text
-runs/control/train/all-script/model.pt
+```bash
+mkdir -p ~/kaggle_models
+cp runs/control/train/all-script/model.pt   ~/kaggle_models/model_frozen.pt
+cp runs/finetune/train/all-script/model.pt  ~/kaggle_models/model_finetuned.pt
+ls -lh ~/kaggle_models
 ```
 
-Call it something like `cnn-cpc-model`.
+Upload that folder as a private dataset. The files are large, so this takes a
+while; do it once and reuse it.
 
-The file is large, so this upload takes a while. Do it once and reuse it.
+**Adding another model later.** Open the dataset page, click the **⋮** button,
+choose **New Version**, and drag the new `.pt` in beside the existing ones.
+Then go back to the notebook, find the dataset in the **Input** panel, and
+click **Check for updates** — a notebook keeps using the version it was
+attached to until you tell it otherwise, so skipping this leaves the new model
+invisible.
 
 ## Making the notebook
 
 1. On the competition page, click **New Notebook**.
 2. In the **Add Input** panel, attach three things:
    - the competition data
-   - your `cnn-cpc-code` dataset
-   - your `cnn-cpc-model` dataset
+   - your code dataset
+   - your model dataset
 3. Turn the **GPU on** in the settings panel.
 4. Turn the **internet off**. Code competitions require this, and your model
    does not need it.
@@ -57,6 +69,22 @@ The file is large, so this upload takes a while. Do it once and reuse it.
 8. When it finishes, open the notebook's Output tab and click **Submit**.
 
 Cells 1, 2, 3 and 5 take seconds. Only cell 4 is slow, and it should be.
+
+## Read the output before you spend a submission
+
+A submission slot is the one thing here you cannot get back, so check three
+things in the run you are about to submit:
+
+- **Cell 2** lists one `model:` line per checkpoint. Count them. If you meant
+  to average two models and only one is listed, stop.
+- **Cell 4** prints `[ensemble] averaging N models` when there is more than one.
+- The manifest cell 4 prints has `"ensemble_size"`. If the key is missing
+  entirely, the notebook is running an old copy of the code dataset — upload a
+  new version of it and click **Check for updates**.
+
+`"test_studies": 3` is normal here and is not a fault. Kaggle gives you a
+three-knee practice set while you build the notebook and swaps in the hidden
+set only when you press Submit.
 
 ## Which model to submit
 
@@ -86,9 +114,13 @@ few minutes for 3 knees, but the hidden set is much larger. If it times out,
 lower `b7_eval_batch_size` in the config, or ask for help before rerunning,
 since each attempt costs a slot.
 
-**Every column is constant** — cell 6 warns about this. It means the model is
+**Every column is constant** — cell 5 warns about this. It means the model is
 giving every knee the same answer, which is what the DINOv3 model did. Do not
 submit that.
+
+**Only one model is listed, but you attached two** — either both files are
+called `model.pt`, so one overwrote the other, or the notebook is still on the
+old version of the dataset. Rename the files and click **Check for updates**.
 
 ## What a submission costs you
 

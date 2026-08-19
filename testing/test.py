@@ -47,6 +47,22 @@ SLICE_OFFSETS = (-1, 0, 1)
 LOADER_SEED_OFFSET = 90_100_000
 
 
+def encoder_stayed_frozen(payload: dict) -> bool:
+    """Did this checkpoint's encoder actually stay fixed while it trained?
+
+    The two fingerprints are the evidence: they are taken before and after
+    training, so matching fingerprints mean not one encoder weight moved.
+    Checkpoints written before encoder fine-tuning existed carry an
+    `encoder_frozen` flag that was stored as a constant `True`, which is why
+    the fingerprints are trusted ahead of it.
+    """
+    before = payload.get("encoder_sha256_initial")
+    after = payload.get("encoder_sha256_final")
+    if before and after:
+        return str(before) == str(after)
+    return bool(payload.get("encoder_frozen", False))
+
+
 def _file_digest(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -198,8 +214,10 @@ def predict_test_set(
         "submission_sha256": _file_digest(output),
         "completed_epochs": int(payload.get("completed_epochs", -1)),
         "fixed_endpoint": bool(payload.get("fixed_endpoint", False)),
-        "encoder_frozen": bool(payload.get("encoder_frozen", False)),
+        "encoder_frozen": encoder_stayed_frozen(payload),
+        "encoder_frozen_all": [encoder_stayed_frozen(p) for p in payloads],
         "encoder_sha256": payload.get("encoder_sha256_final"),
+        "encoder_sha256_all": [p.get("encoder_sha256_final") for p in payloads],
         "expert_labels_in_gradients": int(payload.get("gold_studies_used_in_gradient", 0)),
         "crop_policy": crop_policy,
         "slice_offsets": list(offsets),
