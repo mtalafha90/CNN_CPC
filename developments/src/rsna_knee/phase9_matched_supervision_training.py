@@ -247,6 +247,10 @@ def train_phase9_arm(
         f"construction_seed={construction_seed} loader_seed={loader_seed} post_seed={post_seed}"
     )
 
+    run_started = time.monotonic()
+    total_batches = len(loader) * PHASE9_FIXED_EPOCHS
+    print(f"[Phase9/{arm}] starting {PHASE9_FIXED_EPOCHS} epochs, {total_batches} batches total")
+
     history: list[dict] = []
     for epoch in range(1, PHASE9_FIXED_EPOCHS + 1):
         started = time.monotonic()
@@ -259,6 +263,19 @@ def train_phase9_arm(
         for batch in loader:
             if not budget.can_start(120.0):
                 raise RuntimeError("Phase 9 runtime budget expired before fixed E2 completed")
+            if steps and steps % 100 == 0:
+                done_this_epoch = steps / len(loader)
+                per_batch = (time.monotonic() - started) / steps
+                left = per_batch * (
+                    (len(loader) - steps) + len(loader) * (PHASE9_FIXED_EPOCHS - epoch)
+                )
+                print(
+                    f"[Phase9/{arm}] E{epoch} {steps}/{len(loader)} "
+                    f"({done_this_epoch * 100:4.1f}%) loss={loss_sum / steps:.4f} "
+                    f"elapsed={(time.monotonic() - run_started) / 60:.1f} min "
+                    f"remaining~{left / 60:.1f} min",
+                    flush=True,
+                )
             volumes = batch["volumes"].to(runtime.device, non_blocking=True)
             present = batch["present"].to(runtime.device, non_blocking=True)
             meta = batch["series_meta"].to(runtime.device, non_blocking=True)
@@ -339,6 +356,12 @@ def train_phase9_arm(
         history.append(row)
         print(f"[Phase9/{arm}] E{epoch} loss={row['loss']:.10f} time={row['epoch_seconds']/60:.1f} min")
 
+    total_seconds = float(time.monotonic() - run_started)
+    print(
+        f"[Phase9/{arm}] training finished in {total_seconds / 60:.1f} min "
+        f"({total_seconds / 3600:.2f} h)"
+    )
+
     encoder_sha_final = encoder_state_sha256(model.encoder)
     encoder_moved = encoder_sha_final != encoder_sha_initial
     if encoder_trainable_stages == 0 and encoder_moved:
@@ -386,6 +409,8 @@ def train_phase9_arm(
         "input_normalization": B13_INPUT_NORMALIZATION,
         "encoder_source": encoder_source,
         "encoder": encoder_description,
+        "training_seconds": total_seconds,
+        "training_minutes": total_seconds / 60.0,
         "encoder_trainable_stages": int(encoder_trainable_stages),
         "encoder_lr_scale": float(encoder_lr_scale),
         "encoder_finetune": finetune,
