@@ -31,16 +31,46 @@ data. Subtracting a 3,850-study model's local score from a 4,349-study model's
 hidden score does not measure a surface's bias; it measures two different
 models. The "overstates by about 0.055" that followed from it was not supported.
 
-Calibrating it properly needs the hidden score of the *same* model that scored
-0.743 locally, which is what the third submission is for:
+Calibrating it properly needed the hidden score of the *same* model that scored
+0.743 locally. The third submission supplied it:
 
 ```text
 Phase-9 v2 candidate (all-script, 3,850 studies, 499 held out)
     499 weak studies (local)    0.7434
-    hidden competition test     pending
+    hidden competition test     0.691     overstates by 0.052
 ```
 
-## Two submissions, and what the pair adds
+So the surface does overstate by roughly the amount originally guessed, and now
+the figure rests on one model measured twice rather than two models subtracted.
+Both local surfaces are biased, in opposite directions, and the truth sits
+between them:
+
+```text
+58 expert studies      understates by about 0.033   (two pairings)
+499 weak studies       overstates  by about 0.052   (one pairing)
+```
+
+The 499-study surface is the better instrument despite the larger offset,
+because its offset is what gets subtracted while its *noise* is what limits
+resolution, and 499 studies carry roughly a third of the noise of 58.
+
+## Three submissions, and the band they fall in
+
+```text
+                          train    encoder      hidden
+frozen encoder            4,349    frozen       0.688
+Phase-9 v2 candidate      3,850    frozen       0.691
+fine-tuned, 1 stage       4,349    1 stage      0.694
+```
+
+**Every hidden score sits within 0.006 of every other.** The three differ in
+whether the encoder learned and in 499 studies of training data, and the whole
+spread is smaller than the uncertainty on any one of them.
+
+The middle row is the most informative. It trained on 500 fewer studies than
+the row above it and scored no worse. Whatever is limiting this model, it is
+not the last 12% of the training population -- which also means the remaining
+unlabelled studies are unlikely to be worth much.
 
 ```text
                         58 expert    hidden    offset
