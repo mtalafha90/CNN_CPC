@@ -92,6 +92,53 @@ def measure(
     return found, total
 
 
+def fit_within_budget(
+    found: list[tuple[str, str, Path, int]],
+    expert_uids: set[str],
+    *,
+    max_bytes: int,
+) -> tuple[list[tuple[str, str, Path, int]], list[str]]:
+    """Keep whole studies until the budget runs out; never a partial study.
+
+    Studies are added entire or not at all. Copying half a study's series would
+    silently change what the model sees -- it attends across a study's series,
+    so a study missing two of its five is a different training example, not a
+    smaller one.
+
+    Expert-labelled studies are placed first and are never dropped: they are the
+    only scoring surface, and a subset that cannot be measured is not worth
+    uploading. Everything after them is taken smallest-first, which fits the
+    most studies into the space rather than the largest ones.
+    """
+    by_study: dict[str, list[tuple[str, str, Path, int]]] = {}
+    for entry in found:
+        by_study.setdefault(entry[0], []).append(entry)
+    sizes = {uid: sum(e[3] for e in entries) for uid, entries in by_study.items()}
+
+    experts = [uid for uid in by_study if uid in expert_uids]
+    others = sorted((uid for uid in by_study if uid not in expert_uids),
+                    key=lambda uid: sizes[uid])
+
+    kept: list[tuple[str, str, Path, int]] = []
+    kept_uids: list[str] = []
+    used = 0
+    for uid in experts:                       # unconditional
+        kept.extend(by_study[uid])
+        kept_uids.append(uid)
+        used += sizes[uid]
+    if used > max_bytes:
+        print(f"warning: the expert studies alone are {used / 1e9:.2f} GB, "
+              f"over the {max_bytes / 1e9:.2f} GB budget -- keeping them anyway")
+
+    for uid in others:
+        if used + sizes[uid] > max_bytes:
+            continue                          # try the next, smaller one
+        kept.extend(by_study[uid])
+        kept_uids.append(uid)
+        used += sizes[uid]
+    return kept, kept_uids
+
+
 def copy_subset(
     out_root: Path,
     split: str,
@@ -155,8 +202,17 @@ def main() -> None:
     parser.add_argument(
         "--studies",
         type=int,
-        default=200,
-        help="how many studies in total, expert-labelled ones included",
+        default=4407,
+        help="an upper bound on studies to consider; the size budget usually binds first",
+    )
+    parser.add_argument(
+        "--max-gigabytes",
+        type=float,
+        default=8.0,
+        help=(
+            "the real limit. Studies are added whole, smallest first, until this "
+            "is reached. A free Google Drive holds 15 GB in total, so leave room"
+        ),
     )
     parser.add_argument(
         "--labels",
@@ -194,16 +250,26 @@ def main() -> None:
         kept = studies["StudyInstanceUID"].astype(str).tolist()[: args.studies]
         print(f"{len(kept)} test studies")
 
-    print("measuring...")
+    print(f"measuring {len(kept)} candidate studies (this reads directory sizes)...")
     found, total = measure(root, args.split, series, kept)
+    if not found:
+        raise SystemExit("no series found on disk -- is --data-root right?")
+
+    expert_uids = set(expert) if args.split == "train" else set()
+    budget = int(args.max_gigabytes * 1e9)
+    found, kept = fit_within_budget(found, expert_uids, max_bytes=budget)
+
+    total = sum(entry[3] for entry in found)
     gigabytes = total / 1e9
     per_study = total / max(len(kept), 1) / 1e6
 
-    print(f"\n{len(found)} series, {gigabytes:.2f} GB ({per_study:.0f} MB per study)")
+    print(f"\n{len(kept)} studies, {len(found)} series, {gigabytes:.2f} GB "
+          f"({per_study:.0f} MB per study)")
+    print(f"budget {args.max_gigabytes:.1f} GB, {(budget - total) / 1e9:.2f} GB spare")
     if not args.copy:
         print(
-            "\nNothing copied. Re-run with --copy when the size looks workable.\n"
-            "Google Drive gives 15 GB free, and an upload runs at roughly a "
+            "\nNothing copied. Re-run with --copy when this looks right.\n"
+            "Raise --max-gigabytes for more studies; an upload runs at roughly a "
             "gigabyte per few minutes."
         )
         return

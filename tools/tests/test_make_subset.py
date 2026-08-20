@@ -171,3 +171,59 @@ def test_copying_twice_does_not_duplicate_or_fail(tmp_path):
 
 def test_an_unknown_layout_is_reported_as_missing(tmp_path):
     assert _series_directory(tmp_path, "train", "nope", "nope") is None
+
+
+def _entries(sizes: dict[str, list[int]]):
+    """Build measure()-shaped entries: (study, series, path, bytes)."""
+    return [
+        (uid, f"{uid}-s{j}", Path(f"/fake/{uid}/{j}"), size)
+        for uid, series_sizes in sizes.items()
+        for j, size in enumerate(series_sizes)
+    ]
+
+
+def test_the_budget_keeps_whole_studies_only():
+    """Half a study is a different training example, not a smaller one."""
+    from tools.make_subset import fit_within_budget
+
+    found = _entries({"a": [100, 100], "b": [100, 100], "c": [100, 100]})
+    kept, uids = fit_within_budget(found, set(), max_bytes=250)
+
+    assert len(uids) == 1, "only one whole study fits in 250 bytes"
+    assert len(kept) == 2, "and it brings both of its series"
+    assert {entry[0] for entry in kept} == set(uids)
+
+
+def test_expert_studies_are_kept_even_over_budget():
+    """A subset that cannot be scored is not worth uploading."""
+    from tools.make_subset import fit_within_budget
+
+    found = _entries({"expert": [1000], "other": [10]})
+    kept, uids = fit_within_budget(found, {"expert"}, max_bytes=100)
+    assert "expert" in uids
+
+
+def test_smaller_studies_are_preferred_so_more_of_them_fit():
+    from tools.make_subset import fit_within_budget
+
+    found = _entries({"big": [900], "small-1": [100], "small-2": [100]})
+    _, uids = fit_within_budget(found, set(), max_bytes=500)
+    assert set(uids) == {"small-1", "small-2"}
+
+
+def test_a_large_study_does_not_block_the_smaller_ones_behind_it():
+    """The loop must keep looking after a study that does not fit."""
+    from tools.make_subset import fit_within_budget
+
+    found = _entries({"tiny": [10], "huge": [10_000], "small": [50]})
+    _, uids = fit_within_budget(found, set(), max_bytes=100)
+    assert set(uids) == {"tiny", "small"}
+
+
+def test_a_generous_budget_keeps_everything():
+    from tools.make_subset import fit_within_budget
+
+    found = _entries({"a": [10], "b": [20], "c": [30]})
+    kept, uids = fit_within_budget(found, set(), max_bytes=10_000)
+    assert len(uids) == 3
+    assert len(kept) == 3
