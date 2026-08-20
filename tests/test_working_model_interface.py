@@ -72,8 +72,15 @@ def test_crop_policy_is_the_deterministic_ninety_percent_crop():
 
 
 def test_supervision_choices_map_to_label_surfaces():
-    assert set(_implementation.SUPERVISION_SURFACES) == {"latin-script", "all-script"}
-    assert len(set(_implementation.SUPERVISION_SURFACES.values())) == 2
+    assert set(_implementation.SUPERVISION_SURFACES) == {
+        "latin-script",
+        "all-script",
+        "llm-filled",
+    }
+    # Each surface must reach a distinct arm. Two names sharing one would make a
+    # comparison between them meaningless while still appearing to run.
+    surfaces = _implementation.SUPERVISION_SURFACES
+    assert len(set(surfaces.values())) == len(surfaces)
 
 
 def test_supervision_surfaces_are_not_described_as_english():

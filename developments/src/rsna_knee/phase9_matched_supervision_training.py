@@ -54,7 +54,7 @@ from .policy import validate_competition_config
 from .runtime import autocast, make_scaler, resolve_runtime
 
 PHASE9_EXPERIMENT = "phase9_matched_b34_b6_vs_phase8_supervision"
-PHASE9_ARMS = ("control", "candidate")
+PHASE9_ARMS = ("control", "candidate", "llm_fill")
 PHASE9_ENCODER_SOURCES = ("report-aligned", "dinov3")
 PHASE9_FIXED_EPOCHS = 2
 PHASE9_EXPECTED_REPORT_ONLY_SERIES = 24035
@@ -76,6 +76,7 @@ def train_phase9_arm(
     arm: str,
     b6_root: str | Path,
     phase8_root: str | Path,
+    llm_fill_root: str | Path | None = None,
     series_policy_path: str | Path,
     report_ssl_checkpoint: str | Path,
     out_root: str | Path = "runs/phase9_matched_supervision",
@@ -130,6 +131,7 @@ def train_phase9_arm(
         arm=arm,
         b6_root=b6_root,
         phase8_root=phase8_root,
+        llm_fill_root=llm_fill_root,
     )
     if len(uids) != REPORT_ONLY_STUDIES:
         raise RuntimeError("Phase 9 must retain all 4,349 report-only studies in each arm")

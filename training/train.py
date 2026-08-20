@@ -11,6 +11,10 @@ can actually read:
                    reports yield almost nothing.
     all-script     the same labels plus the cells recovered by translating
                    the Greek- and Cyrillic-script reports before parsing.
+    llm-filled     every answer the parser gives, kept exactly, plus the cells
+                   it declined to answer filled in by a local LLM.  The parser
+                   commits to roughly a quarter of the label surface and leaves
+                   the rest blank, so this is mostly about coverage.
 
 Training stops at a fixed epoch.  No checkpoint is chosen by looking at a
 labelled score, so the run is decided before any result is seen.
@@ -35,7 +39,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train the working knee MRI model")
     parser.add_argument(
         "--supervision",
-        choices=("latin-script", "all-script"),
+        choices=("latin-script", "all-script", "llm-filled"),
         required=True,
         help="which report-label surface enters the gradient",
     )
@@ -50,6 +54,13 @@ def main() -> None:
         "--all-script-labels",
         required=True,
         help="directory holding the merged translated-report label export",
+    )
+    parser.add_argument(
+        "--llm-filled-labels",
+        help=(
+            "directory holding the fill-only merged export; required for "
+            "--supervision llm-filled. Build it with rsna_knee.b23_fill_merge"
+        ),
     )
     parser.add_argument("--series-policy", required=True)
     parser.add_argument(
@@ -112,6 +123,8 @@ def main() -> None:
 
     if args.encoder == "report-aligned" and not args.encoder_checkpoint:
         parser.error("--encoder report-aligned requires --encoder-checkpoint")
+    if args.supervision == "llm-filled" and not args.llm_filled_labels:
+        parser.error("--supervision llm-filled requires --llm-filled-labels")
 
     config = read_config(args.config)
     config["data_root"] = str(Path(args.data_root).resolve())
@@ -141,6 +154,7 @@ def main() -> None:
         supervision=args.supervision,
         latin_script_labels_root=args.latin_script_labels,
         all_script_labels_root=args.all_script_labels,
+        llm_filled_labels_root=args.llm_filled_labels,
         series_policy_path=args.series_policy,
         encoder_checkpoint=args.encoder_checkpoint,
         encoder=args.encoder,

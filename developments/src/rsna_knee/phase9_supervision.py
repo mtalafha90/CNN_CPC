@@ -195,16 +195,80 @@ def prepare_all_report_only_supervision(
     return ordered["StudyInstanceUID"].astype(str).tolist(), y, w, summary
 
 
+def load_fill_merged_export(root: str | Path) -> tuple[pd.DataFrame, dict, dict]:
+    """Read a fill-only merged export and insist it overrode nothing.
+
+    The merge is usable precisely because it preserves every parser call, which
+    is what keeps the frozen specificity intact. An export claiming otherwise is
+    a different experiment and must not be trained on under this name.
+    """
+    root = Path(root)
+    targets_path = root / "training_targets.csv"
+    policy_path = root / "policy.json"
+    audit_path = root / "audit.json"
+    for path in (targets_path, policy_path, audit_path):
+        if not path.is_file():
+            raise FileNotFoundError(f"fill-merged export is missing {path}")
+
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    if int(audit.get("base_cells_overridden", -1)) != 0:
+        raise ValueError(
+            "this export overrode base parser cells; fill-only is what makes the "
+            "frozen specificity carry through, so it is required here"
+        )
+    if int(audit.get("gold_rows_in_training_targets", -1)) != 0:
+        raise ValueError("fill-merged export does not certify zero gold rows")
+    return pd.read_csv(targets_path), policy, audit
+
+
 def load_phase9_arm_supervision(
     train_df: pd.DataFrame,
     *,
     arm: str,
     b6_root: str | Path,
     phase8_root: str | Path,
+    llm_fill_root: str | Path | None = None,
 ) -> tuple[list[str], np.ndarray, np.ndarray, dict, dict]:
+    """Load one arm's supervision, checking it is the surface it claims to be.
+
+    The two frozen arms are pinned to exact cell counts, so a changed export
+    cannot be trained on while still being called Phase-9 control or candidate.
+
+    The `llm_fill` arm is a new surface and has no counts to pin: it is whatever
+    the fill-only merge produced. Its observed counts are recorded in the source
+    block instead, so a run stays identifiable afterwards even though nothing
+    can be checked beforehand.
+    """
     arm = str(arm).lower()
-    if arm not in {"control", "candidate"}:
-        raise ValueError("Phase 9 arm must be 'control' or 'candidate'")
+    if arm not in {"control", "candidate", "llm_fill"}:
+        raise ValueError("Phase 9 arm must be 'control', 'candidate' or 'llm_fill'")
+
+    if arm == "llm_fill":
+        if not llm_fill_root:
+            raise ValueError("the llm_fill arm requires llm_fill_root")
+        frame, policy, audit = load_fill_merged_export(llm_fill_root)
+        uids, targets, weights, summary = prepare_all_report_only_supervision(
+            train_df, frame
+        )
+        source = {
+            "arm": arm,
+            "source": "B6 preserved, LLM used only where B6 is silent",
+            "merge_version": str(policy.get("version", "")),
+            "base_version": str(policy.get("base_version", "")),
+            "filler_version": str(policy.get("filler_version", "")),
+            "filler_provenance": policy.get("filler_provenance"),
+            "base_cells_overridden": 0,
+            "excluded_targets": list(audit.get("excluded_targets", [])),
+            "observed_counts": {
+                "active_studies": summary["active_studies"],
+                "usable_cells": summary["usable_cells"],
+                "positive_cells": summary["positive_cells"],
+                "negative_cells": summary["negative_cells"],
+            },
+            "summary": summary,
+        }
+        return uids, targets, weights, summary, source
 
     if arm == "control":
         frame, policy, audit = load_frozen_b6_export(b6_root)

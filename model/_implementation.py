@@ -43,6 +43,11 @@ WORKING_ARCHITECTURE = "b31_training_only_local_context_scaffold_eval_bypass_v1"
 SUPERVISION_SURFACES = {
     "latin-script": "control",
     "all-script": "candidate",
+    # The rule parser answers about a quarter of the label cells and declines
+    # the rest. This keeps every answer it gives and asks a local LLM only about
+    # the cells it left blank, which is the formulation measured to carry the
+    # whole benefit of replacing the parser without overriding any of its calls.
+    "llm-filled": "llm_fill",
 }
 
 # Which pretrained weights the frozen encoder starts from.  "report-aligned" is
@@ -400,24 +405,29 @@ def train_working_model(
     dinov3_variant: str = "tiny",
     encoder_trainable_stages: int = 0,
     encoder_lr_scale: float = 0.05,
+    llm_filled_labels_root: str | Path | None = None,
 ):
     """Train the working model on the full report-only study population.
 
     `supervision` selects which label surface enters the gradient:
     `"latin-script"` uses the frozen rule-parser labels only, `"all-script"`
     adds the cells recovered by translating the Greek- and Cyrillic-script
-    reports before parsing.
+    reports before parsing, and `"llm-filled"` keeps every parser answer and
+    fills only the cells it left blank, which needs `llm_filled_labels_root`.
     """
     arm = SUPERVISION_SURFACES.get(supervision)
     if arm is None:
         choices = ", ".join(sorted(SUPERVISION_SURFACES))
         raise ValueError(f"supervision must be one of: {choices}")
+    if arm == "llm_fill" and not llm_filled_labels_root:
+        raise ValueError("supervision 'llm-filled' requires llm_filled_labels_root")
 
     return _resolve("phase9_matched_supervision_training:train_phase9_arm")(
         config,
         arm=arm,
         b6_root=str(latin_script_labels_root),
         phase8_root=str(all_script_labels_root),
+        llm_fill_root=str(llm_filled_labels_root) if llm_filled_labels_root else None,
         series_policy_path=str(series_policy_path),
         report_ssl_checkpoint=str(encoder_checkpoint or ""),
         out_root=str(out_root),
