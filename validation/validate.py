@@ -22,6 +22,7 @@ from model._implementation import (
     macro_auc,
     predict,
     read_config,
+    resolve_checkpoints,
     resolve_runtime,
     run_directory,
 )
@@ -52,11 +53,7 @@ def evaluate(
     print(runtime.describe())
 
     crop_policy = resolve_crop_policy(config)
-    paths = (
-        [Path(checkpoint)]
-        if isinstance(checkpoint, (str, Path))
-        else [Path(p) for p in checkpoint]
-    )
+    paths = resolve_checkpoints(checkpoint)
     models, payloads = [], []
     for path in paths:
         built, built_payload = loader(path, device=device or runtime.device)

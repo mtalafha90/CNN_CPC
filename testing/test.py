@@ -34,6 +34,7 @@ from model._implementation import (
     inference_batch_size,
     inference_slice_offsets,
     read_config,
+    resolve_checkpoints,
     resolve_runtime,
     run_directory,
     runtime_budget,
@@ -96,13 +97,7 @@ def predict_test_set(
     runtime = resolve_runtime(config)
     print(runtime.describe())
 
-    paths = (
-        [Path(checkpoint).resolve()]
-        if isinstance(checkpoint, (str, Path))
-        else [Path(p).resolve() for p in checkpoint]
-    )
-    if not paths:
-        raise ValueError("no checkpoint given")
+    paths = resolve_checkpoints(checkpoint)
 
     models, payloads = [], []
     for path in paths:

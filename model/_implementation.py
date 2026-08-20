@@ -147,6 +147,49 @@ def encoder_fingerprint(model) -> str:
     return _resolve("b17_training:encoder_state_sha256")(model.encoder)
 
 
+def resolve_checkpoints(paths) -> list[Path]:
+    """Check every checkpoint exists before any of them is loaded.
+
+    Scoring several models means several paths, and a typo in the last one
+    should not be discovered after the first has been built -- or, worse, after
+    the scans have started being read. A missing path also names its parent's
+    contents, because the usual cause is a run directory called something
+    slightly different from what was typed.
+    """
+    if isinstance(paths, (str, Path)):
+        paths = [paths]
+    resolved = [Path(p) for p in paths]
+    if not resolved:
+        raise ValueError("no checkpoint given")
+
+    for path in resolved:
+        if path.is_file():
+            continue
+        message = f"no checkpoint at {path}"
+        if path.parent.is_dir():
+            siblings = sorted(p.name for p in path.parent.glob("*.pt"))
+            message += (
+                f"; {path.parent} holds: {', '.join(siblings)}"
+                if siblings
+                else f"; {path.parent} holds no .pt files"
+            )
+        else:
+            # A wrong run name leaves several levels missing at once, so walk up
+            # to the last directory that does exist and show what is in it.
+            existing = next(
+                (parent for parent in path.parents if parent.is_dir()), None
+            )
+            if existing is not None:
+                nearby = sorted(p.name for p in existing.iterdir() if p.is_dir())
+                message += (
+                    f"; {existing} holds: {', '.join(nearby)}"
+                    if nearby
+                    else f"; {existing} holds no directories"
+                )
+        raise FileNotFoundError(message)
+    return [p.resolve() for p in resolved]
+
+
 def load_checkpoint(path: str | Path, *, device: str = "cpu"):
     """Rebuild a trained network from any checkpoint this interface supports.
 
