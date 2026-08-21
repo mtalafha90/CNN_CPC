@@ -7,6 +7,16 @@ from rsna_knee.b35_exact_batch import B35TargetSpatialResidualExactBatch
 from rsna_knee.b35_target_spatial_residual import B35_BASE_SLICES, B35_DENSE_SLICES
 
 
+class _ChannelNorm2d(nn.Module):
+    def __init__(self, dim: int):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x):
+        # Mirror ConvNeXt's channel-wise LayerNorm on NCHW tensors.
+        return self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+
+
 class _DummyEncoder(nn.Module):
     def __init__(self, dim: int = 8):
         super().__init__()
@@ -16,15 +26,13 @@ class _DummyEncoder(nn.Module):
             nn.GELU(),
         )
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.pre_classifier = nn.Sequential(nn.LayerNorm(dim))
+        self.pre_classifier = nn.Sequential(_ChannelNorm2d(dim), nn.Flatten(1))
 
     def _normalize(self, x):
         return x
 
     def forward(self, x):
-        fmap = self.features(x)
-        pooled = self.avgpool(fmap).flatten(1)
-        return self.pre_classifier(pooled)
+        return self.pre_classifier(self.avgpool(self.features(x)))
 
 
 class _DummyBase(nn.Module):
@@ -46,9 +54,7 @@ def test_exact_batch_first_16_match_direct_encoder_path():
 
     global_feature, spatial = model._encode_combined(volumes, present)
 
-    historical = volumes[:, :, :B35_BASE_SLICES].reshape(
-        -1, 3, 16, 16
-    )
+    historical = volumes[:, :, :B35_BASE_SLICES].reshape(-1, 3, 16, 16)
     direct = torch.cat(
         [base.encoder(chunk) for chunk in historical.split(base.encoder_batch_size)],
         dim=0,
