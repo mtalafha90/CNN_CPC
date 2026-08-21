@@ -1,0 +1,101 @@
+# B37 prospective high-resolution sparse-MIL endpoint.
+# Joint hypothesis: retain substantially more native in-plane information and
+# allow the B36 sparse pathology-specific localizer to learn from that richer
+# representation.  Do not tune these values after expert58.
+
+data_root: /data/rsna-knee-abnormality-detection
+train_csv: train.csv
+train_series_csv: train_series.csv
+
+seed: 2026
+competition_mode: true
+requested_gpus: 1
+allow_external_pretrained: true
+pretrained: true
+
+device: auto
+precision: auto
+runtime_budget_hours: 8.5
+runtime_reserve_minutes: 10
+
+# Host-memory safety established by the completed B35/B36 runs.
+num_workers: 2
+persistent_workers: false
+prefetch_factor: 1
+multiprocessing_context: spawn
+series_cache_mb_per_worker: 64
+strict_dicom: false
+strict_dicom_inference: true
+
+# Historical B34/B20 model contract except for the declared 448 input.
+b12_use_physical_scale: false
+b12_1_series_pool_heads: 8
+b7_n_slices: 16
+b7_image_size: 448
+b7_triplet_gap: 1
+b7_batch_size: 2
+b7_encoder_batch_size: 4
+b7_gradient_checkpointing: true
+b7_dropout: 0.25
+b7_transformer_layers: 2
+b7_transformer_heads: 8
+b7_transformer_ff_mult: 2.0
+b7_pathology_layers: 1
+
+# Retained historical optimization metadata.
+b7_epochs: 5
+b7_max_batches_per_epoch: 1560
+b7_encoder_lr: 0.0
+b7_head_lr: 0.0001
+b7_min_lr: 0.000001
+b7_weight_decay: 0.0001
+b7_grad_clip: 1.0
+b17_encoder_frozen: true
+b17_label_smoothing: 0.0
+b17_robust_loss: none
+
+b18_expert_selection: true
+b18_selection_metric: macro_auc_12_target_global
+b18_selection_tie_break: earliest_epoch
+b18_candidate_epochs: 5
+b18_save_candidate_checkpoints: true
+
+b19_joint_focus_enabled: false
+b20_crop_focus_enabled: true
+b20_crop_focus_version: joint_focus_center_crop_only_v1
+b20_crop_focus_crop_fraction: 0.90
+
+# Frozen report-supervision confidence policy.
+b7_min_confidence: 0.75
+b7_positive_target: 0.85
+b7_negative_target: 0.05
+b7_positive_weight: 0.50
+b7_negative_weight: 1.00
+
+# Recorded historical augmentation values.  Like B36, B37's 32-centre dataset
+# is deterministic and constructed with train=false; these are not applied.
+b7_noise_std: 0.02
+b7_slice_dropout: 0.08
+b7_train_gap_choices: [1, 2]
+b7_center_jitter: 2
+b7_rotation_deg: 5.0
+b7_translate_frac: 0.03
+b7_scale_jitter: 0.05
+b7_gamma_jitter: 0.12
+b7_bias_field_strength: 0.08
+
+b7_eval_tta_offsets: [-1, 0, 1]
+b7_eval_batch_size: 1
+
+# B37 frozen joint-mechanism parameters.
+b37_micro_batch: 2
+b37_grid_size: 6
+b37_top_k: 8
+b37_temperature: 1.0
+b37_local_aux_weight: 1.0
+b37_head_lr: 0.0001
+b37_weight_decay: 0.0001
+b37_grad_clip: 1.0
+b37_encoder_trainable_stages: 1
+b37_encoder_lr_scale: 0.05
+b37_encoder_chunk_size: 4
