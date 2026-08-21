@@ -1173,7 +1173,41 @@ def build_parameter_groups(model: KneeAbnormalityModel, config: "Config") -> lis
     return groups
 ''')
 
-markdown("## 16. Training")
+markdown("## 16. Choosing a precision the GPU supports")
+
+code(r'''
+def autocast_settings(device: str):
+    """Pick the mixed-precision type this GPU can actually execute.
+
+    bfloat16 needs Ampere (RTX 30-series, A-series) or newer. Colab's T4 is
+    Turing and has no bfloat16 kernels at all -- asking for it there fails deep
+    inside cuDNN with "unable to find an engine to execute this computation",
+    which names neither the dtype nor the GPU.
+
+    So the dtype is chosen from the hardware. float16 needs a gradient scaler
+    because its range is narrow enough for small gradients to underflow to
+    zero; bfloat16 has float32's range and does not.
+    """
+    if device != "cuda":
+        return torch.float32, False, False
+
+    prefer_bf16 = torch.cuda.is_bf16_supported()
+    dtype = torch.bfloat16 if prefer_bf16 else torch.float16
+    name = torch.cuda.get_device_name(0)
+    print(f"{name}: using {'bfloat16' if prefer_bf16 else 'float16'}"
+          + ("" if prefer_bf16 else " (no bfloat16 on this GPU)"))
+    return dtype, True, not prefer_bf16
+
+
+def make_grad_scaler(enabled: bool):
+    """A gradient scaler, through whichever API this torch version offers."""
+    try:
+        return torch.amp.GradScaler("cuda", enabled=enabled)   # torch >= 2.4
+    except (AttributeError, TypeError):
+        return torch.cuda.amp.GradScaler(enabled=enabled)
+''')
+
+markdown("## 17. Training")
 
 code(r'''
 def train_model(model, loader, config: "Config", device: str):
@@ -1204,8 +1238,8 @@ def train_model(model, loader, config: "Config", device: str):
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimiser, T_max=config.schedule_length, eta_min=config.min_lr)
 
-    use_amp = device == "cuda"
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    amp_dtype, use_amp, needs_scaler = autocast_settings(device)
+    scaler = make_grad_scaler(needs_scaler)
     trainable = [p for p in model.parameters() if p.requires_grad]
     history = []
 
@@ -1222,7 +1256,7 @@ def train_model(model, loader, config: "Config", device: str):
             weights = batch["weight"].to(device, non_blocking=True)
 
             optimiser.zero_grad(set_to_none=True)
-            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+            with torch.autocast("cuda", dtype=amp_dtype, enabled=use_amp):
                 logits = model(volumes, present, metadata)
                 loss = weighted_weak_bce(logits, targets, weights, model.balance_multipliers)
 
@@ -1248,7 +1282,7 @@ def train_model(model, loader, config: "Config", device: str):
     return history
 ''')
 
-markdown("## 17. Scoring")
+markdown("## 18. Scoring")
 
 code(r'''
 def binary_auc(truth: np.ndarray, score: np.ndarray) -> float:
@@ -1295,7 +1329,7 @@ def macro_roc_auc(truth: np.ndarray, score: np.ndarray):
     return (float(usable.mean()) if usable.size else float("nan")), per_finding
 ''')
 
-markdown("## 18. Prediction")
+markdown("## 19. Prediction")
 
 code(r'''
 @torch.no_grad()
@@ -1316,6 +1350,7 @@ def predict_with_augmentation(models, loader, device: str):
     for model in models:
         model.to(device).eval()
 
+    amp_dtype, use_amp, _ = autocast_settings(device)
     uids, blocks = [], []
     for batch in loader:
         present = batch["present"].to(device, non_blocking=True)
@@ -1328,7 +1363,7 @@ def predict_with_augmentation(models, loader, device: str):
             frame = (volumes[:, view] if volumes.ndim == 7 else volumes).to(
                 device, non_blocking=True)
             for model in models:
-                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device == "cuda"):
+                with torch.autocast("cuda", dtype=amp_dtype, enabled=use_amp):
                     logits = model(frame, present, metadata)
                 views.append(torch.sigmoid(logits.float()))
 
@@ -1338,7 +1373,7 @@ def predict_with_augmentation(models, loader, device: str):
     return uids, np.concatenate(blocks, axis=0)
 ''')
 
-markdown("## 19. Writing the submission")
+markdown("## 20. Writing the submission")
 
 code(r'''
 def write_submission(uids, probabilities, path="submission.csv") -> pd.DataFrame:
@@ -1373,7 +1408,7 @@ def write_submission(uids, probabilities, path="submission.csv") -> pd.DataFrame
 
 
 markdown("""
-## 20. Running it
+## 21. Running it
 
 The cells below are the only ones that touch your data. Everything above is
 definitions, so you can read the whole model before running anything.
@@ -1381,9 +1416,13 @@ definitions, so you can read the whole model before running anything.
 
 code(r'''
 # --- point these at your data -------------------------------------------------
-CONFIG.data_root = "/content/rsna-knee-abnormality-detection"
-LABEL_FILE = "/content/training_targets.csv"   # the parsed report states
-CONFIG.study_limit = 200                       # None for the full population
+CONFIG.data_root = "/content/colab_subset"
+LABEL_FILE = "/content/colab_subset/training_targets.csv"
+
+# None means "everything in data_root". When the folder is already a subset cut
+# to a size budget, that is what you want -- setting a number here as well would
+# quietly train on a fraction of what you took the trouble to upload.
+CONFIG.study_limit = None
 
 studies = read_study_table(CONFIG.data_root, "train")
 series = read_series_table(CONFIG.data_root, "train")

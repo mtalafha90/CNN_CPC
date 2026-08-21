@@ -345,3 +345,40 @@ def test_a_repeated_study_is_refused(namespace, tmp_path):
     write = namespace["write_submission"]
     with pytest.raises(AssertionError, match="twice"):
         write(["a", "a"], np.full((2, 12), 0.5), path=tmp_path / "submission.csv")
+
+
+def test_the_precision_matches_what_the_gpu_can_run(namespace):
+    """bfloat16 needs Ampere. Asking a Turing GPU for it dies inside cuDNN."""
+    dtype, use_amp, needs_scaler = namespace["autocast_settings"]("cpu")
+    import torch
+
+    assert dtype is torch.float32
+    assert use_amp is False and needs_scaler is False
+
+
+def test_float16_gets_a_scaler_and_bfloat16_does_not(namespace, monkeypatch):
+    """float16's range is narrow enough for small gradients to reach zero."""
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: False)
+    monkeypatch.setattr(torch.cuda, "get_device_name", lambda i=0: "Tesla T4")
+    dtype, use_amp, needs_scaler = namespace["autocast_settings"]("cuda")
+    assert dtype is torch.float16 and use_amp and needs_scaler
+
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_name", lambda i=0: "RTX A4500")
+    dtype, use_amp, needs_scaler = namespace["autocast_settings"]("cuda")
+    assert dtype is torch.bfloat16 and use_amp and not needs_scaler
+
+
+def test_the_grad_scaler_is_built_through_a_supported_api(namespace):
+    scaler = namespace["make_grad_scaler"](False)
+    assert hasattr(scaler, "scale") and hasattr(scaler, "step")
+
+
+def test_no_precision_is_hard_coded_anywhere():
+    """The bug this replaced: bfloat16 written into both training and inference."""
+    import json
+
+    text = json.dumps(json.loads(NOTEBOOK.read_text(encoding="utf-8")))
+    assert "dtype=torch.bfloat16" not in text, "precision must come from the GPU"
