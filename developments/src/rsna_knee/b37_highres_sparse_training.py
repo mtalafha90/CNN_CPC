@@ -167,8 +167,9 @@ def _preflight(
     if not encoder_grad or not evidence_grad:
         raise RuntimeError("B37 preflight did not reach encoder tail and sparse evidence head")
     print(
-        f"[B37 preflight] total={float(total):.6f} "
-        f"combined={float(combined):.6f} local={float(local):.6f}",
+        f"[B37 preflight] total={total.detach().item():.6f} "
+        f"combined={combined.detach().item():.6f} "
+        f"local={local.detach().item():.6f}",
         flush=True,
     )
     if torch.cuda.is_available():
