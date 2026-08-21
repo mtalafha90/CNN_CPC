@@ -1,0 +1,91 @@
+# B37: full-volume normalization -> native 90% crop -> one resize to 288.
+#
+# The historical B20/B34 contract is unchanged except for the declared input
+# resolution/preprocessing intervention. Training still uses the full LLM-fill
+# report-only surface through b37_training.py, fixed E2, seed 2026, batch size 2,
+# and one trainable tail encoder stage at 0.05x head LR.
+
+data_root: /data/rsna-knee-abnormality-detection
+train_csv: train.csv
+train_series_csv: train_series.csv
+
+seed: 2026
+competition_mode: true
+requested_gpus: 1
+allow_external_pretrained: true
+pretrained: true
+
+device: auto
+precision: auto
+runtime_budget_hours: 8.5
+runtime_reserve_minutes: 30
+
+# Host-memory-safe runtime. These settings affect I/O concurrency/buffering,
+# not the image values or optimization objective.
+num_workers: 2
+persistent_workers: false
+prefetch_factor: 1
+multiprocessing_context: spawn
+series_cache_mb_per_worker: 64
+strict_dicom: false
+strict_dicom_inference: true
+
+b12_use_physical_scale: false
+b12_1_series_pool_heads: 8
+b7_n_slices: 16
+b7_image_size: 288
+b7_triplet_gap: 1
+b7_batch_size: 2
+b7_encoder_batch_size: 24
+b7_gradient_checkpointing: true
+b7_dropout: 0.25
+b7_transformer_layers: 2
+b7_transformer_heads: 8
+b7_transformer_ff_mult: 2.0
+b7_pathology_layers: 1
+
+# Historical B20/B34 values retained for contract checking. Phase-9/B37 itself
+# stops at its own fixed E2 endpoint.
+b7_epochs: 5
+b7_max_batches_per_epoch: 1560
+b7_encoder_lr: 0.0
+b7_head_lr: 0.0001
+b7_min_lr: 0.000001
+b7_weight_decay: 0.0001
+b7_grad_clip: 1.0
+b17_encoder_frozen: true
+b17_label_smoothing: 0.0
+b17_robust_loss: none
+
+b18_expert_selection: true
+b18_selection_metric: macro_auc_12_target_global
+b18_selection_tie_break: earliest_epoch
+b18_candidate_epochs: 5
+b18_save_candidate_checkpoints: true
+
+b19_joint_focus_enabled: false
+b20_crop_focus_enabled: true
+b20_crop_focus_version: joint_focus_center_crop_only_v1
+b20_crop_focus_crop_fraction: 0.90
+
+# Frozen supervision policy encoded in the label export.
+b7_min_confidence: 0.75
+b7_positive_target: 0.85
+b7_negative_target: 0.05
+b7_positive_weight: 0.50
+b7_negative_weight: 1.00
+
+# Same acquisition-like augmentation as the matched full-fill B34 run.
+b7_noise_std: 0.02
+b7_slice_dropout: 0.08
+b7_train_gap_choices: [1, 2]
+b7_center_jitter: 2
+b7_rotation_deg: 5.0
+b7_translate_frac: 0.03
+b7_scale_jitter: 0.05
+b7_gamma_jitter: 0.12
+b7_bias_field_strength: 0.08
+
+b7_eval_tta_offsets: [-1, 0, 1]
+b7_eval_batch_size: 2
+b7_n_bootstrap: 5000
