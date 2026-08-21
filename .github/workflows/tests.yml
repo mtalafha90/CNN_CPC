@@ -48,4 +48,5 @@ jobs:
             developments/tests/test_translation_rescue_supervision_merge.py \
             developments/tests/test_phase9_supervision.py \
             developments/tests/test_phase9_v2_supervision.py \
-            developments/tests/test_phase9_v2_target_analysis.py
+            developments/tests/test_phase9_v2_target_analysis.py \
+            tools/tests/test_organize_runs.py
