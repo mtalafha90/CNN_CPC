@@ -6,12 +6,22 @@ import torch
 from rsna_knee.b35_target_spatial_residual import b35_centers
 from rsna_knee.b36_sparse_mil import B36SparseMILHead
 from rsna_knee.b37_highres_sparse_mil import (
+    B37_EXPERT58_ROOT,
     B37_GRID_SIZE,
     B37_IMAGE_SIZE,
+    B37_RUN_ROOT,
     B37_TOP_K,
     preprocess_dense_triplets_b37,
     require_b37_sparse_contract,
 )
+
+
+def test_b37_uses_numbered_run_root() -> None:
+    assert B37_RUN_ROOT == (
+        "runs/071_Experiment_B37_highres_448_sparse_mil/"
+        "b37_highres_sparse_mil"
+    )
+    assert B37_EXPERT58_ROOT == f"{B37_RUN_ROOT}/expert58"
 
 
 def _config() -> dict:

@@ -115,7 +115,7 @@ python -m rsna_knee.b37_highres_sparse_training \
   --labels-root "$LLM_LABELS" \
   --series-policy "$SERIES_POLICY" \
   --base-checkpoint "$BASE_MODEL" \
-  --out-root runs/b37_highres_sparse_mil \
+  --out-root runs/071_Experiment_B37_highres_448_sparse_mil/b37_highres_sparse_mil \
   --preflight-only
 ```
 

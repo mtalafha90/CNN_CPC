@@ -39,6 +39,7 @@ from .b35_training import (
 from .b37_highres_sparse_mil import (
     B37_ENCODER_LR_SCALE,
     B37_LOCAL_AUX_WEIGHT,
+    B37_RUN_ROOT,
     B37_VERSION,
     B37HighResSparseDataset,
     B37HighResSparseMILResidual,
@@ -189,7 +190,7 @@ def train_b37(
     labels_root: str | Path,
     series_policy_path: str | Path,
     base_checkpoint: str | Path,
-    out_root: str | Path = "runs/b37_highres_sparse_mil",
+    out_root: str | Path = B37_RUN_ROOT,
     preflight_only: bool = False,
 ) -> Path | None:
     config = dict(config)
@@ -527,7 +528,7 @@ def main() -> None:
     ap.add_argument("--labels-root", required=True)
     ap.add_argument("--series-policy", required=True)
     ap.add_argument("--base-checkpoint", required=True)
-    ap.add_argument("--out-root", default="runs/b37_highres_sparse_mil")
+    ap.add_argument("--out-root", default=B37_RUN_ROOT)
     ap.add_argument("--preflight-only", action="store_true")
     args = ap.parse_args()
     config = dict(_read_config(args.config))

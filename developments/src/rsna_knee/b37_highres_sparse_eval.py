@@ -28,6 +28,7 @@ from .b18_fisher_selection import B18_EXPECTED_GOLD_SERIES, B18_EXPECTED_GOLD_ST
 from .b20_crop_focus import CropFocusedVariableSeriesKneeDataset, b20_crop_focus_policy
 from .b35_training import sha256_file
 from .b37_highres_sparse_mil import (
+    B37_EXPERT58_ROOT,
     B37_VERSION,
     B37HighResSparseDataset,
     B37HighResSparseMILResidual,
@@ -178,7 +179,7 @@ def evaluate_b37(
     data_root: str | Path,
     checkpoint: str | Path,
     base_checkpoint: str | Path,
-    out_root: str | Path = "runs/b37_highres_sparse_mil/expert58",
+    out_root: str | Path = B37_EXPERT58_ROOT,
     n_bootstrap: int = 5000,
 ) -> dict:
     config = dict(config)
@@ -383,7 +384,7 @@ def main() -> None:
     ap.add_argument("--data-root", required=True)
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--base-checkpoint", required=True)
-    ap.add_argument("--out-root", default="runs/b37_highres_sparse_mil/expert58")
+    ap.add_argument("--out-root", default=B37_EXPERT58_ROOT)
     ap.add_argument("--n-bootstrap", type=int, default=5000)
     args = ap.parse_args()
     config = dict(_read_config(args.config))

@@ -48,6 +48,9 @@ from .dicom import _normalise_volume, find_series_dir
 from .encoder_finetune import unfreeze_encoder_tail
 
 B37_VERSION = "b37_highres448_b36_sparse_mil_encoder_tail_v1"
+B37_NUMBERED_CONTAINER = "runs/071_Experiment_B37_highres_448_sparse_mil"
+B37_RUN_ROOT = f"{B37_NUMBERED_CONTAINER}/b37_highres_sparse_mil"
+B37_EXPERT58_ROOT = f"{B37_RUN_ROOT}/expert58"
 B37_IMAGE_SIZE = 448
 B37_CROP_FRACTION = 0.90
 B37_GRID_SIZE = 6
@@ -565,6 +568,9 @@ class B37HighResSparseMILResidual(nn.Module):
 
 __all__ = [
     "B37_VERSION",
+    "B37_NUMBERED_CONTAINER",
+    "B37_RUN_ROOT",
+    "B37_EXPERT58_ROOT",
     "B37_IMAGE_SIZE",
     "B37_GRID_SIZE",
     "B37_TOP_K",
