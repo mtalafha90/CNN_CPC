@@ -21,6 +21,7 @@ import csv
 import fnmatch
 import json
 import os
+import re
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -30,6 +31,8 @@ from typing import Any, Iterable
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REGISTRY = REPOSITORY_ROOT / "config" / "experiment_registry.json"
 DEFAULT_OUTPUT_NAME = "by_experiment"
+NUMBERED_DIRECTORY = re.compile(r"^\d{3}_Experiment_")
+RESERVED_RUN_DIRECTORIES = {"_migration"}
 
 
 class RegistryError(ValueError):
@@ -224,6 +227,12 @@ def build_plan(
     plan: list[PlanItem] = []
     for source in sorted(runs_root.iterdir(), key=lambda item: item.name.casefold()):
         if source.resolve() == output_resolved:
+            continue
+        # Physical migrations place canonical containers at the run root.
+        # They are destinations, not unclassified runs to index again.
+        if source.name in RESERVED_RUN_DIRECTORIES or NUMBERED_DIRECTORY.match(
+            source.name
+        ):
             continue
         classification = classify(source.name, registry)
         destination = output_root / classification.directory / source.name

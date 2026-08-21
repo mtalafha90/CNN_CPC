@@ -163,6 +163,53 @@ the active implemented protocol is the frozen 448-resolution sparse-MIL design
 at commit `9395665`. Both possible run names map to the same permanent B37
 number so historical numbering does not shift.
 
+## Physically migrate run directories
+
+The symlink index above is the safest default. If the physical archive itself
+must use the numbered layout, use `tools/migrate_runs.py`. It moves only real
+top-level directories classified as experiments; loose logs, CSV/JSON files,
+shared audits, and unclassified folders stay where they are.
+
+Multiple runs belonging to one experiment remain distinct inside one permanent
+container:
+
+```text
+runs/010_Experiment_B5_image_report_ssl/
+├── b5_frozen_probe/
+└── b5_report_ssl/
+```
+
+By default the old paths become relative compatibility symlinks, so commands
+that still reference `runs/b5_report_ssl/...` continue to work. Every applied
+migration records each completed move in `runs/_migration/manifests/`.
+
+Dry-run first:
+
+```bash
+python tools/migrate_runs.py \
+  --runs-root /media/talafha/Disk_1/CNN_CPC/runs
+```
+
+Apply after reviewing the complete plan:
+
+```bash
+python tools/migrate_runs.py \
+  --runs-root /media/talafha/Disk_1/CNN_CPC/runs \
+  --apply
+```
+
+The apply command prints the exact manifest path. Roll back with:
+
+```bash
+python tools/migrate_runs.py \
+  --runs-root /media/talafha/Disk_1/CNN_CPC/runs \
+  --rollback /absolute/path/to/migration_YYYYMMDDTHHMMSSZ.json
+```
+
+Rollback performs a complete preflight before changing anything. It refuses to
+proceed if a moved directory or compatibility alias has been replaced or
+changed unexpectedly.
+
 ## Adding future experiments
 
 1. Append the next permanent number to `config/experiment_registry.json`.
