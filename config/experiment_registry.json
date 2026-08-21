@@ -1,0 +1,756 @@
+{
+  "schema_version": 1,
+  "history_basis": {
+    "branch": "main",
+    "commit_count_reviewed": 1143,
+    "first_commit": "934e78b",
+    "first_commit_date": "2026-08-07",
+    "last_commit_reviewed": "17a98fe",
+    "last_commit_date": "2026-08-22",
+    "classification_rule": "Follow the canonical scientific sequence reconstructed from the experiment ledgers and result records across the complete Git history. Keep matched controls and arms inside the experiment that declared them. Preserve blocked, superseded, and not-run definitions so the numbering never rewrites history.",
+    "legacy_exclusion": "E01-E09 were an unexecuted pre-data configuration ladder. Their own historical README says the actual campaign could not be completed, and the configs were then removed as historical. They are therefore design prototypes, not numbered completed/governed experiment records."
+  },
+  "directory_template": "{number:03d}_Experiment_{code}_{slug}",
+  "experiments": [
+    {
+      "number": 1,
+      "code": "B0",
+      "slug": "random_init_stage1",
+      "title": "Random-initialized Stage-1 baseline",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "27d9c65",
+      "run_patterns": ["stage1_random"]
+    },
+    {
+      "number": 2,
+      "code": "REPORT_TEACHER",
+      "slug": "fold_safe_report_teacher",
+      "title": "Fold-safe report-teacher benchmark",
+      "category": "supervision",
+      "status": "completed",
+      "introduced_commit": "c4d0af0",
+      "run_patterns": ["report_teacher"]
+    },
+    {
+      "number": 3,
+      "code": "B1",
+      "slug": "competition_mri_ssl",
+      "title": "Competition-only MRI SSL plus Stage-1",
+      "category": "representation",
+      "status": "completed",
+      "introduced_commit": "dfcf0b7",
+      "run_patterns": ["ssl_strong", "stage1_ssl", "stage1_ssl_strong"]
+    },
+    {
+      "number": 4,
+      "code": "B2",
+      "slug": "discriminative_ssl_finetune",
+      "title": "Discriminative SSL fine-tuning",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "1d154f9",
+      "run_patterns": ["stage1_ssl_b2"]
+    },
+    {
+      "number": 5,
+      "code": "B3",
+      "slug": "pathology_aware_mil",
+      "title": "Pathology-aware low-capacity MIL",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "db2e984",
+      "run_patterns": ["stage1_ssl_b3"]
+    },
+    {
+      "number": 6,
+      "code": "B4",
+      "slug": "frozen_ssl_classical",
+      "title": "Frozen SSL features with target-wise classical classifiers",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "80e244e",
+      "run_patterns": ["b4_frozen_ssl"]
+    },
+    {
+      "number": 7,
+      "code": "B4.1",
+      "slug": "shared_policy_frozen_ssl",
+      "title": "Shared-policy frozen-SSL classifier",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "2de14bb",
+      "run_patterns": ["b4_1_shared_ssl"]
+    },
+    {
+      "number": 8,
+      "code": "B4.2",
+      "slug": "grouped_frozen_ssl",
+      "title": "Grouped-policy frozen-SSL classifier",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "e70fed9",
+      "run_patterns": ["b4_2_grouped_ssl"]
+    },
+    {
+      "number": 9,
+      "code": "B4.3",
+      "slug": "two_way_cv_frozen_ssl",
+      "title": "Two-way cross-validated frozen-SSL classifier",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "8a9d37d",
+      "run_patterns": ["b4_3_crossval_ssl"]
+    },
+    {
+      "number": 10,
+      "code": "B5",
+      "slug": "image_report_ssl",
+      "title": "Competition-only image-report representation learning",
+      "category": "representation",
+      "status": "completed",
+      "introduced_commit": "3361fd0",
+      "run_patterns": ["b5_report_ssl", "b5_frozen_probe"]
+    },
+    {
+      "number": 11,
+      "code": "B6",
+      "slug": "structured_report_labels",
+      "title": "Structured multilingual report-label supervision",
+      "category": "supervision",
+      "status": "completed",
+      "introduced_commit": "c8be937",
+      "run_patterns": ["b6_report_labels*"]
+    },
+    {
+      "number": 12,
+      "code": "B7",
+      "slug": "asymmetric_weak_supervision",
+      "title": "B5-initialized pathology-query model with B6 weak labels",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "eaf69f9",
+      "run_patterns": ["b7_weak_supervision"]
+    },
+    {
+      "number": 13,
+      "code": "B7.1",
+      "slug": "full_corpus_coverage",
+      "title": "Full-corpus B7 weak-supervision coverage",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "0f3a0ca",
+      "run_patterns": ["b7_1_full_coverage"]
+    },
+    {
+      "number": 14,
+      "code": "B5_B7.1_ENSEMBLE",
+      "slug": "fixed_rank_ensemble",
+      "title": "Fixed B5 plus B7.1 rank ensemble",
+      "category": "ensemble",
+      "status": "completed",
+      "introduced_commit": "61ef16a",
+      "run_patterns": ["fixed_ensembles"]
+    },
+    {
+      "number": 15,
+      "code": "B8",
+      "slug": "spatial_anatomy",
+      "title": "Pathology-aware spatial anatomy model",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "e965359",
+      "run_patterns": ["b8_spatial_anatomy"]
+    },
+    {
+      "number": 16,
+      "code": "B9",
+      "slug": "strict_series_routing",
+      "title": "Strict exact-contrast semantic routing",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "583c614",
+      "run_patterns": ["b9_strict_routing"]
+    },
+    {
+      "number": 17,
+      "code": "B10",
+      "slug": "physical_scale",
+      "title": "Physical-scale normalization",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "041760b",
+      "run_patterns": ["b10_physical_scale"]
+    },
+    {
+      "number": 18,
+      "code": "B11",
+      "slug": "teacher_student_completion",
+      "title": "Conservative teacher-student label completion",
+      "category": "supervision",
+      "status": "viability_gate_failed",
+      "introduced_commit": "1bd7cd8",
+      "run_patterns": ["b11_teacher_student"]
+    },
+    {
+      "number": 19,
+      "code": "B11.1",
+      "slug": "quantile_teacher_tails",
+      "title": "Calibration-aware target-wise quantile teacher tails",
+      "category": "supervision",
+      "status": "completed",
+      "introduced_commit": "7837e12",
+      "run_patterns": ["b11_1_quantile_teacher"]
+    },
+    {
+      "number": 20,
+      "code": "B12",
+      "slug": "variable_series",
+      "title": "All-real-series variable-series model",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "16b1ae0",
+      "run_patterns": ["b12_variable_series"]
+    },
+    {
+      "number": 21,
+      "code": "B12.1",
+      "slug": "hierarchical_series_tokens",
+      "title": "Hierarchical learned series-token aggregation",
+      "category": "model",
+      "status": "implemented_not_run",
+      "introduced_commit": "da73981",
+      "run_patterns": ["b12_1_hierarchical"]
+    },
+    {
+      "number": 22,
+      "code": "B13",
+      "slug": "imagenet_hierarchical",
+      "title": "ImageNet ConvNeXt hierarchical series model",
+      "category": "representation",
+      "status": "completed",
+      "introduced_commit": "b7c1a24",
+      "run_patterns": ["b13_imagenet", "slice_audit_b13*"]
+    },
+    {
+      "number": 23,
+      "code": "B14",
+      "slug": "imagenet_full_slice_tokens",
+      "title": "ImageNet full slice-token memory",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "61dfc58",
+      "run_patterns": ["b14_imagenet_full_tokens"]
+    },
+    {
+      "number": 24,
+      "code": "B15",
+      "slug": "knee_mri_ssl",
+      "title": "ImageNet to knee-MRI SSL to B13 hierarchy",
+      "category": "representation",
+      "status": "completed",
+      "introduced_commit": "e2d9bec",
+      "run_patterns": ["b15_mri_ssl", "b13_v2_control", "weak_holdout_v2", "b6_b15_gold_diagnostic"]
+    },
+    {
+      "number": 25,
+      "code": "B16",
+      "slug": "full_report_alignment",
+      "title": "Full-report semantic representation alignment",
+      "category": "representation",
+      "status": "completed",
+      "introduced_commit": "88a0313",
+      "run_patterns": ["b16_full_report", "b16_v2_safe_report"]
+    },
+    {
+      "number": 26,
+      "code": "B17",
+      "slug": "frozen_report_encoder",
+      "title": "Frozen B16 encoder with fixed downstream training",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "138b090",
+      "run_patterns": ["b17_frozen_encoder"]
+    },
+    {
+      "number": 27,
+      "code": "FINAL",
+      "slug": "all_data_production_model",
+      "title": "All-data production model definition",
+      "category": "production",
+      "status": "implemented_deferred",
+      "introduced_commit": "efaa325",
+      "run_patterns": ["final_all_data"]
+    },
+    {
+      "number": 28,
+      "code": "B18",
+      "slug": "fisher_epoch_selection",
+      "title": "Fisher-style expert-guided epoch selection",
+      "category": "selection",
+      "status": "completed",
+      "introduced_commit": "677cc6f",
+      "run_patterns": ["b18_fisher_selection"]
+    },
+    {
+      "number": 29,
+      "code": "B19",
+      "slug": "joint_focus_vignette",
+      "title": "Ninety-percent crop with cosine vignette",
+      "category": "preprocessing",
+      "status": "completed",
+      "introduced_commit": "68b4bec",
+      "run_patterns": ["b19_joint_focus"]
+    },
+    {
+      "number": 30,
+      "code": "B20",
+      "slug": "crop_only_focus",
+      "title": "Post-resize ninety-percent crop-only focus",
+      "category": "preprocessing",
+      "status": "completed_promoted",
+      "introduced_commit": "d1e9212",
+      "run_patterns": ["b20_crop_focus", "focus_comparison"]
+    },
+    {
+      "number": 31,
+      "code": "B21",
+      "slug": "preresize_crop",
+      "title": "Pre-resize crop with matched B20-v2 control",
+      "category": "preprocessing",
+      "status": "completed",
+      "introduced_commit": "19fd6e4",
+      "run_patterns": ["b20_v2_control", "b21_preresize_crop", "b21_full_acceptance"]
+    },
+    {
+      "number": 32,
+      "code": "B22",
+      "slug": "preresize_duration_audit",
+      "title": "B21 training-duration audit",
+      "category": "duration",
+      "status": "completed",
+      "introduced_commit": "2284b70",
+      "run_patterns": ["b22_duration_audit"]
+    },
+    {
+      "number": 33,
+      "code": "B23",
+      "slug": "local_llm_report_labels",
+      "title": "Local-Qwen report labeller and formal gate",
+      "category": "supervision",
+      "status": "completed_gate_failed",
+      "introduced_commit": "3c7d6ac",
+      "run_patterns": ["b23_*", "llm_labeller_inputs"]
+    },
+    {
+      "number": 34,
+      "code": "B24",
+      "slug": "formal_supervision_source",
+      "title": "Formal matched B6-versus-B23 supervision experiment",
+      "category": "supervision",
+      "status": "blocked_not_run",
+      "introduced_commit": "b542609",
+      "run_patterns": ["b24_supervision"]
+    },
+    {
+      "number": 35,
+      "code": "B24X",
+      "slug": "exploratory_supervision_pilot",
+      "title": "Exploratory B6-versus-B23 supervision pilot",
+      "category": "supervision",
+      "status": "completed",
+      "introduced_commit": "4fac398",
+      "run_patterns": ["b24x_pilot"]
+    },
+    {
+      "number": 36,
+      "code": "B24X_DENSITY",
+      "slug": "b6_preserved_density_fill",
+      "title": "B6-preserved B23 missing-cell density ablation",
+      "category": "supervision",
+      "status": "completed",
+      "introduced_commit": "4fac398",
+      "run_patterns": ["b24x_density"]
+    },
+    {
+      "number": 37,
+      "code": "B25X",
+      "slug": "chatgpt_hybrid_supervision",
+      "title": "Three-arm ChatGPT hybrid-supervision experiment",
+      "category": "supervision",
+      "status": "completed",
+      "introduced_commit": "cf0b477",
+      "run_patterns": ["b25x_hybrid", "chatgpt_hybrid_supervision"]
+    },
+    {
+      "number": 38,
+      "code": "B26",
+      "slug": "targeted_supervision_fill",
+      "title": "Targeted supervision fill for balance-flagged targets",
+      "category": "supervision",
+      "status": "quality_gate_failed",
+      "introduced_commit": "7ecf246",
+      "run_patterns": ["b26_fill", "supervision_balance"]
+    },
+    {
+      "number": 39,
+      "code": "B26.1",
+      "slug": "strict_evidence_gate",
+      "title": "Strict LLM evidence-adjudication gate",
+      "category": "supervision",
+      "status": "quality_gate_failed",
+      "introduced_commit": "a84fc03",
+      "run_patterns": ["b26_1_gate"]
+    },
+    {
+      "number": 40,
+      "code": "B26.2",
+      "slug": "deterministic_evidence_gate",
+      "title": "Deterministic evidence gate and fixed-E2 training",
+      "category": "supervision",
+      "status": "completed",
+      "introduced_commit": "15499c4",
+      "run_patterns": ["b26_2_gate", "b26_2_training"]
+    },
+    {
+      "number": 41,
+      "code": "B27",
+      "slug": "pathology_series_routing",
+      "title": "Pathology-specific acquisition routing",
+      "category": "model",
+      "status": "completed_superseded",
+      "introduced_commit": "4d5600e",
+      "run_patterns": ["b27_pathology_routing"]
+    },
+    {
+      "number": 42,
+      "code": "B27.1",
+      "slug": "collinearity_safe_routing",
+      "title": "Collinearity-safe pathology routing",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "ce13892",
+      "run_patterns": ["b27_1_pathology_routing"]
+    },
+    {
+      "number": 43,
+      "code": "B28",
+      "slug": "max_evidence_residual",
+      "title": "Zero-gated max-evidence series residual",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "cb052ef",
+      "run_patterns": ["b28_max_evidence_residual"]
+    },
+    {
+      "number": 44,
+      "code": "B29",
+      "slug": "complementary_series_pool",
+      "title": "Zero-gated complementary softmax series pool",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "2cb7d00",
+      "run_patterns": ["b29_complementary_series_pool"]
+    },
+    {
+      "number": 45,
+      "code": "B30",
+      "slug": "projected_complementary_pool",
+      "title": "Projected complementary attention",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "b226195",
+      "run_patterns": ["b30_projected_complementary_series_pool"]
+    },
+    {
+      "number": 46,
+      "code": "B31",
+      "slug": "local_context_complementary_pool",
+      "title": "Complementary pooling with local slice context",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "24da028",
+      "run_patterns": ["b31_local_context_complementary_pool"]
+    },
+    {
+      "number": 47,
+      "code": "B32",
+      "slug": "dispersion_complementary_pool",
+      "title": "Weighted-dispersion complementary summary",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "2fcc865",
+      "run_patterns": ["b32_dispersion_complementary_pool"]
+    },
+    {
+      "number": 48,
+      "code": "B33",
+      "slug": "uniform_complementary_mean",
+      "title": "Exact-uniform complementary mean",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "2d74336",
+      "run_patterns": ["b33_uniform_complementary_mean"]
+    },
+    {
+      "number": 49,
+      "code": "PV1",
+      "slug": "prospective_weak_validation_v1",
+      "title": "Prospective weak-validation v1 matched controls",
+      "category": "validation",
+      "status": "completed",
+      "introduced_commit": "bc29ff3",
+      "run_patterns": ["prospective_weak_v1"]
+    },
+    {
+      "number": 50,
+      "code": "B34_PV2",
+      "slug": "training_only_context_scaffold",
+      "title": "B34 training-only context scaffold on PV2",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "c7ad1f1",
+      "run_patterns": ["prospective_weak_v2"]
+    },
+    {
+      "number": 51,
+      "code": "AUDIT_P1_P2",
+      "slug": "dataset_contract_and_slice_counts",
+      "title": "Dataset-contract population and physical slice-count audits",
+      "category": "audit",
+      "status": "completed",
+      "introduced_commit": "dac726f",
+      "run_patterns": ["dataset_contract_audit"]
+    },
+    {
+      "number": 52,
+      "code": "AUDIT_P3",
+      "slug": "dicom_header_heterogeneity",
+      "title": "DICOM scanner and header heterogeneity audit",
+      "category": "audit",
+      "status": "completed",
+      "introduced_commit": "ad3d95e",
+      "run_patterns": ["dataset_header_audit"]
+    },
+    {
+      "number": 53,
+      "code": "AUDIT_P4",
+      "slug": "supervision_domain_intersection",
+      "title": "B6 supervision and acquisition-domain intersection audit",
+      "category": "audit",
+      "status": "completed",
+      "introduced_commit": "1ed404e",
+      "run_patterns": ["dataset_domain_intersection_audit"]
+    },
+    {
+      "number": 54,
+      "code": "AUDIT_P5",
+      "slug": "report_supervision_gap",
+      "title": "Report-supervision failure-mode audit",
+      "category": "audit",
+      "status": "completed",
+      "introduced_commit": "5bf1d97",
+      "run_patterns": ["report_supervision_gap_audit"]
+    },
+    {
+      "number": 55,
+      "code": "AUDIT_P6",
+      "slug": "translation_rescue_pilot",
+      "title": "Frozen-parser translation-rescue feasibility pilot",
+      "category": "audit",
+      "status": "completed",
+      "introduced_commit": "205e87a",
+      "run_patterns": ["report_translation_rescue_pilot"]
+    },
+    {
+      "number": 56,
+      "code": "AUDIT_P7",
+      "slug": "full_translation_rescue",
+      "title": "Full B6-inactive translation-rescue audit",
+      "category": "audit",
+      "status": "completed",
+      "introduced_commit": "8402351",
+      "run_patterns": ["report_translation_rescue_full"]
+    },
+    {
+      "number": 57,
+      "code": "AUDIT_P8",
+      "slug": "merged_translation_supervision",
+      "title": "Frozen global translation-rescue supervision merge",
+      "category": "audit",
+      "status": "completed",
+      "introduced_commit": "b4ba034",
+      "run_patterns": ["translation_rescue_supervision_v1"]
+    },
+    {
+      "number": 58,
+      "code": "PHASE9_V1",
+      "slug": "matched_supervision_full_population",
+      "title": "Phase-9 matched supervision on the full population",
+      "category": "supervision",
+      "status": "superseded_before_result",
+      "introduced_commit": "3a54540",
+      "run_patterns": ["phase9_matched_supervision"]
+    },
+    {
+      "number": 59,
+      "code": "PHASE9_V2",
+      "slug": "matched_supervision_pv2_holdout",
+      "title": "Phase-9 v2 matched supervision with frozen PV2 holdout",
+      "category": "supervision",
+      "status": "completed",
+      "introduced_commit": "08db2b2",
+      "run_patterns": ["phase9_matched_supervision_v2"]
+    },
+    {
+      "number": 60,
+      "code": "WORKING_CONTROL",
+      "slug": "frozen_encoder_hidden_control",
+      "title": "Clean working-model frozen-encoder control",
+      "category": "model",
+      "status": "completed_hidden_0.688",
+      "introduced_commit": "7b9baf6",
+      "run_patterns": ["control", "current_model", "working_model"]
+    },
+    {
+      "number": 61,
+      "code": "DINOV3_TINY",
+      "slug": "dinov3_convnext_tiny",
+      "title": "DINOv3 ConvNeXt-Tiny encoder replacement",
+      "category": "representation",
+      "status": "local_artifacts_result_not_in_repo",
+      "introduced_commit": "7b9baf6",
+      "run_patterns": ["dinov3_tiny"]
+    },
+    {
+      "number": 62,
+      "code": "DINOV3_WIDE",
+      "slug": "dinov3_base_large",
+      "title": "Wide DINOv3 base/large experimental variant",
+      "category": "representation",
+      "status": "local_artifacts_result_not_in_repo",
+      "introduced_commit": "f7792bb",
+      "run_patterns": ["dinov3_base", "dinov3_large"]
+    },
+    {
+      "number": 63,
+      "code": "ENCODER_PROBE",
+      "slug": "frozen_encoder_signal_probe",
+      "title": "Frozen-encoder representation probe",
+      "category": "diagnostic",
+      "status": "local_artifacts_result_not_in_repo",
+      "introduced_commit": "bd076c9",
+      "run_patterns": ["encoder_probe", "encoder_test"]
+    },
+    {
+      "number": 64,
+      "code": "FINETUNE_1STAGE",
+      "slug": "one_stage_encoder_finetune",
+      "title": "One-stage encoder fine-tuning",
+      "category": "model",
+      "status": "completed_hidden_0.694",
+      "introduced_commit": "d299b12",
+      "run_patterns": ["finetune", "finetune_1stage"]
+    },
+    {
+      "number": 65,
+      "code": "SEED_ENSEMBLE",
+      "slug": "seed_varied_model_ensemble",
+      "title": "Seed-varied model and prediction ensemble",
+      "category": "ensemble",
+      "status": "local_artifacts_result_not_in_repo",
+      "introduced_commit": "f908237",
+      "run_patterns": ["finetune_seed*", "ensemble", "ensemble_2"]
+    },
+    {
+      "number": 66,
+      "code": "TARGET_070",
+      "slug": "positive_target_retarget",
+      "title": "Positive soft-target retargeting to 0.70",
+      "category": "supervision",
+      "status": "local_artifacts_result_not_in_repo",
+      "introduced_commit": "a8bb500",
+      "run_patterns": ["target_070"]
+    },
+    {
+      "number": 67,
+      "code": "LLM_FILL_ALL",
+      "slug": "b6_preserved_llm_fill_all_targets",
+      "title": "B6-preserved LLM fill across all targets",
+      "category": "supervision",
+      "status": "completed",
+      "introduced_commit": "9055d47",
+      "run_patterns": ["b6_plus_llm_fill_all*"]
+    },
+    {
+      "number": 68,
+      "code": "LLM_FILL_NO_SYNOVITIS",
+      "slug": "b6_preserved_llm_fill_no_synovitis",
+      "title": "LLM-fill ablation excluding Synovitis",
+      "category": "supervision",
+      "status": "local_artifacts_result_not_in_repo",
+      "introduced_commit": "9055d47",
+      "run_patterns": ["b6_plus_llm_fill_no_synovitis*"]
+    },
+    {
+      "number": 69,
+      "code": "B35",
+      "slug": "target_spatial_residual",
+      "title": "Target-conditioned dense spatial residual",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "63d6565",
+      "run_patterns": ["b35_target_spatial*"]
+    },
+    {
+      "number": 70,
+      "code": "B36",
+      "slug": "sparse_topk_spatial_mil",
+      "title": "Pathology-specific sparse top-k spatial MIL",
+      "category": "model",
+      "status": "completed",
+      "introduced_commit": "8412e51",
+      "run_patterns": ["b36_sparse_mil*"]
+    },
+    {
+      "number": 71,
+      "code": "B37",
+      "slug": "highres_448_sparse_mil",
+      "title": "High-resolution 448 pathology-specific sparse-MIL test",
+      "category": "model",
+      "status": "implemented_not_run",
+      "introduced_commit": "cb4198f",
+      "active_protocol_commit": "9395665",
+      "superseded_protocol": "B37-288 was implemented but never run and was superseded after the native-resolution audit.",
+      "run_patterns": ["b37_highres_sparse_mil", "b37_highres_288"]
+    },
+    {
+      "number": 72,
+      "code": "NATIVE_RESOLUTION_AUDIT",
+      "slug": "native_dicom_geometry",
+      "title": "Dataset-wide native DICOM geometry audit",
+      "category": "audit",
+      "status": "implemented_not_run",
+      "introduced_commit": "0cc80eb",
+      "run_patterns": ["native_resolution_audit", "native_resolution_audit_smoke"]
+    }
+  ],
+  "shared_groups": [
+    {
+      "directory": "Comparisons",
+      "patterns": ["*_vs_*.json", "*_rank.json"]
+    },
+    {
+      "directory": "Legacy_pipeline",
+      "patterns": ["audit", "audit_oa_v2", "stage1_hybrid", "stage1_selection.json", "validation", "weak_holdout_v1", "slice_audit"]
+    },
+    {
+      "directory": "Preflight_and_checks",
+      "patterns": ["external_*preflight*.json", "preflight_*.json", "label_audit.json", "slice_coverage.json"]
+    },
+    {
+      "directory": "Loose_logs_and_processes",
+      "patterns": ["*.log", "*.pid"]
+    }
+  ]
+}
