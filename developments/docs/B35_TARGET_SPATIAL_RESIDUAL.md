@@ -131,8 +131,8 @@ Only the B35 local head is trainable.
 base B34 parameters       frozen
 ConvNeXt encoder          frozen
 B35 local head            trainable
-micro-batch               1 study
-gradient accumulation     2
+micro-batch               2 studies
+gradient accumulation     1
 effective batch           2 studies
 head LR                    1e-4
 weight decay               1e-4
