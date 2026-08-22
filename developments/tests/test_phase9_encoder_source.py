@@ -51,3 +51,61 @@ def test_the_arm_is_still_checked_first():
             out_root="runs",
             encoder_source="dinov3",
         )
+
+
+def test_dinov3_checkpoint_is_rebuilt_before_its_weights_load(monkeypatch):
+    """The Phase-9 loader must reconstruct the swapped encoder without a download."""
+
+    final_sha = "f" * 64
+    payload = {
+        "experiment": trainer.PHASE9_EXPERIMENT,
+        "phase9_version": trainer.PHASE9_VERSION,
+        "arm": "candidate",
+        "fixed_endpoint": True,
+        "completed_epochs": trainer.PHASE9_FIXED_EPOCHS,
+        "validation_used_for_checkpoint_selection": False,
+        "gold_studies_used_in_gradient": 0,
+        "gold_labels_used": False,
+        "report_only_studies_exposed": trainer.REPORT_ONLY_STUDIES,
+        "training_series": trainer.PHASE9_EXPECTED_REPORT_ONLY_SERIES,
+        "stochastic_path_matched_after_model_construction": True,
+        "encoder_sha256_initial": final_sha,
+        "encoder_sha256_final": final_sha,
+        "encoder_trainable_stages": 0,
+        "encoder": {"variant": "tiny"},
+        "model_spec": {"encoder_source": "dinov3", "dinov3_variant": "tiny"},
+        "model_state": {"state": "from-checkpoint"},
+    }
+    calls = []
+
+    class FakeModel:
+        def load_state_dict(self, state, *, strict):
+            calls.append(("load", state, strict))
+
+        def to(self, device):
+            calls.append(("to", str(device)))
+            return self
+
+    model = FakeModel()
+    monkeypatch.setattr(trainer.torch, "load", lambda *args, **kwargs: payload)
+    def build(spec, *, pretrained_weights):
+        calls.append(("build", spec, pretrained_weights))
+        return model
+
+    monkeypatch.setattr(trainer, "build_b34_model", build)
+
+    def attach(rebuilt, *, variant, pretrained_weights):
+        rebuilt.encoder = object()
+        calls.append(("attach", rebuilt, variant, pretrained_weights))
+
+    monkeypatch.setattr(trainer, "attach_dinov3_encoder", attach)
+    monkeypatch.setattr(trainer, "freeze_encoder", lambda rebuilt: calls.append(("freeze", rebuilt)))
+    monkeypatch.setattr(trainer, "encoder_state_sha256", lambda encoder: final_sha)
+
+    rebuilt, restored_payload = trainer.load_phase9_checkpoint("candidate.pt", device="cpu")
+
+    assert rebuilt is model
+    assert restored_payload is payload
+    assert calls.index(("attach", model, "tiny", False)) < calls.index(
+        ("load", {"state": "from-checkpoint"}, True)
+    )
