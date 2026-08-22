@@ -39,7 +39,6 @@ from .b35_training import (
 )
 from .b38_highres_global import (
     B38_CROP_FRACTION,
-    B38_ENCODER_LR_SCALE,
     B38_RUN_ROOT,
     B38_TAIL_REFERENCE_LR,
     B38_VERSION,
