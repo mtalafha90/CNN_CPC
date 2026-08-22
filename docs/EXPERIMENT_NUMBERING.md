@@ -105,6 +105,7 @@ experiments must be appended to it; existing numbers must not be reordered.
 | 070 | `B36` | Pathology-specific sparse top-k spatial MIL | `completed` | `8412e51` |
 | 071 | `B37` | High-resolution 448 pathology-specific sparse-MIL test | `running` | `cb4198f` |
 | 072 | `NATIVE_RESOLUTION_AUDIT` | Dataset-wide native DICOM geometry audit | `completed` | `0cc80eb` |
+| 073 | `B38` | 448 high-resolution global-tail ablation | `implemented_not_run` | `c240267` |
 
 ## Organize the local archive safely
 
@@ -136,6 +137,7 @@ runs/by_experiment/
 ├── ...
 ├── 071_Experiment_B37_highres_448_sparse_mil/
 ├── 072_Experiment_NATIVE_RESOLUTION_AUDIT_native_dicom_geometry/
+├── 073_Experiment_B38_highres_448_global_tail_ablation/
 ├── _Shared/
 │   ├── Comparisons/
 │   ├── Legacy_pipeline/
