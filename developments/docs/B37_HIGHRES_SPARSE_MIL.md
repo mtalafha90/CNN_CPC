@@ -2,7 +2,7 @@
 
 ## Status
 
-**PROSPECTIVE / NOT YET RUN.**
+**RUNNING / NO RESULT YET.**
 
 B37 is frozen before its first expert-58 result.  It is a joint mechanism test,
 not a clean ablation of resolution alone.

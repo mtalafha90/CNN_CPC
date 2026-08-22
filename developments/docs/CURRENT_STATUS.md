@@ -1,6 +1,6 @@
 # Current project status
 
-**Snapshot:** 2026-08-19
+**Snapshot:** 2026-08-22
 **Package:** `0.30.0`
 **Primary metric:** macro ROC AUC across 12 targets
 **Best independent evidence:** hidden-test macro AUC **0.694** (encoder
@@ -114,8 +114,18 @@ path.
 interface decision recorded in `docs/WORKING_MODEL.md`, made because B34 is the
 strongest candidate on both internal surfaces and has the simplest inference
 path. It is not a promotion, and it does not change any frozen experiment
-record. The interface and the governance record therefore disagree on purpose,
-and the disagreement resolves when a hidden-evaluation result exists.
+record. The interface and the governance record therefore disagree on purpose;
+the submitted scores do not yet identify a clear replacement.
+
+## Current execution
+
+**B37 is running under its frozen 448-resolution sparse-MIL protocol.** Its
+first attempt was an infrastructure interruption caused by host-memory pressure,
+not an experimental result. The relaunch passed the deterministic worst-case
+forward/backward preflight with worker prefetching and pinned host buffers
+disabled. Only the complete fixed-E2 `b37_model.pt` and its subsequent
+Expert-58 diagnostic may be recorded as a B37 result; partial logs and recovery
+files are not selectable endpoints.
 
 ## The two findings that matter
 
@@ -229,18 +239,14 @@ recovered_cells.csv    ed094e5d6f77b1558fe63921f2f22b8e1006443c506f00f921d842cde
 
 ## Next
 
-1. **Submit.** Zero submissions after 34 experiments and 9 audit phases. A
-   Kaggle-run notebook costs none of the 9-hour session budget, and the
-   leaderboard is the only measurement not built here. Submitting a *matched
-   pair* — `latin-script` versus `all-script` supervision — resolves what
-   Phase 9 could not.
+1. **Preserve the three submitted recipes.** Do not use their leaderboard
+   feedback to tune them. If B37 clears its predeclared Expert-58 threshold, it
+   first needs an exact, runtime-tested B37 inference path and then one
+   predeclared hidden evaluation.
 2. **Script stratification** of the stored PV2 predictions (CPU, minutes).
-3. **Re-score PV1/PV2 on macro AUC with paired bootstrap.** Those surfaces
-   currently rank on soft BCE only; macro AUC is recorded without an interval
-   and is never used to rank. PV1 itself notes B31 and B33 had near-identical
-   macro AUC while the primary metric separated them at P = 0.0050 — so the
-   ladder that selected B31 and B34 has never been checked on the metric the
-   competition scores.
+3. **Finish paired macro-AUC uncertainty for PV1/PV2.** Phase-9 v2 already has
+   its frozen AUC addendum; the remaining earlier surfaces still rank on soft
+   BCE, whereas the competition scores macro AUC.
 4. **Locate the Phase-7 artifacts** and run the mechanism audit.
 
 Detailed records for every experiment named here are in this directory and are

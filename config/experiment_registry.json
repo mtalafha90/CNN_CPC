@@ -718,7 +718,7 @@
       "slug": "highres_448_sparse_mil",
       "title": "High-resolution 448 pathology-specific sparse-MIL test",
       "category": "model",
-      "status": "implemented_not_run",
+      "status": "running",
       "introduced_commit": "cb4198f",
       "active_protocol_commit": "9395665",
       "superseded_protocol": "B37-288 was implemented but never run and was superseded after the native-resolution audit.",
@@ -730,7 +730,7 @@
       "slug": "native_dicom_geometry",
       "title": "Dataset-wide native DICOM geometry audit",
       "category": "audit",
-      "status": "implemented_not_run",
+      "status": "completed",
       "introduced_commit": "0cc80eb",
       "run_patterns": ["native_resolution_audit", "native_resolution_audit_smoke"]
     }

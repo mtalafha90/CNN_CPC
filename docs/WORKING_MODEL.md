@@ -8,14 +8,15 @@ and is not part of the working interface.
 
 This interface targets the strongest candidate architecture on the project's
 internal surfaces. **That is an interface decision, not a promotion.** No model
-has been promoted on evidence since B20, because no experiment has yet cleared
-a promotion path and no competition submission has been made — so there is
-currently no measurement of this model that was not built in this repository.
+has been promoted on evidence since B20. Three hidden-competition submissions
+have since been recorded (`0.688`, `0.691`, and `0.694` macro AUC), but their
+small spread does not establish a replacement model or justify further
+leaderboard-driven tuning.
 
 The frozen experiment records under `developments/docs/` therefore still name
 B20 as the last promoted model, and they are correct. The disagreement between
-those records and this interface is deliberate, and it resolves when an
-independent result exists. See
+those records and this interface is deliberate; an independent result must
+still identify a clear, reproducible replacement. See
 [`developments/docs/CURRENT_STATUS.md`](../developments/docs/CURRENT_STATUS.md).
 
 ## What it does

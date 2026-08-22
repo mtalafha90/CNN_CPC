@@ -103,8 +103,8 @@ experiments must be appended to it; existing numbers must not be reordered.
 | 068 | `LLM_FILL_NO_SYNOVITIS` | LLM-fill ablation excluding Synovitis | `local_artifacts_result_not_in_repo` | `9055d47` |
 | 069 | `B35` | Target-conditioned dense spatial residual | `completed` | `63d6565` |
 | 070 | `B36` | Pathology-specific sparse top-k spatial MIL | `completed` | `8412e51` |
-| 071 | `B37` | High-resolution 448 pathology-specific sparse-MIL test | `implemented_not_run` | `cb4198f` |
-| 072 | `NATIVE_RESOLUTION_AUDIT` | Dataset-wide native DICOM geometry audit | `implemented_not_run` | `0cc80eb` |
+| 071 | `B37` | High-resolution 448 pathology-specific sparse-MIL test | `running` | `cb4198f` |
+| 072 | `NATIVE_RESOLUTION_AUDIT` | Dataset-wide native DICOM geometry audit | `completed` | `0cc80eb` |
 
 ## Organize the local archive safely
 
@@ -161,7 +161,8 @@ B37 remains number 071 because that family was introduced before the native
 resolution audit. Its original 288 design was never run and is now superseded;
 the active implemented protocol is the frozen 448-resolution sparse-MIL design
 at commit `9395665`. Both possible run names map to the same permanent B37
-number so historical numbering does not shift.
+number so historical numbering does not shift. Its status remains `running`
+until the fixed-E2 checkpoint and frozen Expert-58 diagnostic are complete.
 
 ## Physically migrate run directories
 
