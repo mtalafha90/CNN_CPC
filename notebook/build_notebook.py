@@ -1,40 +1,34 @@
-"""Generate the standalone Colab notebook for the working knee-MRI model.
+"""Generate the standalone Google Colab knee-MRI subset notebook.
 
-The notebook is written from here rather than edited directly, because a
-`.ipynb` is JSON: hand-editing it invites broken escaping and silent
-duplicate cell ids, and a diff of it is unreadable. Everything below is the
-source of truth; run this file to regenerate `knee_mri_model.ipynb`.
-
-Naming rule for the notebook, and the reason for it: the research code names
-its parts after the experiment that introduced them -- `b12_1_hierarchical`,
-`b29_complementary_series_pool`, `phase9_matched_supervision_training`. That is
-useful in a lab archive where each name pins a frozen comparison, and useless to
-a reader meeting the model for the first time. In the notebook every function is
-named for what it does. Where a name would otherwise carry a finding, the
-comment carries it instead.
+The generated notebook contains every class and function it uses.  It trains a
+new high-resolution sparse-MIL model from the data stored in Google Drive.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
+
 CELLS: list[tuple[str, str]] = []
 
 
 def markdown(text: str) -> None:
+    """Append a Markdown cell to the notebook specification."""
     CELLS.append(("markdown", text.strip("\n")))
 
 
 def code(text: str) -> None:
+    """Append a Python code cell to the notebook specification."""
     CELLS.append(("code", text.strip("\n")))
 
 
 def build(path: Path) -> Path:
+    """Write the notebook JSON at ``path`` and return the written path."""
     cells = []
     for kind, text in CELLS:
-        lines = text.splitlines(keepends=True)
+        source = text.splitlines(keepends=True)
         if kind == "markdown":
-            cells.append({"cell_type": "markdown", "metadata": {}, "source": lines})
+            cells.append({"cell_type": "markdown", "metadata": {}, "source": source})
         else:
             cells.append(
                 {
@@ -42,7 +36,7 @@ def build(path: Path) -> Path:
                     "execution_count": None,
                     "metadata": {},
                     "outputs": [],
-                    "source": lines,
+                    "source": source,
                 }
             )
     notebook = {
@@ -60,1535 +54,1817 @@ def build(path: Path) -> Path:
         "nbformat": 4,
         "nbformat_minor": 0,
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(notebook, indent=1), encoding="utf-8")
     return path
 
 
 markdown(r"""
-# Knee MRI abnormality detection — the working model
+# Standalone high-resolution sparse-MIL knee MRI training
 
-One notebook, no repository imports, no experiment numbers. Every cell is a
-function or a class named for what it does, with the comment explaining *why*
-it is that way.
+This is a self-contained Google Colab notebook for a small MRI subset on
+Google Drive. It creates a new model directly from the CSV labels and DICOM
+images in that folder. Every data utility, class, loss, training function, and
+visualization function is defined below and annotated for study.
 
-**What this reproduces.** The configuration that scored **0.694 macro ROC AUC**
-on the competition's hidden test: a frozen-then-partly-unfrozen ConvNeXt slice
-encoder, attention pooling from slices to series, a small transformer across a
-study's series, and twelve pathology queries that read out one probability per
-finding.
+The image path is:
 
-**What it learns from.** Radiology reports, not expert image labels. A rule
-parser turns each report into twelve states, and those become soft targets. The
-expert-annotated studies never enter the gradient — they exist only to measure.
+```text
+DICOM volume
+→ percentile normalisation
+→ 32 deterministic 2.5D triplets per MRI series
+→ native 90% centre crop
+→ one antialiased 448×448 resize
+→ 6×6 local feature grid
+→ target-specific top-k sparse multiple-instance pooling
+```
 
-**Running it.** Set `STUDY_LIMIT` in the config cell. A few hundred studies runs
-end to end on a Colab GPU in minutes and prints every intermediate shape;
-`None` is the full run and needs the dataset on fast local disk, which Colab is
-not well suited to — 24,371 series across 819,078 files.
-
-Two things my audit of this model found, marked in the cells where they live, so
-you can experiment from a baseline rather than trust a black box:
-
-- the learning-rate schedule is written for five epochs and stopped at two, so
-  it never anneals (`train_model`);
-- the encoder average-pools away *where* in the slice anything was, and eight of
-  the twelve findings are focal (`SliceFeatureExtractor`).
+The default configuration is deliberately conservative for a small Colab GPU:
+one study per batch, no loader workers, no pinned host memory, and no more than
+six MRI series per study. The notebook includes a no-update preflight before
+training, a loss plot, and a review of 12 classified cases.
 """)
 
-markdown("## 1. Runtime")
+markdown(r"""
+## 1. Google Drive layout
+
+Store the subset in one Drive folder. The table names and DICOM hierarchy match
+the original data layout, but the folder contains only the rows and images in
+your subset.
+
+```text
+MyDrive/knee_mri_subset/
+├── train.csv
+├── train_series.csv
+├── train_series/
+│   └── <StudyInstanceUID>/<SeriesInstanceUID>/*.dcm
+└── outputs/                         # created after training
+```
+
+`train_images/` may be used instead of `train_series/`.
+
+- `train.csv` needs `StudyInstanceUID` and the 12 target columns listed below.
+  A target cell can be `0`, `1`, or blank; blank labels are ignored by the loss.
+- `train_series.csv` needs `StudyInstanceUID`, `SeriesInstanceUID`,
+  `Fluid_Sensitive`, `Fat_Suppression`, and `Anatomical_Plane`.
+""")
+
+markdown("## 2. Install the DICOM reader")
 
 code(r'''
-def check_runtime(seed: int = 2026) -> str:
-    """Report the GPU and pin every random source we can reach.
+# Import Python's package installer helper.
+import sys
+# Import the process runner used to install the missing package.
+import subprocess
 
-    Seeding matters more than usual here: the model trains for a fixed two
-    epochs with no checkpoint selection, so a run is decided entirely by its
-    starting point and its data order. Two runs with different seeds are
-    genuinely different models -- which is what makes averaging them worthwhile
-    and comparing them directly misleading.
-    """
-    import random
-    import numpy as np
-    import torch
-
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        device = torch.cuda.get_device_name(0)
-        total = torch.cuda.get_device_properties(0).total_memory / 1e9
-        print(f"GPU        : {device} ({total:.1f} GB)")
-    else:
-        device = "cpu"
-        print("GPU        : none -- this will be far too slow for real training")
-
-    print(f"torch      : {torch.__version__}")
-    print(f"seed       : {seed}")
-    return "cuda" if torch.cuda.is_available() else "cpu"
-
-
-DEVICE = check_runtime()
-''')
-
-code(r'''
-# Colab has torch and torchvision already; pydicom is the one thing missing.
-try:
-    import pydicom  # noqa: F401
-except ImportError:
-    import subprocess, sys
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "pydicom"], check=True)
-    import pydicom  # noqa: F401
-
-import math
-import random
-from collections import OrderedDict
-from dataclasses import dataclass, field
-from pathlib import Path
-
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
-print("imports ready")
-''')
-
-markdown("## 2. Configuration")
-
-code(r'''
-# The twelve findings, in the exact order the submission file expects. Changing
-# this order silently scrambles every prediction, so it is defined once.
-FINDINGS = (
-    "ACL", "MCL", "Medial Meniscus", "Lateral Meniscus",
-    "Medial OA", "Lateral OA", "PF OA",
-    "Effusion", "Synovitis", "Baker's", "Contusion", "Fracture",
+# Install pydicom because Colab does not guarantee that it is preinstalled.
+subprocess.run(
+    # Use the current notebook Python interpreter for a compatible installation.
+    [sys.executable, "-m", "pip", "install", "-q", "pydicom>=2.4"],
+    # Stop this cell immediately if installation fails.
+    check=True,
 )
+''')
+
+markdown("## 3. Imports, labels, and reproducibility")
+
+code(r'''
+# Enable modern type annotations in every definition in this cell.
+from __future__ import annotations
+
+# Import dataclass helpers for clear configuration and experiment containers.
+from dataclasses import asdict, dataclass, field
+# Import a no-op context manager for CPU execution.
+from contextlib import nullcontext
+# Import Path for safe cross-platform file paths.
+from pathlib import Path
+# Import type names used in function annotations.
+from typing import Iterable
+# Import garbage collection for releasing large CPU tensors between epochs.
+import gc
+# Import JSON for readable configuration and history files.
+import json
+# Import math for sine/cosine position features and log-mean-exp pooling.
+import math
+# Import random for reproducible Python-level sampling.
+import random
+# Import time for per-epoch timing.
+import time
+
+# Import matplotlib for the loss curve and case-review figures.
+import matplotlib.pyplot as plt
+# Import NumPy for numerical arrays and deterministic splitting.
+import numpy as np
+# Import pandas for CSV tables and summary tables.
+import pandas as pd
+# Import PyTorch's main namespace.
+import torch
+# Import neural-network layers and functional operations.
+import torch.nn.functional as F
+from torch import nn
+# Import the dataset and loader interfaces.
+from torch.utils.data import DataLoader, Dataset
+# Import display so summary tables render in Colab.
+from IPython.display import display
+
+# List target columns exactly as they appear in train.csv.
+TARGETS = [
+    "ACL",
+    "MCL",
+    "Medial Meniscus",
+    "Lateral Meniscus",
+    "Medial OA",
+    "Lateral OA",
+    "PF OA",
+    "Effusion",
+    "Synovitis",
+    "Baker's",
+    "Contusion",
+    "Fracture",
+]
+# Store the target count once so model classes do not repeat a magic number.
+N_TARGETS = len(TARGETS)
+# Convert normalized plane names into small categorical identifiers.
+PLANE_TO_ID = {"Sagittal": 1, "Coronal": 2, "Axial": 3}
 
 
-@dataclass
-class Config:
-    """Every constant in one place, named for what it controls."""
+def set_seed(seed: int = 2026) -> None:
+    """Make splitting and new-model initialization reproducible."""
+    # Seed Python's random-number generator.
+    random.seed(seed)
+    # Seed NumPy's random-number generator.
+    np.random.seed(seed)
+    # Seed CPU PyTorch operations.
+    torch.manual_seed(seed)
+    # Seed every visible CUDA device when a GPU is present.
+    torch.cuda.manual_seed_all(seed)
+    # Prefer repeatability over cuDNN auto-tuned speed.
+    torch.backends.cudnn.benchmark = False
+    # Request deterministic cuDNN kernels when available.
+    torch.backends.cudnn.deterministic = True
 
-    # --- where the data is -------------------------------------------------
-    data_root: str = "/content/rsna-knee-abnormality-detection"
-    # None trains on everything. A number keeps the notebook runnable on Colab:
-    # the full set is 24,371 series across 819,078 DICOM files.
-    study_limit: int | None = 200
 
-    # --- how a study becomes a tensor --------------------------------------
-    slices_per_series: int = 16     # evenly spaced positions through the volume
-    image_size: int = 224
-    triplet_gap: int = 1            # a slice plus its neighbours, as 3 channels
-    crop_fraction: float = 0.90     # centre crop, then resize back to 224
+# Set the notebook-wide seed before creating any model or split.
+set_seed()
+# Choose the GPU if Colab provides one; otherwise keep the notebook functional on CPU.
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Print the selected device for a quick environment check.
+print("device:", DEVICE)
+# Print the concrete GPU name when CUDA is available.
+if torch.cuda.is_available():
+    print("GPU:", torch.cuda.get_device_name(0))
+''')
 
-    # --- training-time augmentation ----------------------------------------
-    train_gap_choices: tuple[int, ...] = (1, 2)
-    centre_jitter: int = 2
-    rotation_degrees: float = 5.0
-    translate_fraction: float = 0.03
-    scale_jitter: float = 0.05
-    gamma_jitter: float = 0.12
-    bias_field_strength: float = 0.08
-    noise_std: float = 0.02
-    slice_dropout: float = 0.08
+markdown("## 4. Mount Drive and define the run configuration")
 
-    # --- the model ---------------------------------------------------------
-    feature_width: int = 768        # ConvNeXt-Tiny's output width
-    attention_heads: int = 8
-    study_layers: int = 2           # transformer layers across a study's series
-    query_layers: int = 1           # self-attention among the 12 queries
-    feedforward_multiplier: float = 2.0
-    dropout: float = 0.25
-    slices_per_encoder_batch: int = 24
+code(r'''
+def mount_drive(mount_point: str = "/content/drive") -> Path:
+    """Mount Google Drive and return the mounted root directory."""
+    # Import Colab's Drive helper only inside this Colab-specific function.
+    from google.colab import drive
+    # Ask Colab to mount the authenticated user's Drive at the requested location.
+    drive.mount(mount_point)
+    # Return a Path object so later cells use safe path joins.
+    return Path(mount_point)
 
-    # --- optimisation ------------------------------------------------------
-    epochs: int = 2                 # see the note in train_model
-    schedule_length: int = 5        # the cosine is written for five
-    batch_size: int = 2             # studies per step; series count varies
-    head_lr: float = 1e-4
-    min_lr: float = 1e-6
+
+@dataclass(frozen=True)
+class DrivePaths:
+    """Locations for one Drive dataset and the outputs created by this notebook."""
+
+    # Hold the folder containing train.csv, train_series.csv, and DICOM directories.
+    data_root: Path
+    # Hold the folder where this notebook writes its newly created results.
+    output_root: Path
+
+    @property
+    def train_csv(self) -> Path:
+        """Return the path of the study-level CSV file."""
+        # Join the dataset root and the fixed study-table filename.
+        return self.data_root / "train.csv"
+
+    @property
+    def series_csv(self) -> Path:
+        """Return the path of the series-level CSV file."""
+        # Join the dataset root and the fixed series-table filename.
+        return self.data_root / "train_series.csv"
+
+
+def make_paths(dataset_root: str | Path) -> DrivePaths:
+    """Build all paths from the one Drive folder chosen by the user."""
+    # Convert either a string or Path into a Path object.
+    root = Path(dataset_root)
+    # Keep all new output files in an outputs folder inside the selected dataset folder.
+    return DrivePaths(data_root=root, output_root=root / "outputs")
+
+
+@dataclass(frozen=True)
+class RunConfig:
+    """All user-adjustable choices for one standalone training run."""
+
+    # Keep the high-resolution in-plane representation.
+    image_size: int = 448
+    # Use 32 deterministic slice centers per MRI series.
+    slices_per_series: int = 32
+    # Use immediate neighbors as the other two 2.5D channels.
+    triplet_gap: int = 1
+    # Retain the central 90 percent of each native-resolution image.
+    crop_fraction: float = 0.90
+    # Pool local encoder features into a 6 by 6 evidence grid.
+    grid_size: int = 6
+    # Retain the top eight local evidence tokens for every target.
+    top_k: int = 8
+    # Use a compact 128-dimensional model for practical Colab memory use.
+    feature_dim: int = 128
+    # Encode two 448-pixel triplets at a time to limit GPU activation memory.
+    encoder_chunk_size: int = 2
+    # Keep six series by default; set zero only after a larger preflight passes.
+    max_series_per_study: int = 6
+    # Keep one study per batch to avoid padding and duplicate CPU allocations.
+    batch_size: int = 1
+    # Decode in the main process so worker processes cannot multiply host RAM use.
+    num_workers: int = 0
+    # Reserve twenty percent of usable labelled studies for validation.
+    validation_fraction: float = 0.20
+    # Run three epochs by default for a small-subset smoke run.
+    epochs: int = 3
+    # Set the AdamW learning rate.
+    learning_rate: float = 1e-4
+    # Set the AdamW weight decay.
     weight_decay: float = 1e-4
-    grad_clip: float = 1.0
-    encoder_lr_fraction: float = 0.05   # unfrozen encoder blocks learn slowly
-    trainable_encoder_blocks: int = 1   # the setting that reached 0.694
-
-    # --- how report states become targets ----------------------------------
-    # A report saying a finding is present is not proof it is present, so the
-    # target sits below 1.0 and the positive half is weighted down. Auditing the
-    # parser against expert labels measured 69% agreement for "yes" and 96% for
-    # "no", which is the evidence behind the asymmetry -- though 0.85 is higher
-    # than that 69% would justify, and lowering it is an open experiment.
-    min_label_confidence: float = 0.75
-    positive_target: float = 0.85
-    negative_target: float = 0.05
-    positive_weight: float = 0.50
-    negative_weight: float = 1.00
-
-    # --- inference ---------------------------------------------------------
-    # Test-time augmentation: the whole comb of slice positions is shifted by
-    # one slice each way and the probabilities averaged. With a median stride of
-    # 1.9 slices this is a very mild augmentation.
-    tta_offsets: tuple[int, ...] = (-1, 0, 1)
-
+    # Give the sparse local classifier a direct auxiliary loss.
+    local_loss_weight: float = 1.0
+    # Limit one optimizer update's gradient norm.
+    grad_clip_norm: float = 1.0
+    # Save the split and initialization randomness with this seed.
     seed: int = 2026
+    # Raise on a bad DICOM when true; otherwise skip just that unreadable series.
+    strict_dicom: bool = False
 
 
-CONFIG = Config()
-print(f"{len(FINDINGS)} findings, {CONFIG.slices_per_series} slices per series, "
-      f"{CONFIG.image_size}px")
+# Mount the user's Google Drive once for this notebook session.
+DRIVE_ROOT = mount_drive()
+# Point to the subset folder; change only this line if the folder has another name.
+PATHS = make_paths(DRIVE_ROOT / "MyDrive" / "knee_mri_subset")
+# Create the default conservative training configuration.
+CONFIG = RunConfig()
+# Display the resolved paths for confirmation.
+print(PATHS)
+# Display all active model and memory settings for confirmation.
+print(CONFIG)
 ''')
 
-
-markdown("## 3. Reading the tables")
-
-code(r'''
-_TRUE_WORDS = {"true", "t", "yes", "y", "1", "1.0"}
-_FALSE_WORDS = {"false", "f", "no", "n", "0", "0.0"}
-_PLANE_WORDS = {
-    "sagittal": "Sagittal", "sag": "Sagittal", "sagital": "Sagittal",
-    "coronal": "Coronal", "cor": "Coronal",
-    "axial": "Axial", "ax": "Axial", "transverse": "Axial",
-}
-
-
-def _read_flag(values: pd.Series) -> pd.Series:
-    """Parse a yes/no column while keeping 'not stated' distinct from 'no'.
-
-    This distinction is load-bearing. The model receives fluid-sensitive and
-    fat-suppression as small categorical embeddings, and 'unknown' is its own
-    category. Collapsing missing values to False would tell the model something
-    the data never said.
-    """
-    out = pd.Series(pd.NA, index=values.index, dtype="boolean")
-    if pd.api.types.is_bool_dtype(values):
-        known = values.notna()
-        out.loc[known] = values.loc[known].astype(bool)
-    elif pd.api.types.is_numeric_dtype(values):
-        known = values.notna()
-        out.loc[known] = values.loc[known].astype(float).ne(0.0)
-    else:
-        text = values.astype("string").str.strip().str.lower()
-        out.loc[text.isin(_TRUE_WORDS)] = True
-        out.loc[text.isin(_FALSE_WORDS)] = False
-    return out
-
-
-def _read_plane(values: pd.Series) -> pd.Series:
-    """Map the many spellings of a scan plane onto three names."""
-    text = values.astype("string").str.strip().str.lower()
-    return text.map(_PLANE_WORDS).fillna("").astype(str)
-
-
-def read_study_table(data_root: str, split: str = "train") -> pd.DataFrame:
-    """One row per study: its id, its report, and (for 58 studies) expert labels.
-
-    Only a handful of studies carry expert labels. Those never enter training --
-    they are the measuring stick, and a measuring stick you have trained on
-    measures nothing.
-    """
-    frame = pd.read_csv(Path(data_root) / f"{split}.csv")
-    frame["StudyInstanceUID"] = frame["StudyInstanceUID"].astype(str)
-    if "Report" not in frame.columns:
-        frame["Report"] = ""
-    return frame
-
-
-def read_series_table(data_root: str, split: str = "train") -> pd.DataFrame:
-    """One row per MRI series, with its plane and sequence flags normalised."""
-    frame = pd.read_csv(Path(data_root) / f"{split}_series.csv")
-    frame["StudyInstanceUID"] = frame["StudyInstanceUID"].astype(str)
-    frame["SeriesInstanceUID"] = frame["SeriesInstanceUID"].astype(str)
-    frame["Fluid_Sensitive"] = _read_flag(frame["Fluid_Sensitive"])
-    frame["Fat_Suppression"] = _read_flag(frame["Fat_Suppression"])
-    frame["Anatomical_Plane"] = _read_plane(frame["Anatomical_Plane"])
-    return frame
-
-
-def has_expert_labels(studies: pd.DataFrame) -> pd.Series:
-    """A study is 'expert-labelled' if any of the twelve columns is filled in."""
-    return studies[list(FINDINGS)].notna().any(axis=1)
-''')
-
-markdown("## 4. Choosing which series to read")
+markdown("## 5. Validate the tables and create the MRI series index")
 
 code(r'''
-_PLANE_IDS = {"Sagittal": 1, "Coronal": 2, "Axial": 3}
+# Define accepted text values that mean true in the metadata table.
+TRUE_TOKENS = {"true", "t", "yes", "y", "1", "1.0"}
+# Define accepted text values that mean false in the metadata table.
+FALSE_TOKENS = {"false", "f", "no", "n", "0", "0.0"}
 
 
-def _flag_id(value) -> int:
-    """0 = not stated, 1 = no, 2 = yes. Zero is also the padding index."""
+def parse_bool(value: object) -> int:
+    """Convert a metadata flag to 0 unknown, 1 false, or 2 true."""
+    # Preserve missing metadata as the unknown code.
     if pd.isna(value):
         return 0
-    return 2 if bool(value) else 1
+    # Convert Python and NumPy booleans directly.
+    if isinstance(value, (bool, np.bool_)):
+        return 2 if bool(value) else 1
+    # Convert numeric nonzero values into true and zero values into false.
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return 2 if float(value) != 0 else 1
+    # Normalize text before checking the accepted tokens.
+    text = str(value).strip().lower()
+    # Map accepted true tokens to code two.
+    if text in TRUE_TOKENS:
+        return 2
+    # Map accepted false tokens to code one.
+    if text in FALSE_TOKENS:
+        return 1
+    # Treat all other values as unknown.
+    return 0
 
 
-def select_usable_series(series: pd.DataFrame, study_uids) -> dict[str, list[dict]]:
-    """Every series with a recognisable plane, in a stable order.
+def normalise_plane(value: object) -> str:
+    """Map common plane spelling variants to a standard anatomical-plane name."""
+    # Define the accepted spelling variants.
+    mapping = {
+        "sagittal": "Sagittal", "sag": "Sagittal", "sagital": "Sagittal",
+        "coronal": "Coronal", "cor": "Coronal",
+        "axial": "Axial", "ax": "Axial", "transverse": "Axial",
+    }
+    # Return an empty string for a plane that cannot be recognized safely.
+    return mapping.get(str(value).strip().lower(), "")
 
-    Deliberately *not* a selection: earlier work tried picking one 'best' series
-    per plane and per finding, and it lost. All eligible series go in and the
-    model decides which to attend to. The only series dropped are those whose
-    plane could not be identified at all.
 
-    The sort is for reproducibility rather than meaning -- the model has no
-    series-position embedding, so it cannot tell which came first.
-    """
-    by_study = {uid: part for uid, part in series.groupby("StudyInstanceUID", sort=False)}
-    empty = series.iloc[0:0]
+def validate_dataset(paths: DrivePaths) -> dict:
+    """Validate the CSV schema and Drive directory layout before using the GPU."""
+    # List the two CSV files required by the standalone workflow.
+    required_files = (paths.train_csv, paths.series_csv)
+    # Collect every missing CSV filename so one error explains the whole problem.
+    missing_files = [str(path) for path in required_files if not path.is_file()]
+    # Stop before loading data if a required file is absent.
+    if missing_files:
+        raise FileNotFoundError("Missing required file(s):\n" + "\n".join(missing_files))
+    # Load the study-level table.
+    train = pd.read_csv(paths.train_csv)
+    # Load the series-level table.
+    series = pd.read_csv(paths.series_csv)
+    # Require a study UID and every classification target in the study table.
+    train_required = {"StudyInstanceUID", *TARGETS}
+    # Require series identifiers and routing metadata in the series table.
+    series_required = {
+        "StudyInstanceUID", "SeriesInstanceUID", "Fluid_Sensitive",
+        "Fat_Suppression", "Anatomical_Plane",
+    }
+    # Find missing study-table columns.
+    missing_train = sorted(train_required.difference(train.columns))
+    # Find missing series-table columns.
+    missing_series = sorted(series_required.difference(series.columns))
+    # Explain an incomplete study table explicitly.
+    if missing_train:
+        raise ValueError(f"train.csv missing columns: {missing_train}")
+    # Explain an incomplete series table explicitly.
+    if missing_series:
+        raise ValueError(f"train_series.csv missing columns: {missing_series}")
+    # Copy tables before normalizing their identifiers.
+    train = train.copy()
+    # Convert study IDs into strings so numeric-looking UIDs do not lose leading digits.
+    train["StudyInstanceUID"] = train["StudyInstanceUID"].astype(str)
+    # Convert series study IDs into strings for the same reason.
+    series["StudyInstanceUID"] = series["StudyInstanceUID"].astype(str)
+    # Convert series IDs into strings for safe directory lookup.
+    series["SeriesInstanceUID"] = series["SeriesInstanceUID"].astype(str)
+    # Reject duplicate studies because each study needs exactly one target row.
+    if train["StudyInstanceUID"].duplicated().any():
+        raise ValueError("train.csv contains duplicate StudyInstanceUID values")
+    # Reject duplicate series entries because one directory should map to one metadata row.
+    if series[["StudyInstanceUID", "SeriesInstanceUID"]].duplicated().any().any():
+        raise ValueError("train_series.csv contains duplicate study/series rows")
+    # Convert every target to numeric while preserving blank cells as NaN.
+    labels = train[TARGETS].apply(pd.to_numeric, errors="coerce")
+    # Record which target cells have a usable CSV label.
+    known = labels.notna()
+    # Identify labels that are neither zero nor one.
+    invalid = known & ~labels.isin([0.0, 1.0])
+    # Stop on invalid label values so the loss never silently interprets a bad code.
+    if invalid.any().any():
+        bad = invalid.sum()[invalid.sum() > 0].to_dict()
+        raise ValueError(f"Target values must be 0, 1, or blank; invalid counts: {bad}")
+    # Stop if the selected subset contains no supervised cells at all.
+    if not known.any().any():
+        raise ValueError("The subset has no known target labels in train.csv")
+    # Normalize plane text before reporting how many MRI series can be used.
+    plane = series["Anatomical_Plane"].map(normalise_plane)
+    # Mark rows that have one of the three recognized anatomical planes.
+    eligible = plane.isin(PLANE_TO_ID)
+    # Accept either original-style DICOM root name.
+    roots = [paths.data_root / "train_series", paths.data_root / "train_images"]
+    # Stop with a clear path error if neither DICOM root exists.
+    if not any(root.is_dir() for root in roots):
+        raise FileNotFoundError(
+            "Expected train_series/ or train_images/ under " f"{paths.data_root}"
+        )
+    # Build a concise data audit that is useful to save or screenshot.
+    result = {
+        "studies": int(len(train)),
+        "series_rows": int(len(series)),
+        "recognized_plane_series": int(eligible.sum()),
+        "studies_with_any_label": int(known.any(axis=1).sum()),
+        "known_label_cells": int(known.to_numpy().sum()),
+        "data_root": str(paths.data_root),
+    }
+    # Print the audit in a readable JSON form.
+    print(json.dumps(result, indent=2))
+    # Return the audit for optional downstream use.
+    return result
 
-    chosen: dict[str, list[dict]] = {}
-    for study in study_uids:
-        uid = str(study)
-        records: list[dict] = []
-        for _, row in by_study.get(uid, empty).iterrows():
-            plane_id = _PLANE_IDS.get(str(row.get("Anatomical_Plane", "")), 0)
-            if plane_id == 0:
-                continue
-            records.append(
-                {
-                    "series_uid": str(row["SeriesInstanceUID"]),
-                    "plane_id": plane_id,
-                    "fluid_id": _flag_id(row.get("Fluid_Sensitive")),
-                    "fat_id": _flag_id(row.get("Fat_Suppression")),
-                }
+
+def build_series_records(series: pd.DataFrame, config: RunConfig) -> dict[str, list[dict]]:
+    """Create an ordered list of usable MRI series for each study."""
+    # Work on a copy so callers keep their original table unchanged.
+    work = series.copy()
+    # Normalize study UIDs for dictionary keys.
+    work["StudyInstanceUID"] = work["StudyInstanceUID"].astype(str)
+    # Normalize series UIDs for directory lookup.
+    work["SeriesInstanceUID"] = work["SeriesInstanceUID"].astype(str)
+    # Normalize anatomical-plane text.
+    work["plane"] = work["Anatomical_Plane"].map(normalise_plane)
+    # Map each recognized plane to its categorical code.
+    work["plane_id"] = work["plane"].map(PLANE_TO_ID).fillna(0).astype(int)
+    # Map fluid sensitivity to its categorical code.
+    work["fluid_id"] = work["Fluid_Sensitive"].map(parse_bool).astype(int)
+    # Map fat suppression to its categorical code.
+    work["fat_id"] = work["Fat_Suppression"].map(parse_bool).astype(int)
+    # Discard unrecognized planes because their spatial orientation is unknown.
+    work = work.loc[work["plane_id"] > 0].copy()
+    # Prepare the final study-to-series mapping.
+    result: dict[str, list[dict]] = {}
+    # Build one deterministic record list per study.
+    for uid, part in work.groupby("StudyInstanceUID", sort=False):
+        # Convert selected metadata columns into plain dictionaries.
+        rows = [
+            {
+                "series_uid": str(row.SeriesInstanceUID),
+                "plane": str(row.plane),
+                "plane_id": int(row.plane_id),
+                "fluid_id": int(row.fluid_id),
+                "fat_id": int(row.fat_id),
+            }
+            for row in part.itertuples(index=False)
+        ]
+        # Keep ordering reproducible and avoid an arbitrary filesystem order.
+        rows.sort(
+            key=lambda row: (
+                row["plane_id"], row["fluid_id"], row["fat_id"], row["series_uid"]
             )
-        records.sort(key=lambda r: (r["plane_id"], r["fluid_id"], r["fat_id"], r["series_uid"]))
-        chosen[uid] = records
-    return chosen
+        )
+        # Limit the number of series only when the configured limit is positive.
+        if config.max_series_per_study > 0:
+            rows = rows[: config.max_series_per_study]
+        # Store only studies that retain at least one usable series.
+        if rows:
+            result[str(uid)] = rows
+    # Return the mapping consumed by the dataset class.
+    return result
+
+
+# Run the table and directory audit immediately after setting the paths.
+DATASET_SUMMARY = validate_dataset(PATHS)
 ''')
 
-markdown("## 5. From DICOM files to a volume")
+markdown("## 6. DICOM decoding and 448×448 2.5D preparation")
 
 code(r'''
-_DICOM_SUFFIXES = {"", ".dcm", ".dicom", ".ima"}
+# Accept normal DICOM suffixes and files without a suffix.
+DICOM_SUFFIXES = {"", ".dcm", ".dicom", ".ima"}
 
 
-def find_series_directory(data_root: str, split: str, study: str, series: str) -> Path | None:
-    """Locate a series folder, trying the layouts this dataset ships in."""
-    root = Path(data_root)
-    for candidate in (
-        root / f"{split}_series" / str(study) / str(series),
-        root / f"{split}_images" / str(study) / str(series),
-        root / str(study) / str(series),
-    ):
+def find_series_dir(data_root: Path, study_uid: str, series_uid: str) -> Path | None:
+    """Locate a DICOM series in either accepted directory hierarchy."""
+    # Check both accepted DICOM root names in a fixed order.
+    for root_name in ("train_series", "train_images"):
+        # Build the expected study/series directory path.
+        candidate = data_root / root_name / str(study_uid) / str(series_uid)
+        # Return immediately when the expected directory exists.
         if candidate.is_dir():
             return candidate
+    # Return None when no expected directory exists.
     return None
 
 
-def _slice_order_key(dataset) -> float:
-    """Sort slices along the direction the scanner actually stepped through.
-
-    File names and instance numbers both lie often enough to matter. Projecting
-    the patient-space position onto the slice normal gives the true through-plane
-    order, so neighbouring slices really are neighbours -- which the three-channel
-    triplet below depends on entirely.
-    """
+def dicom_sort_key(dataset) -> float:
+    """Use patient-space slice position when available, else use instance number."""
+    # Try the geometric DICOM ordering first.
     try:
+        # Read the DICOM image position vector.
+        position = np.asarray(dataset.ImagePositionPatient, dtype=float)
+        # Read the DICOM row and column direction vectors.
         orientation = np.asarray(dataset.ImageOrientationPatient, dtype=float)
-        normal = np.cross(orientation[:3], orientation[3:])
-        return float(np.dot(np.asarray(dataset.ImagePositionPatient, dtype=float), normal))
+        # Project position onto the slice normal to get physical ordering.
+        return float(np.dot(position, np.cross(orientation[:3], orientation[3:])))
+    # Fall back safely when geometric fields are missing or malformed.
     except Exception:
+        # Use InstanceNumber as the fallback ordering key.
         return float(getattr(dataset, "InstanceNumber", 0))
 
 
-def _fit_to_shape(image: np.ndarray, target: tuple[int, int]) -> np.ndarray:
-    """Centre a differently-sized slice inside the series' dominant shape."""
-    out = np.zeros(target, dtype=image.dtype)
-    rows = min(image.shape[0], target[0])
-    cols = min(image.shape[1], target[1])
-    sr, sc = (image.shape[0] - rows) // 2, (image.shape[1] - cols) // 2
-    tr, tc = (target[0] - rows) // 2, (target[1] - cols) // 2
-    out[tr:tr + rows, tc:tc + cols] = image[sr:sr + rows, sc:sc + cols]
-    return out
+def pad_or_crop(image: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
+    """Centre-pad or centre-crop one image to a common in-plane matrix."""
+    # Allocate the output matrix with zeros outside the copied source region.
+    output = np.zeros(target_shape, dtype=image.dtype)
+    # Choose the overlapping row count.
+    rows = min(image.shape[0], target_shape[0])
+    # Choose the overlapping column count.
+    cols = min(image.shape[1], target_shape[1])
+    # Center the source rows.
+    src_r = (image.shape[0] - rows) // 2
+    # Center the source columns.
+    src_c = (image.shape[1] - cols) // 2
+    # Center the destination rows.
+    dst_r = (target_shape[0] - rows) // 2
+    # Center the destination columns.
+    dst_c = (target_shape[1] - cols) // 2
+    # Copy the centered common area from source to destination.
+    output[dst_r : dst_r + rows, dst_c : dst_c + cols] = image[
+        src_r : src_r + rows, src_c : src_c + cols
+    ]
+    # Return the matrix with the requested shape.
+    return output
 
 
 def read_dicom_volume(series_dir: Path) -> np.ndarray:
-    """Read one MRI series into a [slices, height, width] float array.
-
-    Rescale slope/intercept are applied, and MONOCHROME1 series are inverted so
-    that bright always means high signal. A file that will not decode is skipped
-    rather than failing the study -- with 819,078 files across the training set,
-    a hard failure on one would stop a run for no clinical reason.
-    """
-    frames: list[tuple[float, np.ndarray]] = []
-    for path in sorted(p for p in series_dir.iterdir()
-                       if p.is_file() and p.suffix.lower() in _DICOM_SUFFIXES):
+    """Decode one series directory into ordered float32 [frames, height, width]."""
+    # Import pydicom inside the function so the notebook imports cleanly before installation.
+    import pydicom
+    # Collect eligible DICOM files in deterministic filename order.
+    files = sorted(
+        path for path in series_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in DICOM_SUFFIXES
+    )
+    # Prepare a list of physical-order keys and decoded two-dimensional frames.
+    items: list[tuple[float, np.ndarray]] = []
+    # Count decoding failures for an informative error message.
+    failures = 0
+    # Decode each candidate file separately so one bad file does not discard a whole series.
+    for path in files:
+        # Attempt to read and decode this DICOM file.
         try:
+            # Read the DICOM file, allowing a permissive parse for exported data.
             dataset = pydicom.dcmread(str(path), force=True)
+            # Decode pixel values into float32.
             pixels = np.asarray(dataset.pixel_array, dtype=np.float32)
-            pixels = pixels * float(getattr(dataset, "RescaleSlope", 1.0)) \
-                + float(getattr(dataset, "RescaleIntercept", 0.0))
+            # Apply the DICOM rescale slope when present.
+            pixels = pixels * float(getattr(dataset, "RescaleSlope", 1.0))
+            # Apply the DICOM rescale intercept when present.
+            pixels = pixels + float(getattr(dataset, "RescaleIntercept", 0.0))
+            # Invert MONOCHROME1 images so bright tissue remains bright.
             if str(getattr(dataset, "PhotometricInterpretation", "")).upper() == "MONOCHROME1":
                 pixels = pixels.max() - pixels
-
-            position = _slice_order_key(dataset)
+            # Compute the physical or instance-number sort key.
+            key = dicom_sort_key(dataset)
+            # Add a normal single-frame DICOM image.
             if pixels.ndim == 2:
-                frames.append((position, pixels))
-            elif pixels.ndim == 3:   # a multi-frame file holds a whole stack
-                frames.extend((position + i * 1e-4, f) for i, f in enumerate(pixels))
+                items.append((key, pixels))
+            # Split a multi-frame DICOM image into lightly offset ordered frames.
+            elif pixels.ndim == 3:
+                items.extend((key + index * 1e-4, frame) for index, frame in enumerate(pixels))
+            # Refuse unsupported pixel dimensions explicitly.
+            else:
+                raise RuntimeError(f"Unsupported pixel shape: {pixels.shape}")
+        # Count an unreadable file and continue with the remaining files.
         except Exception:
-            continue
-
-    if not frames:
-        raise RuntimeError(f"no readable DICOM pixels in {series_dir}")
-
-    frames.sort(key=lambda item: item[0])
-    images = [image for _, image in frames]
-    shapes = {image.shape for image in images}
-    if len(shapes) > 1:
-        target = max(shapes, key=lambda s: s[0] * s[1])
-        images = [_fit_to_shape(image, target) for image in images]
-    return np.stack(images).astype(np.float32, copy=False)
-
-
-def scale_intensities(volume: np.ndarray) -> np.ndarray:
-    """Map one series onto [0, 1] using its own 1st and 99th percentiles.
-
-    MRI has no absolute intensity scale -- the same tissue reads differently on
-    different scanners and sequences, so a fixed window is meaningless. The
-    percentiles are taken over the whole volume rather than per slice, which
-    keeps slices comparable to each other; clipping at 1/99 stops a single
-    metal artefact from compressing everything else into a narrow band.
-    """
-    volume = np.asarray(volume, dtype=np.float32)
-    finite = volume[np.isfinite(volume)]
-    if finite.size == 0:
-        raise RuntimeError("volume contains no finite pixels")
-    low, high = np.percentile(finite, [1, 99])
-    volume = np.nan_to_num(volume, nan=float(low), posinf=float(high), neginf=float(low))
-    volume = np.clip(volume, low, high)
-    return ((volume - low) / max(float(high - low), 1e-6)).astype(np.float32, copy=False)
-''')
-
-markdown("## 6. Choosing slices and stacking neighbours")
-
-code(r'''
-def choose_slice_positions(
-    n_frames: int,
-    n_positions: int,
-    gap: int,
-    *,
-    offset: int = 0,
-    jitter: int = 0,
-    rng: np.random.Generator | None = None,
-) -> np.ndarray:
-    """Spread sixteen sampling positions evenly through the volume.
-
-    Sixteen positions covers a typical series (median 30 slices) almost
-    completely. It does *not* cover the long tail: a few hundred series hold
-    over 200 slices, and there a structure a few slices thick can fall between
-    two samples entirely. The two weakest findings, ACL and MCL, are exactly
-    such structures -- worth remembering before blaming the model.
-
-    `offset` shifts the whole comb (test-time augmentation); `jitter` moves each
-    position independently (training only). They are never used together.
-    """
-    if n_frames < 1:
-        raise ValueError("a series needs at least one slice")
-    low, high = (gap, n_frames - 1 - gap) if n_frames > 2 * gap else (0, n_frames - 1)
-    positions = np.round(np.linspace(low, high, n_positions)).astype(int) + int(offset)
-    if jitter > 0:
-        rng = rng or np.random.default_rng()
-        positions = positions + rng.integers(-int(jitter), int(jitter) + 1, size=n_positions)
-    return np.clip(positions, 0, n_frames - 1)
-
-
-def build_slice_triplets(
-    volume: np.ndarray,
-    *,
-    n_positions: int,
-    image_size: int,
-    gap: int,
-    offset: int = 0,
-    jitter: int = 0,
-    rng: np.random.Generator | None = None,
-) -> torch.Tensor:
-    """Turn a volume into [positions, 3, size, size] of neighbouring slices.
-
-    Each sampled position becomes three channels: the slice before, the slice
-    itself, and the slice after. The encoder is a 2D network pretrained on
-    photographs, so this is how a little through-plane context reaches it
-    without moving to a 3D architecture -- cheap, and it keeps the pretrained
-    weights usable.
-    """
-    if gap < 1:
-        raise ValueError("the neighbour gap must be at least one slice")
-    volume = scale_intensities(volume)
-    centres = choose_slice_positions(
-        len(volume), n_positions, gap, offset=offset, jitter=jitter, rng=rng
-    )
-    neighbours = np.asarray([-gap, 0, gap], dtype=int)
-    index = np.clip(centres[:, None] + neighbours[None, :], 0, len(volume) - 1)
-    stacked = torch.from_numpy(volume[index].astype(np.float32, copy=False))
-    return F.interpolate(stacked, (image_size, image_size), mode="bilinear", align_corners=False)
-''')
-
-markdown("## 7. The centre crop")
-
-code(r'''
-def crop_centre_and_resize(volume: torch.Tensor, crop_fraction: float) -> torch.Tensor:
-    """Keep the middle 90% of the field of view, then resize back to 224.
-
-    Knee MRI is framed with the joint near the centre and a margin of air, coil
-    and soft tissue around it. Trimming that margin makes the joint fill more of
-    the input.
-
-    Worth knowing before you build on this: the crop happens *after* the resize
-    to 224, so the effective support is 202x202 upsampled back to 224, and the
-    output carries no detail the 202-pixel crop did not. Cropping at native
-    resolution first was tried and lost on the expert surface, but in-plane
-    resolution itself has never been varied.
-    """
-    if volume.ndim < 4:
-        raise ValueError(f"expected [..., C, H, W], got {tuple(volume.shape)}")
-    height, width = int(volume.shape[-2]), int(volume.shape[-1])
-    channels = int(volume.shape[-3])
-    original = tuple(volume.shape)
-    flat = volume.reshape(-1, channels, height, width)
-
-    crop_h = max(2, min(height, int(round(height * crop_fraction))))
-    crop_w = max(2, min(width, int(round(width * crop_fraction))))
-    top, left = (height - crop_h) // 2, (width - crop_w) // 2
-    cropped = flat[:, :, top:top + crop_h, left:left + crop_w]
-    if (crop_h, crop_w) != (height, width):
-        cropped = F.interpolate(
-            cropped, size=(height, width), mode="bilinear", align_corners=False
+            failures += 1
+    # Stop if nothing in the directory yielded readable pixels.
+    if not items:
+        raise RuntimeError(
+            f"No readable DICOM pixels in {series_dir} "
+            f"({len(files)} files, {failures} decode failures)"
         )
-    return cropped.reshape(original)
-''')
+    # Sort frames along the MRI acquisition direction.
+    items.sort(key=lambda item: item[0])
+    # Extract only the two-dimensional frames from sorted pairs.
+    frames = [frame for _, frame in items]
+    # Inspect whether DICOM files use mixed image matrices.
+    shapes = {frame.shape for frame in frames}
+    # Harmonize mixed matrices before stacking frames.
+    if len(shapes) > 1:
+        # Choose the largest matrix as the common output size.
+        target_shape = max(shapes, key=lambda shape: shape[0] * shape[1])
+        # Center-pad or crop each frame to that size.
+        frames = [pad_or_crop(frame, target_shape) for frame in frames]
+    # Stack frames into the volume expected by preprocessing.
+    return np.stack(frames).astype(np.float32, copy=False)
 
-markdown("## 8. Training-time augmentation")
 
-code(r'''
-def augment_training_volume(volume: torch.Tensor, config: "Config") -> torch.Tensor:
-    """Mild acquisition-like distortion, drawn once and shared across a series.
+def normalize_volume(volume: np.ndarray) -> np.ndarray:
+    """Clip a full volume at its 1st/99th percentiles and scale it to [0, 1]."""
+    # Ensure the computation starts from a float32 NumPy volume.
+    volume = np.asarray(volume, dtype=np.float32)
+    # Require a non-empty sequence of two-dimensional MRI frames.
+    if volume.ndim != 3 or len(volume) == 0:
+        raise ValueError(f"Expected non-empty [frames, height, width], got {volume.shape}")
+    # Select finite values for robust percentile computation.
+    finite = volume[np.isfinite(volume)]
+    # Stop if no valid numerical pixel exists.
+    if finite.size == 0:
+        raise ValueError("DICOM volume has no finite pixels")
+    # Compute robust lower and upper intensity cutoffs from the entire native volume.
+    low, high = np.percentile(finite, [1, 99])
+    # Replace any non-finite pixel using the nearest robust cutoff.
+    volume = np.nan_to_num(volume, nan=float(low), posinf=float(high), neginf=float(low))
+    # Clip outlying intensities to the robust support.
+    volume = np.clip(volume, low, high)
+    # Convert the clipped volume into a stable zero-to-one range.
+    return ((volume - low) / max(float(high - low), 1e-6)).astype(np.float32, copy=False)
 
-    One draw per series, not per slice: the slices of a series were acquired in
-    one go, so rotating them independently would create a physically impossible
-    volume and teach the model to ignore through-plane consistency.
 
-    Every transform imitates something a scanner or a patient actually does --
-    slight repositioning, receiver-coil shading, thermal noise. Nothing here
-    flips the image, because left and right knees are not interchangeable.
-    """
-    import torchvision.transforms.functional as TVF
-    from torchvision.transforms import InterpolationMode
+def sample_centers(n_frames: int, n_samples: int, gap: int) -> tuple[np.ndarray, np.ndarray]:
+    """Return deterministic slice centres and normalized through-plane positions."""
+    # Reject invalid sampling settings before calculating slice indices.
+    if n_frames < 1 or n_samples < 1 or gap < 1:
+        raise ValueError("frames, samples, and gap must all be positive")
+    # Avoid edge centers when the series is long enough for a full 2.5D neighborhood.
+    low, high = (gap, n_frames - 1 - gap) if n_frames > 2 * gap else (0, n_frames - 1)
+    # Spread the requested centers evenly across the usable MRI range.
+    centres = np.round(np.linspace(low, high, n_samples)).astype(np.int64)
+    # Normalize the chosen centers into the zero-to-one through-plane coordinate range.
+    positions = centres.astype(np.float32) / float(max(n_frames - 1, 1))
+    # Return both integer frame indices and continuous positions.
+    return centres, positions
 
-    angle = float(torch.empty(1).uniform_(-config.rotation_degrees, config.rotation_degrees))
-    max_shift = int(round(config.translate_fraction * config.image_size))
-    translate = [
-        int(torch.randint(-max_shift, max_shift + 1, (1,)).item()) if max_shift else 0,
-        int(torch.randint(-max_shift, max_shift + 1, (1,)).item()) if max_shift else 0,
-    ]
-    scale = float(torch.empty(1).uniform_(1 - config.scale_jitter, 1 + config.scale_jitter))
-    volume = TVF.affine(
-        volume, angle=angle, translate=translate, scale=scale, shear=[0.0, 0.0],
-        interpolation=InterpolationMode.BILINEAR,
+
+def native_center_crop(triplets: np.ndarray, fraction: float) -> np.ndarray:
+    """Crop every 2.5D triplet before its one high-resolution resize."""
+    # Validate the requested retained image fraction.
+    if not 0 < fraction <= 1:
+        raise ValueError("crop_fraction must be in the interval (0, 1]")
+    # Read the native height and width from the final two array dimensions.
+    height, width = triplets.shape[-2:]
+    # Round the requested native crop height while keeping at least two pixels.
+    crop_h = max(2, min(height, int(round(height * fraction))))
+    # Round the requested native crop width while keeping at least two pixels.
+    crop_w = max(2, min(width, int(round(width * fraction))))
+    # Calculate the centered top edge.
+    top = (height - crop_h) // 2
+    # Calculate the centered left edge.
+    left = (width - crop_w) // 2
+    # Return the centered native-resolution crop.
+    return triplets[..., top : top + crop_h, left : left + crop_w]
+
+
+def prepare_series_tensor(volume: np.ndarray, config: RunConfig) -> tuple[torch.Tensor, torch.Tensor]:
+    """Create [slices, 3, 448, 448] triplets and their slice positions."""
+    # Normalize the entire native volume before taking any crop or resize.
+    normalized = normalize_volume(volume)
+    # Select deterministic center indices and their continuous positions.
+    centres, positions = sample_centers(
+        len(normalized), config.slices_per_series, config.triplet_gap
     )
-
-    if config.gamma_jitter > 0:      # overall brightness curve
-        gamma = float(torch.empty(1).uniform_(1 - config.gamma_jitter, 1 + config.gamma_jitter))
-        volume = volume.clamp(0, 1).pow(gamma)
-
-    if config.bias_field_strength > 0:   # smooth shading, as a coil produces
-        height, width = volume.shape[-2:]
-        yy = torch.linspace(-1, 1, height, device=volume.device).view(1, 1, height, 1)
-        xx = torch.linspace(-1, 1, width, device=volume.device).view(1, 1, 1, width)
-        ax = float(torch.empty(1).uniform_(-config.bias_field_strength, config.bias_field_strength))
-        ay = float(torch.empty(1).uniform_(-config.bias_field_strength, config.bias_field_strength))
-        volume = (volume * (1 + ax * xx + ay * yy).clamp(0.8, 1.2)).clamp(0, 1)
-
-    if config.noise_std > 0:
-        volume = (volume + torch.randn_like(volume) * config.noise_std).clamp(0, 1)
-
-    if config.slice_dropout > 0:
-        # Blank a few sampled positions outright, so the study head cannot come
-        # to depend on any single slice being present.
-        volume = volume.clone()
-        volume[torch.rand(volume.shape[0]) < config.slice_dropout] = 0
-    return volume
+    # Define the previous, central, and next frame offsets for each 2.5D input.
+    offsets = np.asarray([-config.triplet_gap, 0, config.triplet_gap], dtype=np.int64)
+    # Clip all neighbor indices to valid frame locations.
+    index = np.clip(centres[:, None] + offsets[None, :], 0, len(normalized) - 1)
+    # Gather 32 three-channel native-resolution triplets.
+    triplets = normalized[index]
+    # Apply the fixed native center crop before resizing.
+    cropped = native_center_crop(triplets, config.crop_fraction)
+    # Convert a contiguous NumPy array into a PyTorch tensor.
+    tensor = torch.from_numpy(np.ascontiguousarray(cropped))
+    # Resize every triplet once to the configured high-resolution spatial dimensions.
+    resized = F.interpolate(
+        tensor,
+        size=(config.image_size, config.image_size),
+        mode="bilinear",
+        align_corners=False,
+        antialias=True,
+    )
+    # Return image data and through-plane coordinates as torch tensors.
+    return resized, torch.from_numpy(positions)
 ''')
 
-
-markdown("## 9. One study as tensors")
+markdown("## 7. Dataset and batch collation classes")
 
 code(r'''
-class KneeStudyDataset(Dataset):
-    """One item is one study: all of its series, stacked.
+class KneeMRIDataset(Dataset):
+    """Decode one study as a variable number of high-resolution MRI series."""
 
-    Studies differ in how many series they have -- three to fourteen, median
-    five -- so an item has a ragged first dimension and the collate function
-    below pads it. A series that fails to read comes back as zeros with its
-    presence flag off, so one unreadable folder cannot stop a run.
-    """
-
-    def __init__(self, study_uids, series_by_study, config: "Config", *,
-                 split="train", targets=None, weights=None, train=False,
-                 tta_offsets=()):
-        self.study_uids = [str(u) for u in study_uids]
-        self.series_by_study = series_by_study
+    def __init__(
+        self,
+        frame: pd.DataFrame,
+        series_records: dict[str, list[dict]],
+        paths: DrivePaths,
+        config: RunConfig,
+    ) -> None:
+        # Store file locations for lazy DICOM loading.
+        self.paths = paths
+        # Store image and error-handling settings.
         self.config = config
-        self.split = split
-        self.targets = targets
-        self.weights = weights
-        self.train = bool(train)
-        self.tta_offsets = tuple(int(o) for o in tta_offsets)
+        # Copy rows so filtering cannot mutate a caller's data frame.
+        work = frame.copy()
+        # Normalize UID strings to match the series-record dictionary keys.
+        work["StudyInstanceUID"] = work["StudyInstanceUID"].astype(str)
+        # Keep only studies that have at least one recognized-plane MRI series.
+        work = work.loc[work["StudyInstanceUID"].isin(series_records)].reset_index(drop=True)
+        # Stop with an actionable error when no training study remains.
+        if work.empty:
+            raise ValueError("No labelled studies have a recognized-plane MRI series")
+        # Store deterministic study order for DataLoader indexing.
+        self.study_uids = work["StudyInstanceUID"].tolist()
+        # Store target values as float32, preserving blanks as NaN for the masked loss.
+        self.targets = work[TARGETS].apply(pd.to_numeric, errors="coerce").to_numpy(np.float32)
+        # Store the metadata records used to find and describe each MRI series.
+        self.series_records = series_records
 
     def __len__(self) -> int:
+        """Return the number of studies in this split."""
+        # Let PyTorch know how many valid integer indices exist.
         return len(self.study_uids)
 
-    def _blank(self) -> torch.Tensor:
-        shape = (self.config.slices_per_series, 3, self.config.image_size, self.config.image_size)
-        blank = torch.zeros(shape, dtype=torch.float32)
-        if self.tta_offsets:
-            return blank.unsqueeze(0).repeat(len(self.tta_offsets), 1, 1, 1, 1)
-        return blank
+    def _zero_series(self) -> tuple[torch.Tensor, torch.Tensor, float]:
+        """Create a shape-compatible placeholder for one unreadable series."""
+        # Make a zero image tensor with the same shape as a prepared MRI series.
+        images = torch.zeros(
+            self.config.slices_per_series,
+            3,
+            self.config.image_size,
+            self.config.image_size,
+            dtype=torch.float32,
+        )
+        # Make zero positions for the unreadable placeholder.
+        positions = torch.zeros(self.config.slices_per_series, dtype=torch.float32)
+        # Return the placeholder with present=0 so the model masks it out.
+        return images, positions, 0.0
 
-    def _read_one_series(self, study: str, series: str):
-        directory = find_series_directory(self.config.data_root, self.split, study, series)
-        if directory is None:
-            return self._blank(), 0.0
+    def _load_series(self, study_uid: str, record: dict) -> tuple[torch.Tensor, torch.Tensor, float]:
+        """Read and preprocess one MRI series, or return a masked placeholder."""
+        # Locate the expected DICOM directory for this study and series.
+        series_dir = find_series_dir(self.paths.data_root, study_uid, record["series_uid"])
+        # Handle a completely missing series directory.
+        if series_dir is None:
+            # Raise immediately only when strict DICOM behavior is requested.
+            if self.config.strict_dicom:
+                raise FileNotFoundError(f"Missing series {study_uid}/{record['series_uid']}")
+            # Otherwise let the model ignore a zero placeholder.
+            return self._zero_series()
+        # Try to decode and prepare the available DICOM directory.
         try:
-            volume = read_dicom_volume(directory)
+            # Decode the native MRI volume from its DICOM files.
+            volume = read_dicom_volume(series_dir)
+            # Convert the native volume into high-resolution 2.5D triplets.
+            images, positions = prepare_series_tensor(volume, self.config)
+            # Mark this series readable so the model uses it.
+            return images, positions, 1.0
+        # Handle a DICOM decode or preprocessing failure.
         except Exception:
-            return self._blank(), 0.0
-
-        if self.train:
-            # A random neighbour gap and jittered positions, so the model never
-            # sees exactly the same sixteen slices of a series twice.
-            gap = int(self.config.train_gap_choices[
-                int(torch.randint(len(self.config.train_gap_choices), (1,)).item())])
-            rng = np.random.default_rng(int(torch.randint(0, 2**31 - 1, (1,)).item()))
-            sampled = build_slice_triplets(
-                volume, n_positions=self.config.slices_per_series,
-                image_size=self.config.image_size, gap=gap,
-                jitter=self.config.centre_jitter, rng=rng,
-            )
-            return augment_training_volume(sampled, self.config), 1.0
-
-        if self.tta_offsets:
-            views = [
-                build_slice_triplets(
-                    volume, n_positions=self.config.slices_per_series,
-                    image_size=self.config.image_size, gap=self.config.triplet_gap,
-                    offset=offset,
-                )
-                for offset in self.tta_offsets
-            ]
-            return torch.stack(views, dim=0), 1.0
-
-        return build_slice_triplets(
-            volume, n_positions=self.config.slices_per_series,
-            image_size=self.config.image_size, gap=self.config.triplet_gap,
-        ), 1.0
+            # Raise the original error in strict mode to find the bad input quickly.
+            if self.config.strict_dicom:
+                raise
+            # Otherwise ignore only this series and continue with the study.
+            return self._zero_series()
 
     def __getitem__(self, index: int) -> dict:
-        uid = self.study_uids[index]
-        volumes, present, metadata = [], [], []
-        for record in self.series_by_study[uid]:
-            volume, flag = self._read_one_series(uid, record["series_uid"])
-            volumes.append(volume)
-            present.append(flag)
+        """Load one variable-series study on demand."""
+        # Resolve the study identifier from the dataset's deterministic order.
+        study_uid = self.study_uids[index]
+        # Prepare lists for every real or placeholder MRI series.
+        images, positions, present, metadata = [], [], [], []
+        # Load every selected series in this study.
+        for record in self.series_records[study_uid]:
+            # Decode one series and obtain its readable flag.
+            image, position, readable = self._load_series(study_uid, record)
+            # Append the prepared 2.5D image stack.
+            images.append(image)
+            # Append matching through-plane positions.
+            positions.append(position)
+            # Append the model mask flag.
+            present.append(readable)
+            # Append plane, fluid, and fat-suppression categorical metadata.
             metadata.append([record["plane_id"], record["fluid_id"], record["fat_id"]])
-
-        stacked = torch.stack(volumes)
-        if self.tta_offsets:
-            stacked = stacked.permute(1, 0, 2, 3, 4, 5).contiguous()   # views first
-
-        # The crop is applied here, once, to the whole study at once.
-        stacked = crop_centre_and_resize(stacked, self.config.crop_fraction)
-
-        item = {
-            "study_uid": uid,
-            "volumes": stacked,
+        # Stop if no selected MRI series could be decoded for this study.
+        if not any(present):
+            raise RuntimeError(f"Study {study_uid} has no readable MRI series")
+        # Return tensors with a variable first dimension equal to the series count.
+        return {
+            "study_uid": study_uid,
+            "volumes": torch.stack(images),
+            "slice_position": torch.stack(positions),
             "present": torch.tensor(present, dtype=torch.float32),
             "series_meta": torch.tensor(metadata, dtype=torch.long),
+            "target": torch.from_numpy(self.targets[index]),
         }
-        if self.targets is not None:
-            item["target"] = torch.from_numpy(np.asarray(self.targets[index], dtype=np.float32))
-        if self.weights is not None:
-            item["weight"] = torch.from_numpy(np.asarray(self.weights[index], dtype=np.float32))
-        return item
-''')
 
-markdown("## 10. Padding studies into a batch")
 
-code(r'''
-def pad_studies_into_batch(items: list[dict]) -> dict:
-    """Pad to the largest series count *in this batch*, not to a global maximum.
-
-    Study series counts run from three to fourteen. Padding everything to
-    fourteen would waste most of the encoder's work on zeros, so the batch is
-    padded only as far as its own widest member -- which is also why the batch
-    size is two: with a bigger batch, one fourteen-series study drags every
-    other study in it up to fourteen.
-    """
-    if not items:
-        raise ValueError("cannot collate an empty batch")
-
-    widest = max(int(item["present"].shape[0]) for item in items)
-    first = items[0]["volumes"]
-    n = len(items)
-
-    if first.ndim == 5:                                 # [K, S, C, H, W]
-        _, s, c, h, w = first.shape
-        volumes = first.new_zeros((n, widest, s, c, h, w))
-        for i, item in enumerate(items):
-            k = item["volumes"].shape[0]
-            volumes[i, :k] = item["volumes"]
-    elif first.ndim == 6:                               # [V, K, S, C, H, W]
-        v, _, s, c, h, w = first.shape
-        volumes = first.new_zeros((n, v, widest, s, c, h, w))
-        for i, item in enumerate(items):
-            k = item["volumes"].shape[1]
-            volumes[i, :, :k] = item["volumes"]
-    else:
-        raise ValueError(f"unexpected volume shape {tuple(first.shape)}")
-
-    present = torch.zeros((n, widest), dtype=torch.float32)
-    metadata = torch.zeros((n, widest, 3), dtype=torch.long)   # zero == padding index
-    for i, item in enumerate(items):
-        k = item["present"].shape[0]
-        present[i, :k] = item["present"]
-        metadata[i, :k] = item["series_meta"]
-
-    batch = {
-        "study_uid": [str(item["study_uid"]) for item in items],
+def collate_studies(batch: list[dict]) -> dict:
+    """Pad only the variable series dimension when combining studies into a batch."""
+    # Reject the impossible empty batch case explicitly.
+    if not batch:
+        raise ValueError("Cannot collate an empty batch")
+    # Use a zero-copy unsqueeze path for the safe default batch size of one.
+    if len(batch) == 1:
+        # Extract the only sample dictionary.
+        item = batch[0]
+        # Add a batch dimension without duplicating the large image tensor.
+        return {
+            "study_uid": [item["study_uid"]],
+            "volumes": item["volumes"].unsqueeze(0),
+            "slice_position": item["slice_position"].unsqueeze(0),
+            "present": item["present"].unsqueeze(0),
+            "series_meta": item["series_meta"].unsqueeze(0),
+            "target": item["target"].unsqueeze(0),
+        }
+    # Find the largest series count in this multi-study batch.
+    max_series = max(int(item["present"].shape[0]) for item in batch)
+    # Read image shape information from the first study.
+    first = batch[0]["volumes"]
+    # Read the actual batch size.
+    size = len(batch)
+    # Unpack one series tensor shape.
+    _, slices, channels, height, width = first.shape
+    # Allocate padded image storage.
+    volumes = first.new_zeros((size, max_series, slices, channels, height, width))
+    # Allocate padded position storage.
+    positions = torch.zeros((size, max_series, slices), dtype=torch.float32)
+    # Allocate padded readable-series flags.
+    present = torch.zeros((size, max_series), dtype=torch.float32)
+    # Allocate padded categorical metadata.
+    metadata = torch.zeros((size, max_series, 3), dtype=torch.long)
+    # Copy each study's variable number of series into the padded tensors.
+    for row, item in enumerate(batch):
+        # Read this study's real series count.
+        count = int(item["present"].shape[0])
+        # Copy image triplets.
+        volumes[row, :count] = item["volumes"]
+        # Copy through-plane positions.
+        positions[row, :count] = item["slice_position"]
+        # Copy readable-series flags.
+        present[row, :count] = item["present"]
+        # Copy categorical metadata.
+        metadata[row, :count] = item["series_meta"]
+    # Return a normal multi-study batch dictionary.
+    return {
+        "study_uid": [item["study_uid"] for item in batch],
         "volumes": volumes,
+        "slice_position": positions,
         "present": present,
         "series_meta": metadata,
+        "target": torch.stack([item["target"] for item in batch]),
     }
-    if all("target" in item for item in items):
-        batch["target"] = torch.stack([item["target"] for item in items])
-    if all("weight" in item for item in items):
-        batch["weight"] = torch.stack([item["weight"] for item in items])
-    return batch
+
+
+def make_split(frame: pd.DataFrame, fraction: float, seed: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Make a deterministic study-level train/validation split."""
+    # Validate the requested validation fraction.
+    if not 0 <= fraction < 1:
+        raise ValueError("validation_fraction must be in [0, 1)")
+    # Create a seeded random permutation of row positions.
+    order = np.random.default_rng(seed).permutation(len(frame))
+    # Keep one validation case when at least two studies exist.
+    validation_size = 0 if len(frame) < 2 else max(1, int(round(len(frame) * fraction)))
+    # Store selected validation positions in a set for quick membership checks.
+    validation_indices = set(order[:validation_size].tolist())
+    # Keep non-validation rows for training.
+    train = frame.loc[[index not in validation_indices for index in range(len(frame))]].reset_index(drop=True)
+    # Keep validation rows in a separate frame.
+    validation = frame.loc[[index in validation_indices for index in range(len(frame))]].reset_index(drop=True)
+    # Stop if a pathological fraction would remove every training row.
+    if train.empty:
+        raise ValueError("The split left no studies for training")
+    # Return the two independent study tables.
+    return train, validation
 ''')
 
-markdown("## 11. The slice encoder")
+markdown("## 8. Model classes: encoder, sparse evidence head, and study model")
 
 code(r'''
-class SliceFeatureExtractor(nn.Module):
-    """Turn one 224x224 three-channel slice into a 768-number description.
+class ConvNormAct(nn.Module):
+    """A convolution, group-normalization, and GELU activation block."""
 
-    A ConvNeXt-Tiny pretrained on photographs. Natural-image pretraining
-    transfers here because early layers learn edges and textures, which knee MRI
-    also has; the later layers are what needs adapting, which is why fine-tuning
-    starts from the output end.
-
-    **The known limitation.** The final 7x7x768 feature map is average-pooled to
-    a single 768-vector, so *where* in the slice something appeared is discarded
-    entirely. Eight of the twelve findings are focal -- ligaments, menisci,
-    compartment-specific arthritis, fracture -- and for those, "somewhere in this
-    slice" is close to the least useful summary available. Keeping a 2x2 or 3x3
-    grid instead of one vector is the most promising untried change to this
-    model.
-    """
-
-    def __init__(self, *, pretrained_weights: bool = False, normalise_input: bool = True):
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1) -> None:
+        # Initialize the parent PyTorch module.
         super().__init__()
-        from torchvision.models import ConvNeXt_Tiny_Weights, convnext_tiny
+        # Choose a group count that divides each channel count used below.
+        groups = max(1, min(8, out_channels // 8))
+        # Build the spatial feature-extraction sequence.
+        self.layers = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False),
+            nn.GroupNorm(groups, out_channels),
+            nn.GELU(),
+        )
 
-        weights = ConvNeXt_Tiny_Weights.IMAGENET1K_V1 if pretrained_weights else None
-        network = convnext_tiny(weights=weights)
-        self.features = network.features
-        self.avgpool = network.avgpool
-        self.pre_classifier = nn.Sequential(*list(network.classifier.children())[:-1])
-        self.out_dim = int(network.classifier[-1].in_features)      # 768
-        self.normalise_input = bool(normalise_input)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply convolution, normalization, and activation."""
+        # Pass images through the three-layer block.
+        return self.layers(x)
 
-        # The three channels are adjacent anatomical slices, not red/green/blue,
-        # yet they are normalised with per-channel ImageNet statistics. That is
-        # inherited from the pretrained weights and kept deliberately: changing
-        # it would invalidate every stored checkpoint.
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
-        self.register_buffer("input_mean", mean, persistent=False)
-        self.register_buffer("input_std", std, persistent=False)
 
-    def forward(self, images: torch.Tensor) -> torch.Tensor:
-        if self.normalise_input:
-            images = (images - self.input_mean.to(images.dtype)) / self.input_std.to(images.dtype)
-        features = self.features(images)          # [N, 768, 7, 7]
-        pooled = self.avgpool(features)           # [N, 768, 1, 1]
-        return self.pre_classifier(pooled)        # [N, 768]
-''')
+class ResidualBlock(nn.Module):
+    """A compact residual block that refines features without changing resolution."""
 
-markdown("## 12. The whole model")
-
-code(r'''
-class KneeAbnormalityModel(nn.Module):
-    """Slices -> series -> study -> twelve findings.
-
-    Four stages, each collapsing one level of structure:
-
-    1. every slice of every real series becomes a 768-vector;
-    2. a series' sixteen slice vectors become one series vector, by two
-       different pooling routes blended through a learned gate;
-    3. a small transformer lets a study's series see each other;
-    4. twelve learned queries read out one logit per finding.
-
-    Two details that look like ornament and are not:
-
-    * The gate starts at zero, so the second pooling route contributes exactly
-      nothing at initialisation and only enters if training pulls it in.
-    * A small depthwise convolution gives each slice a little context from its
-      neighbours **during training only**, and is skipped exactly at evaluation.
-      It behaves as a scaffold: it shapes what gets learned without changing the
-      scoring function you eventually deploy.
-    """
-
-    def __init__(self, config: "Config", *, pretrained_encoder: bool = False):
+    def __init__(self, channels: int) -> None:
+        # Initialize the parent PyTorch module.
         super().__init__()
-        self.config = config
-        self.encoder = SliceFeatureExtractor(pretrained_weights=pretrained_encoder)
-        width = self.encoder.out_dim                         # 768
-        heads = config.attention_heads
-        feedforward = int(width * config.feedforward_multiplier)
-
-        # --- what a slice knows about itself besides its pixels -------------
-        self.slice_position = nn.Parameter(torch.randn(config.slices_per_series, width) * 0.02)
-        # Index 0 means "not stated" and is held at zero -- the model is told the
-        # difference between "no fat suppression" and "nobody recorded it".
-        self.plane_embedding = nn.Embedding(4, width, padding_idx=0)
-        self.fluid_embedding = nn.Embedding(3, width, padding_idx=0)
-        self.fat_embedding = nn.Embedding(3, width, padding_idx=0)
-
-        # --- route A: one learned query attends over the sixteen slices ------
-        self.pool_query = nn.Parameter(torch.randn(1, 1, width) * 0.02)
-        self.pool_attention = nn.MultiheadAttention(
-            width, heads, dropout=config.dropout, batch_first=True)
-        self.pool_norm = nn.LayerNorm(width)
-        self.pool_dropout = nn.Dropout(config.dropout)
-
-        # --- route B: a plain softmax summary, blended in by a zero gate -----
-        self.summary_query = nn.Parameter(torch.randn(width) * 0.02)
-        self.summary_gate = nn.Parameter(torch.zeros(width))
-
-        # --- the training-only neighbour context ----------------------------
-        self.local_context = nn.Conv1d(width, width, kernel_size=3, padding=1,
-                                       groups=width, bias=False)
-        nn.init.zeros_(self.local_context.weight)
-
-        # --- the study transformer ------------------------------------------
-        study_layer = nn.TransformerEncoderLayer(
-            d_model=width, nhead=heads, dim_feedforward=feedforward,
-            dropout=config.dropout, activation="gelu",
-            batch_first=True, norm_first=True)
-        self.study_context = nn.TransformerEncoder(
-            study_layer, num_layers=config.study_layers,
-            norm=nn.LayerNorm(width), enable_nested_tensor=False)
-
-        # --- the twelve pathology queries ------------------------------------
-        self.finding_queries = nn.Parameter(torch.randn(len(FINDINGS), width) * 0.02)
-        query_layer = nn.TransformerEncoderLayer(
-            d_model=width, nhead=heads, dim_feedforward=feedforward,
-            dropout=config.dropout, activation="gelu",
-            batch_first=True, norm_first=True)
-        self.query_context = nn.TransformerEncoder(
-            query_layer, num_layers=config.query_layers,
-            norm=nn.LayerNorm(width), enable_nested_tensor=False)
-
-        self.cross_attention = nn.MultiheadAttention(
-            width, heads, dropout=config.dropout, batch_first=True)
-        self.query_norm = nn.LayerNorm(width)
-        self.dropout = nn.Dropout(config.dropout)
-
-        # Each finding reads only its own query row -- a block-diagonal head
-        # rather than a shared linear layer, so the twelve outputs cannot
-        # borrow each other's features at the very last step.
-        self.finding_weight = nn.Parameter(torch.empty(len(FINDINGS), width))
-        self.finding_bias = nn.Parameter(torch.zeros(len(FINDINGS)))
-        nn.init.xavier_uniform_(self.finding_weight)
-
-    # ---------------------------------------------------------------- stage 1
-    def _describe_slices(self, volumes, present, series_meta):
-        """[B,K,S,3,H,W] -> [B,K,S,768], encoding only the series that exist."""
-        b, k, s, c, h, w = volumes.shape
-        width = self.encoder.out_dim
-        flat = volumes.reshape(b * k, s, c, h, w)
-        real = torch.nonzero(present.reshape(-1) > 0, as_tuple=False).flatten()
-        if real.numel() == 0:
-            return volumes.new_zeros((b, k, s, width)), real
-
-        active = flat.index_select(0, real)
-        slices = active.reshape(-1, c, h, w)
-        # Chunked so a study with many series cannot exhaust GPU memory.
-        encoded = torch.cat(
-            [self.encoder(chunk)
-             for chunk in slices.split(self.config.slices_per_encoder_batch, dim=0)],
-            dim=0,
-        ).reshape(active.shape[0], s, width)
-
-        features = encoded.new_zeros((b * k, s, width)).index_copy(0, real, encoded)
-        features = features.reshape(b, k, s, width)
-
-        metadata = (self.plane_embedding(series_meta[:, :, 0].clamp(0, 3))
-                    + self.fluid_embedding(series_meta[:, :, 1].clamp(0, 2))
-                    + self.fat_embedding(series_meta[:, :, 2].clamp(0, 2)))
-        mask = present[:, :, None, None].to(features.dtype)
-        described = (features
-                     + self.slice_position[None, None, :, :]
-                     + metadata[:, :, None, :]) * mask
-        return described, real
-
-    # ---------------------------------------------------------------- stage 2
-    def _summarise_series(self, described, present, real):
-        """[B,K,S,768] -> [B,K,768], one vector per series."""
-        b, k, s, width = described.shape
-        flat = described.reshape(b * k, s, width)
-        if real.numel() == 0:
-            return described.new_zeros((b, k, width))
-
-        slices = flat.index_select(0, real)                        # [N, S, 768]
-
-        # Route A: a learned query attends over the slices.
-        query = self.pool_query.expand(slices.shape[0], -1, -1)
-        attended, _ = self.pool_attention(query, slices, slices, need_weights=False)
-        route_a = self.pool_dropout(self.pool_norm(query + attended)).squeeze(1)
-
-        # The scaffold: neighbour context while training, exact identity at eval.
-        if self.training:
-            normed = F.layer_norm(slices.float(), (width,)).to(slices.dtype)
-            scored_on = slices + self.local_context(
-                normed.transpose(1, 2)).transpose(1, 2)
-        else:
-            scored_on = slices
-
-        # Route B: softmax weights from `scored_on`, but the values summed are
-        # always the original slices -- context decides *what to look at*, never
-        # *what is reported*. That is what makes the eval bypass exact.
-        scores = torch.matmul(scored_on, self.summary_query.to(scored_on.dtype)) \
-            / math.sqrt(float(width))
-        attention = torch.softmax(scores.float(), dim=1).to(slices.dtype)
-        summed = torch.sum(attention[:, :, None] * slices, dim=1)
-        route_b = F.layer_norm(summed.float(), (width,)).to(slices.dtype)
-
-        gate = torch.tanh(self.summary_gate).to(route_a.dtype)
-        blended = route_a + gate[None, :] * (route_b - route_a)
-        return blended.new_zeros((b * k, width)).index_copy(
-            0, real, blended).reshape(b, k, width)
-
-    # ---------------------------------------------------------------- forward
-    def forward(self, volumes, present, series_meta):
-        described, real = self._describe_slices(volumes, present, series_meta)
-        series = self._summarise_series(described, present, real)
-
-        padding = present <= 0
-        empty = padding.all(dim=1)
-        # Attention over an entirely masked sequence is undefined, so a study
-        # with no readable series is given one zero key to attend to and its
-        # output is replaced by the learned bias at the very end.
-        safe_padding = padding.clone()
-        if empty.any():
-            safe_padding[empty, 0] = False
-            series = series.clone()
-            series[empty, 0] = 0
-
-        memory = self.study_context(series, src_key_padding_mask=safe_padding)
-        memory = memory.masked_fill(padding[:, :, None], 0.0)
-
-        b = volumes.shape[0]
-        queries = self.finding_queries[None, :, :].expand(b, -1, -1)
-        queries = self.query_context(queries)
-        attended, _ = self.cross_attention(
-            queries, memory, memory, key_padding_mask=safe_padding, need_weights=False)
-        queries = self.dropout(self.query_norm(queries + attended))
-
-        logits = (queries * self.finding_weight[None, :, :]).sum(dim=-1) + self.finding_bias
-        return torch.where(empty[:, None], self.finding_bias[None, :], logits)
-''')
-
-
-markdown("## 13. Report states into training targets")
-
-code(r'''
-def build_supervision_targets(studies: pd.DataFrame, labels: pd.DataFrame, config: "Config"):
-    """Turn parsed report states into soft targets and per-cell weights.
-
-    The label file holds two columns per finding: a state (`positive`,
-    `negated`, `uncertain`, `unmentioned`) and a confidence. Only definite
-    states above the confidence threshold are supervised at all -- roughly a
-    quarter of all cells. The rest carry weight zero and contribute nothing,
-    because a report not mentioning a finding is not the same as a report
-    denying it.
-
-    The asymmetry is measured, not assumed. Against expert labels the parser's
-    "yes" agrees 69% of the time and its "no" 96%, so a "yes" is aimed at 0.85
-    and counted at half weight, while a "no" is aimed at 0.05 at full weight.
-    (0.85 is still more confident than 69% would justify -- `positive_target` is
-    exposed in the config precisely so that can be tested.)
-    """
-    labelled = studies.loc[~has_expert_labels(studies), ["StudyInstanceUID"]].copy()
-    ordered = labelled.merge(labels, on="StudyInstanceUID", how="left", validate="one_to_one")
-
-    n = len(ordered)
-    targets = np.full((n, len(FINDINGS)), 0.5, dtype=np.float32)   # never supervised
-    weights = np.zeros((n, len(FINDINGS)), dtype=np.float32)
-
-    for j, finding in enumerate(FINDINGS):
-        state = ordered.get(f"{finding}__state", pd.Series([""] * n)).fillna("").astype(str).to_numpy()
-        confidence = pd.to_numeric(
-            ordered.get(f"{finding}__confidence", pd.Series([0.0] * n)), errors="coerce"
-        ).fillna(0.0).to_numpy(dtype=float)
-
-        confident = confidence >= config.min_label_confidence
-        says_yes = (state == "positive") & confident
-        says_no = (state == "negated") & confident
-
-        targets[says_yes, j] = config.positive_target
-        weights[says_yes, j] = config.positive_weight
-        targets[says_no, j] = config.negative_target
-        weights[says_no, j] = config.negative_weight
-
-    supervised = int((weights > 0).sum())
-    print(f"{n} studies, {supervised:,} supervised cells "
-          f"({supervised / (n * len(FINDINGS)) * 100:.1f}% of the label surface)")
-    return ordered["StudyInstanceUID"].astype(str).tolist(), targets, weights
-''')
-
-markdown("## 14. The loss")
-
-code(r'''
-def finding_balance_multipliers(weights: np.ndarray) -> np.ndarray:
-    """Make every finding contribute equally, whatever its supervision count.
-
-    Effusion has five times the supervised cells of Synovitis. Without this,
-    the loss would be dominated by whichever findings radiologists happen to
-    mention most, and the twelve-way average the competition scores would be
-    optimised unevenly. Each finding is scaled by (mean mass / its own mass), so
-    all twelve carry a twelfth of the gradient.
-
-    One consequence worth knowing: a finding with very few cells gets each of
-    them inflated heavily. Synovitis has 434 positives to 17 negatives, so that
-    inflation is applied to a signal that is 92% "yes" -- the model is told
-    loudly to predict Synovitis present.
-    """
-    mass = np.asarray(weights, dtype=np.float64).sum(axis=0)
-    if not (mass > 0).all():
-        missing = [FINDINGS[j] for j in np.flatnonzero(mass <= 0)]
-        raise ValueError(f"no supervision at all for: {missing}")
-    return (float(mass.mean()) / mass).astype(np.float32)
-
-
-def weighted_weak_bce(logits, targets, weights, multipliers):
-    """Cross-entropy over supervised cells only, averaged within the batch.
-
-    Dividing by this batch's own total weight rather than a fixed constant keeps
-    the loss the same size whether a batch happens to contain two supervised
-    cells or twenty, so the gradient does not swing with label density.
-
-    The zero guard matters: studies whose report yielded nothing are kept in the
-    loader so that every model sees the same scans, and a batch of two such
-    studies has no supervised cells at all. Returning `logits.sum() * 0` keeps
-    the graph intact and produces exact-zero gradients, where a plain 0/0 would
-    produce NaN and poison the weights.
-    """
-    multiplier = torch.as_tensor(multipliers, dtype=logits.dtype, device=logits.device)
-    effective = weights * multiplier[None, :]
-    denominator = effective.sum()
-    if float(denominator.detach().item()) <= 0:
-        return logits.sum() * 0.0
-    per_cell = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
-    return (per_cell * effective).sum() / denominator.clamp_min(1e-8)
-''')
-
-markdown("## 15. Which weights are allowed to learn")
-
-code(r'''
-# ConvNeXt's stages, listed from the output backwards. Unfreezing works from
-# this end: early layers see edges and textures, which transfer from
-# photographs perfectly well, while the late layers carry object-level meaning,
-# which is where knee MRI differs most.
-ENCODER_BLOCKS_FROM_OUTPUT = (
-    ("pre_classifier", "features.7"),   # last stage plus its output norm
-    ("features.6",),                    # the downsample feeding it
-    ("features.5",),
-    ("features.4",),
-    ("features.3",),
-)
-
-
-def freeze_encoder(model: KneeAbnormalityModel) -> None:
-    """Hold the encoder still and keep it in eval mode."""
-    for parameter in model.encoder.parameters():
-        parameter.requires_grad_(False)
-    model.encoder.eval()
-
-
-def unfreeze_last_encoder_blocks(model: KneeAbnormalityModel, blocks: int) -> int:
-    """Let the last N encoder blocks learn. Returns how many weights were freed.
-
-    Two restraints, both deliberate:
-
-    * The encoder stays in `eval()` even when unfrozen. ConvNeXt normalises with
-      LayerNorm, which behaves the same either way, but eval also disables
-      stochastic depth -- so the forward pass keeps exactly the shape it had and
-      only the flow of gradients changes.
-    * The freed weights get their own, much smaller learning rate. Pretrained
-      features are worth more than a randomly initialised head and are easily
-      destroyed by the head's step size.
-
-    Unfreezing one block is what took the hidden-test score from 0.688 to 0.694.
-    That is a smaller gap than a single submission can resolve, so treat it as
-    a direction worth probing rather than a settled result.
-    """
-    if not 0 <= blocks <= len(ENCODER_BLOCKS_FROM_OUTPUT):
-        raise ValueError(f"blocks must be 0..{len(ENCODER_BLOCKS_FROM_OUTPUT)}")
-    if blocks == 0:
-        return 0
-
-    prefixes = tuple(name for block in ENCODER_BLOCKS_FROM_OUTPUT[:blocks] for name in block)
-    freed = 0
-    for name, parameter in model.encoder.named_parameters():
-        if any(name == p or name.startswith(p + ".") for p in prefixes):
-            parameter.requires_grad_(True)
-            freed += parameter.numel()
-    if freed == 0:
-        raise RuntimeError(f"nothing matched {prefixes}; the encoder layout changed")
-    model.encoder.eval()
-    print(f"freed {freed:,} encoder weights in the last {blocks} block(s)")
-    return freed
-
-
-def build_parameter_groups(model: KneeAbnormalityModel, config: "Config") -> list[dict]:
-    """Two learning rates: the head's, and a much gentler one for the encoder."""
-    head, encoder = [], []
-    for name, parameter in model.named_parameters():
-        if parameter.requires_grad:
-            (encoder if name.startswith("encoder.") else head).append(parameter)
-    groups = [{"params": head, "lr": config.head_lr, "name": "head"}]
-    if encoder:
-        groups.append({
-            "params": encoder,
-            "lr": config.head_lr * config.encoder_lr_fraction,
-            "name": "encoder",
-        })
-    print(f"trainable: {sum(p.numel() for p in head):,} head"
-          + (f" + {sum(p.numel() for p in encoder):,} encoder" if encoder else ""))
-    return groups
-''')
-
-markdown("## 16. Choosing a precision the GPU supports")
-
-code(r'''
-def autocast_settings(device: str):
-    """Pick the mixed-precision type this GPU can actually execute.
-
-    bfloat16 needs Ampere (RTX 30-series, A-series) or newer. Colab's T4 is
-    Turing and has no bfloat16 kernels at all -- asking for it there fails deep
-    inside cuDNN with "unable to find an engine to execute this computation",
-    which names neither the dtype nor the GPU.
-
-    So the dtype is chosen from the hardware. float16 needs a gradient scaler
-    because its range is narrow enough for small gradients to underflow to
-    zero; bfloat16 has float32's range and does not.
-    """
-    if device != "cuda":
-        return torch.float32, False, False
-
-    prefer_bf16 = torch.cuda.is_bf16_supported()
-    dtype = torch.bfloat16 if prefer_bf16 else torch.float16
-    name = torch.cuda.get_device_name(0)
-    print(f"{name}: using {'bfloat16' if prefer_bf16 else 'float16'}"
-          + ("" if prefer_bf16 else " (no bfloat16 on this GPU)"))
-    return dtype, True, not prefer_bf16
-
-
-def make_grad_scaler(enabled: bool):
-    """A gradient scaler, through whichever API this torch version offers."""
-    try:
-        return torch.amp.GradScaler("cuda", enabled=enabled)   # torch >= 2.4
-    except (AttributeError, TypeError):
-        return torch.cuda.amp.GradScaler(enabled=enabled)
-''')
-
-markdown("## 17. Training")
-
-code(r'''
-def train_model(model, loader, config: "Config", device: str):
-    """Train to a fixed endpoint, with no checkpoint chosen by looking at a score.
-
-    The endpoint is fixed on purpose. With only 58 expert-labelled studies to
-    measure against, picking "the best epoch" would mostly be picking the
-    luckiest noise, and the score would then flatter itself. Deciding the number
-    of epochs before seeing any result costs a little performance and buys an
-    honest number.
-
-    **The known oddity.** The cosine schedule is written for five epochs and the
-    loop runs two, so the learning rate never anneals -- the two epochs train at
-    100% and 90.5% of peak, and the low-rate refinement phase where a cosine
-    normally delivers its final gain simply does not happen. It is kept here
-    because it is what produced 0.694 and changing it changes the model. Setting
-    `schedule_length = 2` is the cheapest experiment available on this notebook:
-    identical cost, properly annealed.
-
-    Training longer was tried and made things worse: the loss kept falling while
-    accuracy fell with it, which is what happens when a model gets better at
-    reproducing labels that are partly wrong. Longer training is worth retrying
-    only on better labels.
-    """
-    model.to(device)
-    optimiser = torch.optim.AdamW(
-        build_parameter_groups(model, config), weight_decay=config.weight_decay)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimiser, T_max=config.schedule_length, eta_min=config.min_lr)
-
-    amp_dtype, use_amp, needs_scaler = autocast_settings(device)
-    scaler = make_grad_scaler(needs_scaler)
-    trainable = [p for p in model.parameters() if p.requires_grad]
-    history = []
-
-    for epoch in range(1, config.epochs + 1):
-        model.train()
-        model.encoder.eval()     # re-asserted every epoch; see the note above
-        running, steps = 0.0, 0
-
-        for step, batch in enumerate(loader, start=1):
-            volumes = batch["volumes"].to(device, non_blocking=True)
-            present = batch["present"].to(device, non_blocking=True)
-            metadata = batch["series_meta"].to(device, non_blocking=True)
-            targets = batch["target"].to(device, non_blocking=True)
-            weights = batch["weight"].to(device, non_blocking=True)
-
-            optimiser.zero_grad(set_to_none=True)
-            with torch.autocast("cuda", dtype=amp_dtype, enabled=use_amp):
-                logits = model(volumes, present, metadata)
-                loss = weighted_weak_bce(logits, targets, weights, model.balance_multipliers)
-
-            scaler.scale(loss).backward()
-            if config.grad_clip > 0:
-                scaler.unscale_(optimiser)
-                nn.utils.clip_grad_norm_(trainable, config.grad_clip)
-            scaler.step(optimiser)
-            scaler.update()
-
-            running += float(loss.item())
-            steps += 1
-            if step % 100 == 0:
-                print(f"  epoch {epoch}  step {step}/{len(loader)}  "
-                      f"loss {running / steps:.4f}")
-
-        scheduler.step()      # once per epoch, not per batch
-        mean_loss = running / max(steps, 1)
-        head_lr = optimiser.param_groups[0]["lr"]
-        history.append({"epoch": epoch, "loss": mean_loss, "head_lr": head_lr})
-        print(f"epoch {epoch}: loss {mean_loss:.4f}, next head lr {head_lr:.2e}")
-
-    return history
-''')
-
-markdown("## 18. Scoring")
-
-code(r'''
-def binary_auc(truth: np.ndarray, score: np.ndarray) -> float:
-    """Area under the ROC curve for one finding, with ties handled properly.
-
-    Written out rather than imported so the notebook has no sklearn dependency,
-    and so the tie handling is visible: equal scores share a mid-rank. A finding
-    with no positives or no negatives has no defined AUC and returns NaN.
-    """
-    truth = np.asarray(truth, dtype=np.float64)
-    score = np.asarray(score, dtype=np.float64)
-    usable = np.isfinite(truth) & np.isfinite(score)
-    truth, score = truth[usable], score[usable]
-
-    positive = truth == 1
-    n_pos, n_neg = int(positive.sum()), int(positive.size - positive.sum())
-    if n_pos == 0 or n_neg == 0:
-        return float("nan")
-
-    order = np.argsort(score, kind="mergesort")
-    ranks = np.empty(score.size, dtype=np.float64)
-    ranks[order] = np.arange(1, score.size + 1, dtype=np.float64)
-    sorted_scores = score[order]
-    edges = np.flatnonzero(np.diff(sorted_scores)) + 1
-    for start, stop in zip(np.concatenate(([0], edges)),
-                           np.concatenate((edges, [sorted_scores.size]))):
-        if stop - start > 1:
-            ranks[order[start:stop]] = ranks[order[start:stop]].mean()
-    return float((ranks[positive].sum() - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
-
-
-def macro_roc_auc(truth: np.ndarray, score: np.ndarray):
-    """The competition metric: the mean AUC across the twelve findings.
-
-    Undefined findings are dropped from the mean rather than scored 0.5, so on a
-    small evaluation set the macro may average fewer than twelve numbers -- worth
-    checking before comparing two runs.
-    """
-    per_finding = np.array(
-        [binary_auc(truth[:, j], score[:, j]) for j in range(truth.shape[1])],
-        dtype=np.float64,
+        # Choose a valid group-normalization group count.
+        groups = max(1, min(8, channels // 8))
+        # Build the residual transform branch.
+        self.block = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(groups, channels),
+            nn.GELU(),
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(groups, channels),
+        )
+        # Create the activation after adding the skip connection.
+        self.activation = nn.GELU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Add the learned refinement to the input and activate it."""
+        # Apply the residual branch, add the identity path, and activate the sum.
+        return self.activation(x + self.block(x))
+
+
+class SliceEncoder(nn.Module):
+    """Encode one 448×448 triplet into global and 6×6 local image features."""
+
+    def __init__(self, feature_dim: int, grid_size: int) -> None:
+        # Initialize the parent PyTorch module.
+        super().__init__()
+        # Remember the final feature size for output-shape checks.
+        self.feature_dim = int(feature_dim)
+        # Remember the requested square local-grid dimension.
+        self.grid_size = int(grid_size)
+        # Downsample 448 to 224 while creating initial features.
+        self.stem = ConvNormAct(3, 32, stride=2)
+        # Downsample 224 to 112 and refine features.
+        self.stage1 = nn.Sequential(ConvNormAct(32, 48, stride=2), ResidualBlock(48))
+        # Downsample 112 to 56 and refine features.
+        self.stage2 = nn.Sequential(ConvNormAct(48, 72, stride=2), ResidualBlock(72))
+        # Downsample 56 to 28 and refine features.
+        self.stage3 = nn.Sequential(ConvNormAct(72, 96, stride=2), ResidualBlock(96))
+        # Downsample 28 to 14 and produce final image features.
+        self.stage4 = nn.Sequential(ConvNormAct(96, self.feature_dim, stride=2), ResidualBlock(self.feature_dim))
+
+    def forward(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return one global vector and one local feature map for each triplet."""
+        # Apply every encoder stage in spatial order.
+        features = self.stage4(self.stage3(self.stage2(self.stage1(self.stem(images)))))
+        # Average the full feature map into one global image representation.
+        global_feature = F.adaptive_avg_pool2d(features, 1).flatten(1)
+        # Pool the same feature map into the requested local evidence grid.
+        local_feature = F.adaptive_avg_pool2d(features, self.grid_size)
+        # Return both complementary representations.
+        return global_feature, local_feature
+
+
+def position_basis(position: torch.Tensor) -> torch.Tensor:
+    """Create an eight-dimensional continuous representation of slice position."""
+    # Clamp positions defensively into the valid zero-to-one range.
+    z = position.float().clamp(0.0, 1.0)
+    # Stack polynomial and sinusoidal position features along the last axis.
+    return torch.stack(
+        [
+            z,
+            z.square(),
+            torch.sin(math.pi * z),
+            torch.cos(math.pi * z),
+            torch.sin(2 * math.pi * z),
+            torch.cos(2 * math.pi * z),
+            torch.sin(4 * math.pi * z),
+            torch.cos(4 * math.pi * z),
+        ],
+        dim=-1,
     )
-    usable = per_finding[np.isfinite(per_finding)]
-    return (float(usable.mean()) if usable.size else float("nan")), per_finding
+
+
+@dataclass
+class SparseMILOutput:
+    """Store combined, global-only, and local-only logits from the model."""
+
+    # Hold the fused prediction logits used for case classifications.
+    logits: torch.Tensor
+    # Hold logits from global study-level image features.
+    global_logits: torch.Tensor
+    # Hold logits from sparse local evidence features.
+    local_logits: torch.Tensor
+
+
+class SparseEvidenceHead(nn.Module):
+    """Score local MRI tokens per target and pool only the strongest top-k tokens."""
+
+    def __init__(self, feature_dim: int, grid_size: int, top_k: int) -> None:
+        # Initialize the parent PyTorch module.
+        super().__init__()
+        # Store the local feature-channel count.
+        self.feature_dim = int(feature_dim)
+        # Store the local grid side length.
+        self.grid_size = int(grid_size)
+        # Store the number of strongest tokens retained per target.
+        self.top_k = int(top_k)
+        # Compute the number of local regions per slice.
+        self.n_regions = self.grid_size * self.grid_size
+        # Learn how continuous slice coordinates affect local evidence features.
+        self.position_projection = nn.Linear(8, self.feature_dim, bias=False)
+        # Learn an embedding for each two-dimensional local region.
+        self.region_embedding = nn.Parameter(torch.zeros(self.n_regions, self.feature_dim))
+        # Learn a small embedding for anatomical plane.
+        self.plane_embedding = nn.Embedding(4, self.feature_dim, padding_idx=0)
+        # Learn a small embedding for fluid sensitivity.
+        self.fluid_embedding = nn.Embedding(3, self.feature_dim, padding_idx=0)
+        # Learn a small embedding for fat suppression.
+        self.fat_embedding = nn.Embedding(3, self.feature_dim, padding_idx=0)
+        # Learn one evidence direction for every target.
+        self.evidence_weight = nn.Parameter(torch.empty(N_TARGETS, self.feature_dim))
+        # Learn one evidence bias for every target.
+        self.evidence_bias = nn.Parameter(torch.zeros(N_TARGETS))
+        # Initialize target evidence directions with small nonzero values.
+        nn.init.normal_(self.evidence_weight, mean=0.0, std=0.02)
+
+    def forward(
+        self,
+        spatial: torch.Tensor,
+        present: torch.Tensor,
+        series_meta: torch.Tensor,
+        slice_position: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return one sparse pooled local logit per target for every study."""
+        # Unpack the local-feature tensor shape.
+        batch, series, slices, regions, feature_dim = spatial.shape
+        # Check that the model and input grid definitions agree.
+        if regions != self.n_regions or feature_dim != self.feature_dim:
+            raise ValueError("Sparse feature shape does not match the head")
+        # Check that the readable-series mask corresponds to the same studies and series.
+        if present.shape != (batch, series):
+            raise ValueError("present mask shape mismatch")
+        # Normalize every local token feature independently.
+        tokens = F.layer_norm(spatial.float(), (feature_dim,)).to(spatial.dtype)
+        # Project continuous slice coordinates into feature space.
+        position = self.position_projection(position_basis(slice_position)).to(tokens.dtype)
+        # Look up the three categorical series metadata embeddings.
+        metadata = (
+            self.plane_embedding(series_meta[:, :, 0].clamp(0, 3))
+            + self.fluid_embedding(series_meta[:, :, 1].clamp(0, 2))
+            + self.fat_embedding(series_meta[:, :, 2].clamp(0, 2))
+        ).to(tokens.dtype)
+        # Add through-plane position information to every local region in a slice.
+        tokens = tokens + position[:, :, :, None, :]
+        # Add series-level metadata to every slice and region in that series.
+        tokens = tokens + metadata[:, :, None, None, :]
+        # Add the learned two-dimensional region embedding.
+        tokens = tokens + self.region_embedding.to(tokens.dtype)[None, None, None, :, :]
+        # Flatten series, slice, and region into a single candidate-token dimension.
+        tokens = tokens.reshape(batch, series * slices * regions, feature_dim)
+        # Expand the readable-series mask so every token from an unreadable series is invalid.
+        invalid = (
+            (present <= 0)[:, :, None, None]
+            .expand(batch, series, slices, regions)
+            .reshape(batch, series * slices * regions)
+        )
+        # Count valid local tokens in every study.
+        valid_count = (~invalid).sum(dim=1)
+        # Require enough valid tokens for the requested top-k operation.
+        if int(valid_count.min().item()) < self.top_k:
+            raise RuntimeError("There are fewer valid local-MIL tokens than top_k")
+        # Compute every target's evidence score at every local token.
+        score = torch.einsum("btd,nd->bnt", tokens, self.evidence_weight.to(tokens.dtype))
+        # Add one target-specific scalar bias to every token score.
+        score = score + self.evidence_bias.to(tokens.dtype)[None, :, None]
+        # Exclude tokens from unreadable series from the top-k selection.
+        score = score.masked_fill(invalid[:, None, :], float("-inf"))
+        # Keep the strongest evidence values per target and study.
+        top_values = torch.topk(score, k=self.top_k, dim=-1).values
+        # Smoothly pool selected values while preserving their logit scale.
+        return torch.logsumexp(top_values.float(), dim=-1) - math.log(float(self.top_k))
+
+
+class HighResolutionSparseMIL(nn.Module):
+    """Train a global and sparse-local MRI classifier from randomly initialized weights."""
+
+    def __init__(self, config: RunConfig) -> None:
+        # Initialize the parent PyTorch module.
+        super().__init__()
+        # Store configuration because encoding is chunked using its memory setting.
+        self.config = config
+        # Create the image encoder shared by global and local branches.
+        self.encoder = SliceEncoder(config.feature_dim, config.grid_size)
+        # Transform averaged global study features before classification.
+        self.global_projection = nn.Sequential(
+            nn.LayerNorm(config.feature_dim),
+            nn.Linear(config.feature_dim, config.feature_dim),
+            nn.GELU(),
+            nn.Dropout(0.15),
+        )
+        # Map global study features to one logit per target.
+        self.global_classifier = nn.Linear(config.feature_dim, N_TARGETS)
+        # Create the target-specific sparse local evidence branch.
+        self.sparse_head = SparseEvidenceHead(config.feature_dim, config.grid_size, config.top_k)
+        # Start fusion at global-only and let training learn target-wise local contribution.
+        self.fusion_gate = nn.Parameter(torch.zeros(N_TARGETS))
+
+    def _encode_active_series(
+        self, volumes: torch.Tensor, present: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encode only readable series and restore them to padded study shapes."""
+        # Unpack the padded high-resolution batch shape.
+        batch, series, slices, channels, height, width = volumes.shape
+        # Verify that 2.5D inputs still have their three intended channels.
+        if channels != 3:
+            raise ValueError("The model expects 2.5D triplets with three channels")
+        # Flatten batch and series so the readable-series mask can select complete series.
+        flat_series = volumes.reshape(batch * series, slices, channels, height, width)
+        # Find the flattened rows that represent readable MRI series.
+        active_index = torch.nonzero(present.reshape(-1) > 0, as_tuple=False).flatten()
+        # Stop if every series in a batch is unreadable.
+        if active_index.numel() == 0:
+            raise RuntimeError("The batch has no readable MRI series")
+        # Keep only real MRI series before expensive image encoding.
+        active = flat_series.index_select(0, active_index)
+        # Flatten active series and their 32 slice triplets into image rows.
+        images = active.reshape(-1, channels, height, width)
+        # Prepare lists to hold chunk-wise global features.
+        global_blocks = []
+        # Prepare lists to hold chunk-wise local grids.
+        local_blocks = []
+        # Encode only a few 448-pixel images at a time to control memory use.
+        for image_chunk in images.split(self.config.encoder_chunk_size, dim=0):
+            # Encode this chunk into one global vector and one local grid per image.
+            global_feature, local_feature = self.encoder(image_chunk)
+            # Remember the global vectors for concatenation.
+            global_blocks.append(global_feature)
+            # Remember the local grids for concatenation.
+            local_blocks.append(local_feature)
+        # Restore global vectors to [active_series, slices, feature_dim].
+        global_active = torch.cat(global_blocks, dim=0).reshape(
+            active.shape[0], slices, self.config.feature_dim
+        )
+        # Restore local maps to [active_series, slices, feature_dim, grid, grid].
+        local_active = torch.cat(local_blocks, dim=0).reshape(
+            active.shape[0], slices, self.config.feature_dim,
+            self.config.grid_size, self.config.grid_size,
+        )
+        # Allocate padded global features for every batch/series row.
+        global_all = global_active.new_zeros((batch * series, slices, self.config.feature_dim))
+        # Insert active global features into their original padded positions.
+        global_all.index_copy_(0, active_index, global_active)
+        # Allocate padded local features for every batch/series row.
+        local_all = local_active.new_zeros(
+            (batch * series, slices, self.config.feature_dim,
+             self.config.grid_size, self.config.grid_size)
+        )
+        # Insert active local features into their original padded positions.
+        local_all.index_copy_(0, active_index, local_active)
+        # Restore global vectors to [batch, series, slices, feature_dim].
+        global_feature = global_all.reshape(batch, series, slices, self.config.feature_dim)
+        # Restore and reorder local maps to [batch, series, slices, regions, feature_dim].
+        spatial_feature = local_all.reshape(
+            batch, series, slices, self.config.feature_dim,
+            self.config.grid_size, self.config.grid_size,
+        ).permute(0, 1, 2, 4, 5, 3).reshape(
+            batch, series, slices, self.config.grid_size * self.config.grid_size,
+            self.config.feature_dim,
+        )
+        # Return the global and local representations.
+        return global_feature, spatial_feature
+
+    def forward(
+        self,
+        volumes: torch.Tensor,
+        present: torch.Tensor,
+        series_meta: torch.Tensor,
+        slice_position: torch.Tensor,
+    ) -> SparseMILOutput:
+        """Classify one padded batch of variable-series MRI studies."""
+        # Encode all readable MRI slice triplets.
+        global_feature, spatial_feature = self._encode_active_series(volumes, present)
+        # Expand the readable-series mask across slices and features.
+        mask = present[:, :, None, None].to(global_feature.dtype)
+        # Sum only global features from readable MRI series and slices.
+        study_feature = (global_feature * mask).sum(dim=(1, 2))
+        # Count the readable series and all 32 sampled slice features in each study.
+        feature_count = present.sum(dim=1, keepdim=True).to(global_feature.dtype)
+        # Multiply readable-series count by the number of slices to form a true feature mean.
+        feature_count = feature_count * float(global_feature.shape[2])
+        # Divide by the readable slice-feature count to form the global study mean.
+        study_feature = study_feature / feature_count.clamp_min(1.0)
+        # Produce logits from the global study representation.
+        global_logits = self.global_classifier(self.global_projection(study_feature))
+        # Produce logits from top-k sparse local evidence.
+        local_logits = self.sparse_head(spatial_feature, present, series_meta, slice_position)
+        # Fuse local logits through a target-wise gate initialized at zero.
+        logits = global_logits + torch.tanh(self.fusion_gate)[None, :] * local_logits
+        # Return all three logit forms so training can supervise both branches.
+        return SparseMILOutput(logits=logits, global_logits=global_logits, local_logits=local_logits)
 ''')
 
-markdown("## 19. Prediction")
+markdown("## 9. Loss, metrics, preflight, training, and plotting functions")
 
 code(r'''
-@torch.no_grad()
-def predict_with_augmentation(models, loader, device: str):
-    """Score every study, averaging over slice offsets and over models.
+def masked_bce_with_logits(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    positive_weight: torch.Tensor,
+) -> torch.Tensor:
+    """Compute weighted binary cross entropy only where the CSV target is known."""
+    # Mark CSV target cells that contain zero or one instead of a blank NaN value.
+    known = torch.isfinite(target)
+    # Stop if an unexpected batch has no usable supervision cells.
+    if not bool(known.any()):
+        raise RuntimeError("This batch has no known labels")
+    # Replace NaN targets with zeros only for the loss call; the mask removes them afterward.
+    safe_target = torch.nan_to_num(target, nan=0.0)
+    # Compute elementwise weighted binary cross entropy for every target cell.
+    loss = F.binary_cross_entropy_with_logits(
+        logits.float(),
+        safe_target.float(),
+        pos_weight=positive_weight.float(),
+        reduction="none",
+    )
+    # Average only elements that had a real zero-or-one target in the CSV.
+    return (loss * known).sum() / known.sum().clamp_min(1)
 
-    Each study is read once and scored under three slice-sampling offsets; the
-    probabilities are averaged. Reading the scans is by far the expensive part,
-    so several models are scored in the same pass rather than one pass each.
 
-    Two details that change the numbers if you get them wrong:
+def make_positive_weight(frame: pd.DataFrame) -> torch.Tensor:
+    """Build clipped target-wise positive weights from training rows only."""
+    # Convert train-table labels to numeric while preserving blanks as NaN.
+    labels = frame[TARGETS].apply(pd.to_numeric, errors="coerce")
+    # Count labelled cells per target.
+    known = labels.notna().sum(axis=0).to_numpy(np.float32)
+    # Count positive labels per target.
+    positive = labels.fillna(0).sum(axis=0).to_numpy(np.float32)
+    # Derive negative counts and keep a positive denominator.
+    negative = np.maximum(known - positive, 1.0)
+    # Limit extreme weights so a rare target cannot dominate all gradients.
+    weight = np.clip(negative / np.maximum(positive, 1.0), 1.0, 20.0)
+    # Move the weight vector to the selected device once.
+    return torch.tensor(weight, dtype=torch.float32, device=DEVICE)
 
-    * `model.eval()` is what switches off the training-only neighbour context.
-      Forgetting it silently scores with a different function than intended.
-    * Averaging happens in probability space, after a float32 sigmoid. Averaging
-      logits instead gives different -- and worse-calibrated -- answers.
-    """
-    for model in models:
-        model.to(device).eval()
 
-    amp_dtype, use_amp, _ = autocast_settings(device)
-    uids, blocks = [], []
+def binary_auc(target: np.ndarray, probability: np.ndarray) -> float | None:
+    """Compute AUC without an additional package; return None when one class is absent."""
+    # Convert labels into integer binary values.
+    target = np.asarray(target, dtype=np.int64)
+    # Convert probabilities into a stable floating-point array.
+    probability = np.asarray(probability, dtype=np.float64)
+    # Count positive examples.
+    positive = int(target.sum())
+    # Count negative examples.
+    negative = int(len(target) - positive)
+    # AUC is undefined when either class is absent in a small validation subset.
+    if positive == 0 or negative == 0:
+        return None
+    # Sort probabilities stably so equal predictions can receive tied ranks.
+    order = np.argsort(probability, kind="mergesort")
+    # Allocate a rank array in original input order.
+    ranks = np.empty(len(probability), dtype=np.float64)
+    # Fill one-based ranks in sorted order.
+    ranks[order] = np.arange(1, len(probability) + 1, dtype=np.float64)
+    # Read sorted probabilities for tie detection.
+    sorted_probability = probability[order]
+    # Start scanning the first tie group.
+    start = 0
+    # Process every contiguous tie group.
+    while start < len(sorted_probability):
+        # Start with a group containing one element.
+        end = start + 1
+        # Extend the group while probabilities are exactly tied.
+        while end < len(sorted_probability) and sorted_probability[end] == sorted_probability[start]:
+            end += 1
+        # Replace tied ranks with their mean rank.
+        if end - start > 1:
+            ranks[order[start:end]] = ranks[order[start:end]].mean()
+        # Continue at the next tie group.
+        start = end
+    # Return the Mann-Whitney form of ROC AUC.
+    return float((ranks[target == 1].sum() - positive * (positive + 1) / 2) / (positive * negative))
+
+
+def move_batch(batch: dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Move image data and labels to the selected device without pinned-memory pressure."""
+    # Keep non-blocking transfers disabled because the loader intentionally avoids pinned memory.
+    non_blocking = False
+    # Return tensors in the order expected by the model and loss functions.
+    return (
+        batch["volumes"].to(DEVICE, non_blocking=non_blocking),
+        batch["present"].to(DEVICE, non_blocking=non_blocking),
+        batch["series_meta"].to(DEVICE, non_blocking=non_blocking),
+        batch["slice_position"].to(DEVICE, non_blocking=non_blocking),
+        batch["target"].to(DEVICE, non_blocking=non_blocking),
+    )
+
+
+def autocast_context():
+    """Use fp16 mixed precision on CUDA and ordinary precision on CPU."""
+    # Create CUDA fp16 autocasting only when a CUDA GPU exists.
+    if DEVICE.type == "cuda":
+        return torch.autocast(device_type="cuda", dtype=torch.float16)
+    # Return a no-op context manager for CPU execution.
+    return nullcontext()
+
+
+@dataclass
+class Experiment:
+    """Hold all newly created objects for one standalone subset run."""
+
+    # Keep the Drive paths used to read inputs and write results.
+    paths: DrivePaths
+    # Keep the exact image, model, and optimization settings.
+    config: RunConfig
+    # Keep the newly initialized high-resolution sparse-MIL model.
+    model: HighResolutionSparseMIL
+    # Keep the optimizer for this new model.
+    optimizer: torch.optim.Optimizer
+    # Keep the mixed-precision gradient scaler.
+    scaler: object
+    # Keep the training DataLoader.
+    train_loader: DataLoader
+    # Keep the optional validation DataLoader.
+    validation_loader: DataLoader | None
+    # Keep target-wise positive class weights derived from training rows.
+    positive_weight: torch.Tensor
+    # Keep one summary dictionary per completed epoch.
+    history: list[dict] = field(default_factory=list)
+
+
+def build_experiment(paths: DrivePaths, config: RunConfig = CONFIG) -> Experiment:
+    """Build loaders, a new model, optimizer, and loss weights from Drive data."""
+    # Reapply the seed so repeated construction produces the same split and initialization.
+    set_seed(config.seed)
+    # Validate paths and CSV schemas before allocating a model.
+    validate_dataset(paths)
+    # Read the study-level table.
+    train_table = pd.read_csv(paths.train_csv)
+    # Read the series-level table.
+    series_table = pd.read_csv(paths.series_csv)
+    # Normalize UIDs for merging with the series record dictionary.
+    train_table["StudyInstanceUID"] = train_table["StudyInstanceUID"].astype(str)
+    # Build a variable-series record list for every study.
+    records = build_series_records(series_table, config)
+    # Convert raw labels once to identify studies that have at least one known target.
+    labels = train_table[TARGETS].apply(pd.to_numeric, errors="coerce")
+    # Keep studies with both a usable MRI record and at least one known label.
+    usable = train_table["StudyInstanceUID"].isin(records) & labels.notna().any(axis=1)
+    # Reset row indices so dataset targets and study UIDs remain aligned.
+    train_table = train_table.loc[usable].reset_index(drop=True)
+    # Stop before training when no fully usable study remains.
+    if train_table.empty:
+        raise ValueError("No studies remain after matching labels to readable MRI metadata")
+    # Create a deterministic study-level train/validation split.
+    train_frame, validation_frame = make_split(
+        train_table, config.validation_fraction, config.seed
+    )
+    # Create the training dataset with lazy DICOM decoding.
+    train_dataset = KneeMRIDataset(train_frame, records, paths, config)
+    # Create a validation dataset only when the split contains validation studies.
+    validation_dataset = (
+        KneeMRIDataset(validation_frame, records, paths, config)
+        if not validation_frame.empty else None
+    )
+    # Define memory-safe loader settings shared by train and validation loaders.
+    loader_kwargs = {
+        "batch_size": config.batch_size,
+        "num_workers": config.num_workers,
+        "pin_memory": False,
+        "collate_fn": collate_studies,
+    }
+    # Build a shuffled training loader.
+    train_loader = DataLoader(train_dataset, shuffle=True, **loader_kwargs)
+    # Build a deterministic validation loader when validation data exist.
+    validation_loader = (
+        DataLoader(validation_dataset, shuffle=False, **loader_kwargs)
+        if validation_dataset is not None else None
+    )
+    # Create a brand-new randomly initialized model on the selected device.
+    model = HighResolutionSparseMIL(config).to(DEVICE)
+    # Create AdamW for all model parameters.
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
+    )
+    # Enable gradient scaling only when CUDA mixed precision is active.
+    scaler = torch.cuda.amp.GradScaler(enabled=DEVICE.type == "cuda")
+    # Package all created run objects into a clear container.
+    experiment = Experiment(
+        paths=paths,
+        config=config,
+        model=model,
+        optimizer=optimizer,
+        scaler=scaler,
+        train_loader=train_loader,
+        validation_loader=validation_loader,
+        positive_weight=make_positive_weight(train_frame),
+    )
+    # Count model parameters for a transparent capacity check.
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    # Print the final usable split and model size.
+    print(
+        f"train studies={len(train_dataset)} | "
+        f"validation studies={0 if validation_dataset is None else len(validation_dataset)} | "
+        f"parameters={parameter_count:,}"
+    )
+    # Return the new run container.
+    return experiment
+
+
+def run_preflight(experiment: Experiment) -> dict:
+    """Run one forward/backward pass without performing an optimizer update."""
+    # State the key safety property of this diagnostic in the notebook output.
+    print("Preflight: forward/backward only; no optimizer step")
+    # Reset CUDA memory counters so the report measures this preflight only.
+    if DEVICE.type == "cuda":
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+    # Put the model into training mode so every trainable branch receives gradients.
+    experiment.model.train()
+    # Clear gradients left by any previous manual operation.
+    experiment.model.zero_grad(set_to_none=True)
+    # Load exactly one memory-safe training batch.
+    batch = next(iter(experiment.train_loader))
+    # Move tensors onto GPU or CPU.
+    volumes, present, metadata, position, target = move_batch(batch)
+    # Release the CPU batch dictionary as soon as device copies exist.
+    del batch
+    # Use mixed precision on CUDA for the same memory behavior as training.
+    with autocast_context():
+        # Run the model forward once.
+        output = experiment.model(volumes, present, metadata, position)
+        # Compute supervision for the fused logits so the target-wise fusion gates can learn.
+        combined_loss = masked_bce_with_logits(output.logits, target, experiment.positive_weight)
+        # Compute direct sparse-local-branch supervision.
+        local_loss = masked_bce_with_logits(output.local_logits, target, experiment.positive_weight)
+        # Combine fused-prediction and direct local losses without changing any parameter.
+        total_loss = combined_loss + experiment.config.local_loss_weight * local_loss
+    # Backpropagate only to test gradient flow.
+    experiment.scaler.scale(total_loss).backward()
+    # Check that at least one encoder parameter received a nonzero gradient.
+    has_encoder_gradient = any(
+        parameter.grad is not None and torch.count_nonzero(parameter.grad).item() > 0
+        for parameter in experiment.model.encoder.parameters()
+    )
+    # Check that the sparse evidence classifier received a nonzero gradient.
+    has_sparse_gradient = bool(
+        experiment.model.sparse_head.evidence_weight.grad is not None
+        and torch.count_nonzero(experiment.model.sparse_head.evidence_weight.grad).item() > 0
+    )
+    # Create a compact numerical diagnostic summary.
+    result = {
+        "total_loss": float(total_loss.detach().cpu()),
+        "combined_loss": float(combined_loss.detach().cpu()),
+        "local_loss": float(local_loss.detach().cpu()),
+        "encoder_gradient": bool(has_encoder_gradient),
+        "sparse_head_gradient": bool(has_sparse_gradient),
+    }
+    # Add peak GPU memory when a CUDA device is active.
+    if DEVICE.type == "cuda":
+        result["cuda_peak_gib"] = round(torch.cuda.max_memory_allocated() / 1024**3, 2)
+    # Clear diagnostic gradients because preflight never updates parameters.
+    experiment.model.zero_grad(set_to_none=True)
+    # Release GPU tensor references before returning.
+    del volumes, present, metadata, position, target, output, total_loss, combined_loss, local_loss
+    # Ask Python to release unreachable CPU objects.
+    gc.collect()
+    # Return unused CUDA blocks to PyTorch's cache when possible.
+    if DEVICE.type == "cuda":
+        torch.cuda.empty_cache()
+    # Fail loudly if either intended learning path was disconnected.
+    if not has_encoder_gradient or not has_sparse_gradient:
+        raise RuntimeError("Preflight failed: gradients did not reach encoder and sparse head")
+    # Print the final diagnostic in a readable form.
+    print(json.dumps(result, indent=2))
+    # Announce the successful no-update diagnostic.
+    print("Preflight: PASS")
+    # Return the diagnostic for optional saving or inspection.
+    return result
+
+
+def run_epoch(experiment: Experiment, loader: DataLoader, training: bool) -> dict:
+    """Run one training or validation pass and collect loss plus model probabilities."""
+    # Enable or disable train-time layers according to the requested mode.
+    experiment.model.train(training)
+    # Collect one scalar loss per batch.
+    losses: list[float] = []
+    # Collect target arrays for evaluation.
+    targets: list[np.ndarray] = []
+    # Collect probability arrays for evaluation.
+    probabilities: list[np.ndarray] = []
+    # Process every batch from the chosen loader.
     for batch in loader:
-        present = batch["present"].to(device, non_blocking=True)
-        metadata = batch["series_meta"].to(device, non_blocking=True)
-        volumes = batch["volumes"]
+        # Move this batch to the selected device.
+        volumes, present, metadata, position, target = move_batch(batch)
+        # Release the CPU batch dictionary early.
+        del batch
+        # Clear old gradients only before an optimizer update.
+        if training:
+            experiment.optimizer.zero_grad(set_to_none=True)
+        # Enable gradients only in training mode and use CUDA mixed precision when available.
+        with torch.set_grad_enabled(training), autocast_context():
+            # Calculate global, local, and combined logits.
+            output = experiment.model(volumes, present, metadata, position)
+            # Calculate loss for the fused prediction so the global and fusion paths learn together.
+            combined_loss = masked_bce_with_logits(output.logits, target, experiment.positive_weight)
+            # Calculate the direct local supervised loss.
+            local_loss = masked_bce_with_logits(output.local_logits, target, experiment.positive_weight)
+            # Combine fused-prediction and local loss terms using the configured coefficient.
+            loss = combined_loss + experiment.config.local_loss_weight * local_loss
+        # Update parameters only in training mode.
+        if training:
+            # Backpropagate the scaled loss.
+            experiment.scaler.scale(loss).backward()
+            # Convert gradients back to full precision before clipping them.
+            experiment.scaler.unscale_(experiment.optimizer)
+            # Protect against an unusually large update.
+            torch.nn.utils.clip_grad_norm_(experiment.model.parameters(), experiment.config.grad_clip_norm)
+            # Apply the optimizer update.
+            experiment.scaler.step(experiment.optimizer)
+            # Update the mixed-precision gradient scaler.
+            experiment.scaler.update()
+        # Save the detached scalar loss for the epoch mean.
+        losses.append(float(loss.detach().cpu()))
+        # Save labels for per-target validation metrics.
+        targets.append(target.detach().cpu().numpy())
+        # Convert combined logits into probabilities and save them for metrics.
+        probabilities.append(torch.sigmoid(output.logits).detach().cpu().numpy())
+        # Release tensor references before reading the next high-resolution batch.
+        del volumes, present, metadata, position, target, output, loss, combined_loss, local_loss
+    # Return epoch loss and arrays required by downstream metrics.
+    return {
+        "loss": float(np.mean(losses)),
+        "target": np.concatenate(targets, axis=0),
+        "probability": np.concatenate(probabilities, axis=0),
+    }
 
-        views = []
-        n_views = volumes.shape[1] if volumes.ndim == 7 else 1
-        for view in range(n_views):
-            frame = (volumes[:, view] if volumes.ndim == 7 else volumes).to(
-                device, non_blocking=True)
-            for model in models:
-                with torch.autocast("cuda", dtype=amp_dtype, enabled=use_amp):
-                    logits = model(frame, present, metadata)
-                views.append(torch.sigmoid(logits.float()))
 
-        blocks.append(torch.stack(views, dim=0).mean(dim=0).cpu().numpy())
-        uids.extend(str(uid) for uid in batch["study_uid"])
+def evaluate_predictions(target: np.ndarray, probability: np.ndarray) -> dict:
+    """Calculate per-target AUC values from a validation prediction array."""
+    # Allocate the target-name to AUC mapping.
+    per_target: dict[str, float | None] = {}
+    # Evaluate one target column at a time because blanks differ by target.
+    for index, name in enumerate(TARGETS):
+        # Keep only rows where this target is known.
+        known = np.isfinite(target[:, index])
+        # Calculate AUC only when known rows exist; binary_auc handles one-class subsets.
+        per_target[name] = (
+            binary_auc(target[known, index].astype(int), probability[known, index])
+            if known.any() else None
+        )
+    # Keep defined AUC values for a simple macro mean.
+    defined = [value for value in per_target.values() if value is not None]
+    # Return a compact metric dictionary.
+    return {
+        "mean_auc": None if not defined else float(np.mean(defined)),
+        "per_target_auc": per_target,
+        "known_cells": int(np.isfinite(target).sum()),
+    }
 
-    return uids, np.concatenate(blocks, axis=0)
+
+def train_model(experiment: Experiment) -> list[dict]:
+    """Train for the configured epochs and append transparent history rows."""
+    # Iterate from one so printed epoch numbers are human-friendly.
+    for epoch in range(1, experiment.config.epochs + 1):
+        # Start an epoch timer.
+        started = time.time()
+        # Run training updates across the full training loader.
+        train_result = run_epoch(experiment, experiment.train_loader, training=True)
+        # Start this epoch's history row with the training loss.
+        row = {"epoch": epoch, "train_loss": train_result["loss"]}
+        # Evaluate only when a validation split exists.
+        if experiment.validation_loader is not None:
+            # Run a no-update validation pass.
+            validation_result = run_epoch(experiment, experiment.validation_loader, training=False)
+            # Save validation loss.
+            row["validation_loss"] = validation_result["loss"]
+            # Calculate validation classification metrics.
+            metrics = evaluate_predictions(validation_result["target"], validation_result["probability"])
+            # Save macro validation AUC.
+            row["validation_mean_auc"] = metrics["mean_auc"]
+            # Save known validation label-cell count.
+            row["validation_known_cells"] = metrics["known_cells"]
+        # Save elapsed time for troubleshooting and practical planning.
+        row["elapsed_seconds"] = round(time.time() - started, 1)
+        # Append the row to the experiment's persistent in-memory history.
+        experiment.history.append(row)
+        # Print the completed epoch summary.
+        print(json.dumps(row, indent=2))
+        # Encourage release of high-resolution CPU objects between epochs.
+        gc.collect()
+        # Release unused cached GPU blocks between epochs.
+        if DEVICE.type == "cuda":
+            torch.cuda.empty_cache()
+    # Return the complete history for convenience.
+    return experiment.history
+
+
+def plot_loss_history(experiment: Experiment) -> None:
+    """Plot training and validation loss across all completed epochs."""
+    # Stop with a clear message if training has not created history yet.
+    if not experiment.history:
+        raise ValueError("No completed epochs yet; run train_model first")
+    # Convert history dictionaries into a table suitable for plotting.
+    history = pd.DataFrame(experiment.history)
+    # Create a readable medium-size chart.
+    plt.figure(figsize=(8, 4))
+    # Plot training loss against epoch number.
+    plt.plot(history["epoch"], history["train_loss"], marker="o", label="training loss")
+    # Plot validation loss only when it was collected.
+    if "validation_loss" in history:
+        plt.plot(history["epoch"], history["validation_loss"], marker="o", label="validation loss")
+    # Name the horizontal axis.
+    plt.xlabel("epoch")
+    # Name the vertical axis.
+    plt.ylabel("masked weighted BCE loss")
+    # Give the chart a direct title.
+    plt.title("Training and validation loss")
+    # Add a light grid for easier loss comparison.
+    plt.grid(alpha=0.3)
+    # Show which colored curve is which.
+    plt.legend()
+    # Use compact spacing in Colab output.
+    plt.tight_layout()
+    # Render the figure.
+    plt.show()
+
+
+def save_results(experiment: Experiment, run_name: str = "standalone_sparse_mil") -> Path:
+    """Save this notebook's new model, configuration, and epoch history to Drive."""
+    # Create a unique output directory name under the selected data folder.
+    run_root = experiment.paths.output_root / run_name
+    # Create missing output parent folders safely.
+    run_root.mkdir(parents=True, exist_ok=True)
+    # Save weights and the exact target ordering needed to use this new model later.
+    torch.save(
+        {
+            "model_state": experiment.model.state_dict(),
+            "config": asdict(experiment.config),
+            "targets": TARGETS,
+        },
+        run_root / "trained_model.pt",
+    )
+    # Save readable training history beside the model weights.
+    (run_root / "history.json").write_text(json.dumps(experiment.history, indent=2), encoding="utf-8")
+    # Save readable configuration beside the model weights.
+    (run_root / "config.json").write_text(json.dumps(asdict(experiment.config), indent=2), encoding="utf-8")
+    # Print the Drive location for the user.
+    print("Saved new run to:", run_root)
+    # Return the output directory for optional follow-up code.
+    return run_root
 ''')
 
-markdown("## 20. Writing the submission")
+markdown("## 10. Twelve-case classification review")
 
 code(r'''
-def write_submission(uids, probabilities, path="submission.csv") -> pd.DataFrame:
-    """Write the thirteen-column file the competition expects, and check it.
+def format_positive_predictions(probability: np.ndarray, threshold: float = 0.50) -> str:
+    """Format all target probabilities at or above the classification threshold."""
+    # Build short target/probability strings for positive classifications.
+    selected = [
+        f"{name}: {value:.2f}"
+        for name, value in zip(TARGETS, probability)
+        if value >= threshold
+    ]
+    # Return a clear sentence when no target reaches the threshold.
+    return "none at or above 0.50" if not selected else "; ".join(selected)
 
-    Row order must match `test.csv` exactly and the column names are the display
-    names, apostrophe and all. The checks below are cheap and catch the two
-    failures that produce a plausible-looking file with meaningless contents:
-    a reordered study list, and probabilities that escaped [0, 1].
-    """
-    frame = pd.DataFrame(np.asarray(probabilities, dtype=np.float64), columns=list(FINDINGS))
-    frame.insert(0, "StudyInstanceUID", [str(u) for u in uids])
 
-    assert list(frame.columns) == ["StudyInstanceUID", *FINDINGS], "column order changed"
-    assert not frame["StudyInstanceUID"].duplicated().any(), "a study appears twice"
-    values = frame[list(FINDINGS)].to_numpy(dtype=np.float64)
-    assert np.isfinite(values).all(), "non-finite probability"
-    assert (values >= 0).all() and (values <= 1).all(), "probability outside [0, 1]"
+def format_known_labels(target: np.ndarray) -> str:
+    """Format only labels present in the CSV for compact image annotations."""
+    # Build readable target/value pairs while skipping blank target cells.
+    selected = [
+        f"{name}: {int(value)}"
+        for name, value in zip(TARGETS, target)
+        if np.isfinite(value)
+    ]
+    # Return a clear fallback if a case unexpectedly has no known target cell.
+    return "no known labels" if not selected else "; ".join(selected)
 
-    frame.to_csv(path, index=False)
-    print(f"wrote {path}: {len(frame)} studies x {len(FINDINGS)} findings")
 
-    # Every column should vary across studies. One that does not means the model
-    # is giving every knee the same answer for that finding.
-    spread = (frame[list(FINDINGS)].max() - frame[list(FINDINGS)].min()).sort_values()
-    print("\nsmallest spreads across studies:")
-    print(spread.head(3).to_string())
-    if spread.max() < 0.01:
-        print("\nWARNING: every column is nearly constant -- do not submit this")
-    return frame
+def collect_case_examples(experiment: Experiment, loader: DataLoader, max_cases: int) -> list[dict]:
+    """Collect up to max_cases images, labels, and classifications without updating the model."""
+    # Put the model in evaluation mode so dropout is disabled.
+    experiment.model.eval()
+    # Prepare an output list of per-study review records.
+    cases: list[dict] = []
+    # Disable gradients because case review performs inference only.
+    with torch.no_grad():
+        # Iterate through validation or training batches.
+        for batch in loader:
+            # Keep a CPU copy of study IDs before moving tensors to the device.
+            study_uids = list(batch["study_uid"])
+            # Keep CPU tensors for image display and true labels.
+            cpu_volumes = batch["volumes"]
+            # Keep CPU readable-series flags to select a real MRI image.
+            cpu_present = batch["present"]
+            # Keep CPU targets for annotations and table rows.
+            cpu_targets = batch["target"]
+            # Move model inputs to the selected device.
+            volumes, present, metadata, position, _ = move_batch(batch)
+            # Run a combined-logit inference pass.
+            with autocast_context():
+                output = experiment.model(volumes, present, metadata, position)
+            # Convert logits to CPU probabilities.
+            probabilities = torch.sigmoid(output.logits).float().cpu().numpy()
+            # Add one visual review record per study in this batch.
+            for row, study_uid in enumerate(study_uids):
+                # Find the first readable MRI series for this study.
+                first_series = int(torch.nonzero(cpu_present[row] > 0, as_tuple=False)[0].item())
+                # Select the central sampled triplet and its middle channel for display.
+                image = cpu_volumes[row, first_series, experiment.config.slices_per_series // 2, 1].numpy()
+                # Copy targets into a NumPy row for stable later formatting.
+                target = cpu_targets[row].numpy().copy()
+                # Copy predicted probabilities into a NumPy row.
+                probability = probabilities[row].copy()
+                # Save every element needed for plotting and the summary table.
+                cases.append(
+                    {
+                        "StudyInstanceUID": study_uid,
+                        "image": image,
+                        "target": target,
+                        "probability": probability,
+                        "known_labels": format_known_labels(target),
+                        "predicted_positive": format_positive_predictions(probability),
+                    }
+                )
+                # Stop as soon as the requested case count is reached.
+                if len(cases) >= max_cases:
+                    return cases
+            # Release this batch's large GPU objects before the next DICOM batch.
+            del volumes, present, metadata, position, output
+    # Return all cases if the loader had fewer than max_cases studies.
+    return cases
+
+
+def show_case_examples(experiment: Experiment, max_cases: int = 12) -> pd.DataFrame:
+    """Plot up to 12 MRI examples with true labels and thresholded classifications."""
+    # Prefer validation examples when a validation split exists.
+    loader = experiment.validation_loader or experiment.train_loader
+    # Collect the requested examples and their predictions.
+    cases = collect_case_examples(experiment, loader, max_cases)
+    # Stop clearly if the selected loader contained no cases.
+    if not cases:
+        raise ValueError("No cases available for visualization")
+    # Use three columns and enough rows for up to twelve images.
+    columns = 3
+    # Compute the number of required figure rows.
+    rows = math.ceil(len(cases) / columns)
+    # Create a spacious grid for MRI images and text annotations.
+    figure, axes = plt.subplots(rows, columns, figsize=(18, 5.5 * rows))
+    # Flatten axes so indexing also works when the grid has a single row.
+    axes = np.asarray(axes).reshape(-1)
+    # Draw every requested case.
+    for axis, case in zip(axes, cases):
+        # Render the central 2.5D middle-channel MRI slice in grayscale.
+        axis.imshow(case["image"], cmap="gray")
+        # Hide axes because pixel coordinates are not part of the case review.
+        axis.axis("off")
+        # Show the study ID above the MRI image.
+        axis.set_title(f"Study {case['StudyInstanceUID']}", fontsize=10)
+        # Add known truth and thresholded classification below the image.
+        axis.text(
+            0.0,
+            -0.08,
+            "known: " + case["known_labels"] + "\n" + "predicted: " + case["predicted_positive"],
+            transform=axis.transAxes,
+            fontsize=8,
+            va="top",
+            wrap=True,
+        )
+    # Hide unused panels when fewer than twelve studies are available.
+    for axis in axes[len(cases) :]:
+        axis.axis("off")
+    # Leave room for the classification text below each image.
+    plt.tight_layout()
+    # Display the twelve-case review figure.
+    plt.show()
+    # Build a concise tabular summary without embedding large image arrays.
+    table = pd.DataFrame(
+        {
+            "StudyInstanceUID": [case["StudyInstanceUID"] for case in cases],
+            "known_labels": [case["known_labels"] for case in cases],
+            "predicted_positive": [case["predicted_positive"] for case in cases],
+            "max_probability": [float(case["probability"].max()) for case in cases],
+        }
+    )
+    # Display the table below the figure in Colab.
+    display(table)
+    # Return the table so it can be saved or filtered in another cell.
+    return table
+
+
+def show_results(experiment: Experiment) -> pd.DataFrame:
+    """Display the numeric epoch history as a table."""
+    # Convert completed epoch dictionaries into a DataFrame.
+    table = pd.DataFrame(experiment.history)
+    # Render the table in Colab.
+    display(table)
+    # Return the table for optional user analysis.
+    return table
 ''')
 
-
-markdown("""
-## 21. Running it
-
-The cells below are the only ones that touch your data. Everything above is
-definitions, so you can read the whole model before running anything.
-""")
+markdown("## 11. Run the standalone workflow")
 
 code(r'''
-# --- point these at your data -------------------------------------------------
-CONFIG.data_root = "/content/colab_subset"
-LABEL_FILE = "/content/colab_subset/training_targets.csv"
-
-# None means "everything in data_root". When the folder is already a subset cut
-# to a size budget, that is what you want -- setting a number here as well would
-# quietly train on a fraction of what you took the trouble to upload.
-CONFIG.study_limit = None
-
-studies = read_study_table(CONFIG.data_root, "train")
-series = read_series_table(CONFIG.data_root, "train")
-print(f"{len(studies)} studies, {len(series)} series")
-print(f"{int(has_expert_labels(studies).sum())} carry expert labels "
-      f"(these never enter training)")
+# Build fresh loaders, a new model, and a new optimizer using only the Drive subset.
+EXPERIMENT = build_experiment(PATHS, CONFIG)
 ''')
 
+markdown("### 11a. Mandatory no-update memory and gradient check")
+
 code(r'''
-labels = pd.read_csv(LABEL_FILE)
-labels["StudyInstanceUID"] = labels["StudyInstanceUID"].astype(str)
-
-train_uids, targets, weights = build_supervision_targets(studies, labels, CONFIG)
-
-if CONFIG.study_limit is not None:
-    keep = min(CONFIG.study_limit, len(train_uids))
-    train_uids, targets, weights = train_uids[:keep], targets[:keep], weights[:keep]
-    print(f"limited to {keep} studies for this run")
-
-series_by_study = select_usable_series(series, train_uids)
-
-# Studies whose report yielded nothing are kept: they still show the encoder
-# real anatomy, and the loss simply ignores them. Studies with no readable
-# series at all are dropped, because there is nothing to look at.
-usable = [uid for uid in train_uids if series_by_study.get(uid)]
-if len(usable) != len(train_uids):
-    index = {uid: i for i, uid in enumerate(train_uids)}
-    rows = [index[uid] for uid in usable]
-    targets, weights = targets[rows], weights[rows]
-    train_uids = usable
-    print(f"dropped {len(index) - len(usable)} studies with no eligible series")
-
-counts = [len(series_by_study[uid]) for uid in train_uids]
-print(f"{len(train_uids)} studies, {sum(counts)} series "
-      f"(min {min(counts)}, median {int(np.median(counts))}, max {max(counts)})")
+# Run one forward/backward pass without an optimizer update.
+PREFLIGHT = run_preflight(EXPERIMENT)
 ''')
 
-code(r'''
-train_dataset = KneeStudyDataset(
-    train_uids, series_by_study, CONFIG,
-    split="train", targets=targets, weights=weights, train=True,
-)
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=CONFIG.batch_size,
-    shuffle=True,
-    collate_fn=pad_studies_into_batch,
-    num_workers=2,
-    pin_memory=(DEVICE == "cuda"),
-)
-
-# Look at one batch before training on all of them.
-sample = next(iter(train_loader))
-for key in ("volumes", "present", "series_meta", "target", "weight"):
-    print(f"{key:12} {tuple(sample[key].shape)}")
-''')
+markdown("### 11b. Train, plot losses, review 12 classifications, and save")
 
 code(r'''
-model = KneeAbnormalityModel(CONFIG, pretrained_encoder=True)
-freeze_encoder(model)
-unfreeze_last_encoder_blocks(model, CONFIG.trainable_encoder_blocks)
+# Keep training off until the preflight cell prints PASS.
+RUN_TRAINING = False
 
-# The loss needs these, and they are a property of the training surface rather
-# than of the model, so they are attached once here.
-model.balance_multipliers = torch.from_numpy(
-    finding_balance_multipliers(weights)).to(DEVICE)
-
-total = sum(p.numel() for p in model.parameters())
-trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-print(f"{total:,} parameters, {trainable:,} trainable ({trainable / total * 100:.0f}%)")
-''')
-
-code(r'''
-history = train_model(model, train_loader, CONFIG, DEVICE)
-
-torch.save(
-    {
-        "model_state": model.state_dict(),
-        "config": CONFIG.__dict__,
-        "findings": list(FINDINGS),
-        "history": history,
-        "trained_studies": len(train_uids),
-    },
-    "knee_model.pt",
-)
-print("saved knee_model.pt")
-''')
-
-markdown("### Scoring against the expert-labelled studies")
-
-code(r'''
-# These studies never entered the gradient, so this is an honest read -- but
-# there are only 58 of them, and at that size a difference below about 0.03
-# macro AUC cannot be told from noise. Use it to catch a broken run, not to
-# choose between two reasonable ones.
-expert = studies.loc[has_expert_labels(studies)].reset_index(drop=True)
-expert_uids = expert["StudyInstanceUID"].astype(str).tolist()
-expert_series = select_usable_series(series, expert_uids)
-expert_uids = [uid for uid in expert_uids if expert_series.get(uid)]
-truth = expert.set_index("StudyInstanceUID").loc[expert_uids, list(FINDINGS)].to_numpy(float)
-
-expert_loader = DataLoader(
-    KneeStudyDataset(expert_uids, expert_series, CONFIG, split="train",
-                     train=False, tta_offsets=CONFIG.tta_offsets),
-    batch_size=CONFIG.batch_size, shuffle=False,
-    collate_fn=pad_studies_into_batch, num_workers=2,
-)
-
-scored_uids, predictions = predict_with_augmentation([model], expert_loader, DEVICE)
-assert scored_uids == expert_uids, "study order changed during prediction"
-
-macro, per_finding = macro_roc_auc(truth, predictions)
-print(f"macro ROC AUC over {len(expert_uids)} expert studies: {macro:.4f}\n")
-for name, value in sorted(zip(FINDINGS, per_finding), key=lambda x: -x[1]):
-    print(f"  {name:<18} {value:.4f}")
-''')
-
-markdown("### Predicting the test set")
-
-code(r'''
-test_studies = read_study_table(CONFIG.data_root, "test")
-test_series = read_series_table(CONFIG.data_root, "test")
-test_uids = test_studies["StudyInstanceUID"].astype(str).tolist()
-test_by_study = select_usable_series(test_series, test_uids)
-
-test_loader = DataLoader(
-    KneeStudyDataset(test_uids, test_by_study, CONFIG, split="test",
-                     train=False, tta_offsets=CONFIG.tta_offsets),
-    batch_size=CONFIG.batch_size, shuffle=False,
-    collate_fn=pad_studies_into_batch, num_workers=2,
-)
-
-predicted_uids, probabilities = predict_with_augmentation([model], test_loader, DEVICE)
-assert predicted_uids == test_uids, "test order changed -- the submission would be scrambled"
-submission = write_submission(predicted_uids, probabilities)
-submission.head()
+# Run training only when the user intentionally enables it.
+if RUN_TRAINING:
+    # Train for CONFIG.epochs and collect history rows.
+    HISTORY = train_model(EXPERIMENT)
+    # Plot the training and validation loss curves.
+    plot_loss_history(EXPERIMENT)
+    # Plot up to twelve classified MRI examples and show their summary table.
+    CASE_TABLE = show_case_examples(EXPERIMENT, max_cases=12)
+    # Display the numeric epoch history table.
+    RESULTS = show_results(EXPERIMENT)
+    # Save this newly trained model and its JSON metadata to Drive.
+    RUN_DIRECTORY = save_results(EXPERIMENT)
 ''')
 
 markdown(r"""
-## Where to go from here
+## Memory controls
 
-Three things this notebook makes easy to try, in the order I would try them.
+The defaults are deliberately safe for online DICOM loading. If the preflight
+runs out of memory, change only one setting at a time and rerun the preflight:
 
-**1. Let the schedule finish.** Set `CONFIG.schedule_length = 2`. Identical
-cost, and the learning rate actually anneals. Currently the two epochs run at
-100% and 90.5% of peak and stop there.
+1. Reduce `max_series_per_study` from `6` to `4`.
+2. Reduce `encoder_chunk_size` from `2` to `1`.
+3. Keep `image_size=448` unchanged unless you intentionally want a different
+   image representation.
 
-**2. Keep some spatial detail.** `SliceFeatureExtractor` average-pools a 7x7
-grid down to one vector. Returning a 2x2 or 3x3 grid instead, and letting the
-series pooling attend over slices *and* positions, is the largest untried change
-to this architecture -- and eight of the twelve findings are focal, so there is a
-clear reason to expect it to matter.
-
-**3. Better labels, not more of them.** The parser answers about a quarter of
-the label cells and declines the rest, and where it does answer, its "yes" is
-right 69% of the time. Removing 500 training studies changed the hidden score by
-nothing; improving what the remaining labels *say* is the direction with real
-evidence behind it.
-
-What I would not spend time on, because the record here already rules it out:
-more study-transformer capacity, different activation functions, and adding more
-unlabelled studies. Eight architecture variants moved the score by about 0.015
-in total, with every confidence interval crossing zero.
+If the preflight passes comfortably, you may set `max_series_per_study=0` to
+retain every recognized-plane series. Recreate `EXPERIMENT` after changing
+`CONFIG`, then run preflight again.
 """)
 
 
 if __name__ == "__main__":
-    out = build(Path(__file__).with_name("knee_mri_model.ipynb"))
-    print(f"{out}  ({len(CELLS)} cells)")
+    build(Path(__file__).with_name("knee_mri_model.ipynb"))
