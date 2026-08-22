@@ -49,10 +49,16 @@ def test_notebook_is_standalone_with_clear_functions_and_classes():
     text = _text()
     for name in (
         "mount_drive",
+        "copy_and_extract_archives",
+        "safe_extract_zip",
+        "find_extracted_root",
         "validate_dataset",
+        "validate_test_dataset",
         "read_dicom_volume",
         "prepare_series_tensor",
         "build_experiment",
+        "build_test_loader",
+        "predict_test_set",
         "run_preflight",
         "train_model",
         "plot_loss_history",
@@ -63,6 +69,8 @@ def test_notebook_is_standalone_with_clear_functions_and_classes():
         assert f"def {name}" in text
     for name in (
         "DrivePaths",
+        "ArchivePaths",
+        "TestPaths",
         "RunConfig",
         "KneeMRIDataset",
         "SliceEncoder",
@@ -82,4 +90,7 @@ def test_teaching_outputs_are_enabled_but_training_starts_safe():
     assert "forward/backward only; no optimizer step" in text
     assert "RUN_TRAINING = False" in text
     assert "plot_loss_history(EXPERIMENT)" in text
-    assert "show_case_examples(EXPERIMENT, max_cases=12)" in text
+    assert "max_cases=12" in text
+    assert "colab_subset.zip" in text
+    assert "test.zip" in text
+    assert "test_predictions.csv" in text

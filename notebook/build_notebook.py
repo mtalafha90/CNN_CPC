@@ -87,25 +87,28 @@ training, a loss plot, and a review of 12 classified cases.
 markdown(r"""
 ## 1. Google Drive layout
 
-Store the subset in one Drive folder. The table names and DICOM hierarchy match
-the original data layout, but the folder contains only the rows and images in
-your subset.
+Keep the two supplied archives at the top level of Google Drive. The notebook
+mounts Drive, copies them to Colab's fast local disk, safely unzips them, and
+then automatically finds the training and test folders regardless of a single
+top-level folder inside either archive.
 
 ```text
-MyDrive/knee_mri_subset/
-├── train.csv
-├── train_series.csv
-├── train_series/
-│   └── <StudyInstanceUID>/<SeriesInstanceUID>/*.dcm
-└── outputs/                         # created after training
+MyDrive/
+├── colab_subset.zip                 # training CSVs and training DICOM subset
+├── test.zip                         # test CSVs and test DICOM subset
+└── knee_mri_subset_outputs/         # created by this notebook
 ```
 
-`train_images/` may be used instead of `train_series/`.
+Expected extracted training layout: `train.csv`, `train_series.csv`, and either
+`train_series/` or `train_images/`. Expected extracted test layout: `test.csv`,
+`test_series.csv`, and either `test_series/` or `test_images/`.
 
 - `train.csv` needs `StudyInstanceUID` and the 12 target columns listed below.
   A target cell can be `0`, `1`, or blank; blank labels are ignored by the loss.
 - `train_series.csv` needs `StudyInstanceUID`, `SeriesInstanceUID`,
   `Fluid_Sensitive`, `Fat_Suppression`, and `Anatomical_Plane`.
+- The test subset is used after training to produce `test_predictions.csv` with
+  the 12 probability columns and thresholded classifications.
 """)
 
 markdown("## 2. Install the DICOM reader")
@@ -147,8 +150,12 @@ import json
 import math
 # Import random for reproducible Python-level sampling.
 import random
+# Import shutil for copying the two Drive archives to Colab's local SSD.
+import shutil
 # Import time for per-epoch timing.
 import time
+# Import zipfile for safe archive inspection and extraction.
+import zipfile
 
 # Import matplotlib for the loss curve and case-review figures.
 import matplotlib.pyplot as plt
@@ -214,7 +221,7 @@ if torch.cuda.is_available():
     print("GPU:", torch.cuda.get_device_name(0))
 ''')
 
-markdown("## 4. Mount Drive and define the run configuration")
+markdown("## 4. Mount Drive, copy both archives locally, and define the run configuration")
 
 code(r'''
 def mount_drive(mount_point: str = "/content/drive") -> Path:
@@ -228,12 +235,86 @@ def mount_drive(mount_point: str = "/content/drive") -> Path:
 
 
 @dataclass(frozen=True)
-class DrivePaths:
-    """Locations for one Drive dataset and the outputs created by this notebook."""
+class ArchivePaths:
+    """Locations of the two Drive archives and their fast local extraction folder."""
 
-    # Hold the folder containing train.csv, train_series.csv, and DICOM directories.
+    # Hold the archive containing train.csv, train_series.csv, and training DICOM files.
+    training_archive: Path
+    # Hold the archive containing test.csv, test_series.csv, and test DICOM files.
+    test_archive: Path
+    # Hold the Colab-local folder used while reading large DICOM files.
+    local_root: Path
+
+
+def safe_extract_zip(archive: Path, destination: Path) -> None:
+    """Extract one ZIP archive while refusing paths that escape the destination folder."""
+    # Create the local destination if this is the first notebook run.
+    destination.mkdir(parents=True, exist_ok=True)
+    # Resolve the destination once for reliable ZIP member safety checks.
+    resolved_destination = destination.resolve()
+    # Open the archive for a read-only member inspection and extraction.
+    with zipfile.ZipFile(archive) as zip_file:
+        # Check every archived filename before writing any file.
+        for member in zip_file.infolist():
+            # Resolve the output path implied by this archive member.
+            target = (destination / member.filename).resolve()
+            # Reject an archive member that would write outside the intended folder.
+            if target != resolved_destination and resolved_destination not in target.parents:
+                raise RuntimeError(f"Unsafe ZIP path in {archive.name}: {member.filename}")
+        # Extract all verified files into Colab's local SSD-backed storage.
+        zip_file.extractall(destination)
+
+
+def copy_and_extract_archives(archives: ArchivePaths) -> Path:
+    """Copy Drive ZIP files to local storage, then unpack both before any DICOM reading."""
+    # Create the local root without deleting an earlier extraction.
+    archives.local_root.mkdir(parents=True, exist_ok=True)
+    # Process training and test archives in a fixed, readable order.
+    for source_archive in (archives.training_archive, archives.test_archive):
+        # Stop with the exact missing Drive filename if an archive is not present.
+        if not source_archive.is_file():
+            raise FileNotFoundError(f"Missing Drive archive: {source_archive}")
+        # Put a local copy beside the extracted data using the original filename.
+        local_archive = archives.local_root / source_archive.name
+        # Copy once from Drive so later DICOM reads avoid the slower mounted filesystem.
+        shutil.copy2(source_archive, local_archive)
+        # Extract the locally copied archive into the same local root.
+        safe_extract_zip(local_archive, archives.local_root)
+        # Report the completed copy/extract step.
+        print(f"Ready: {source_archive.name} -> {archives.local_root}")
+    # Return the local root used by the next path-discovery functions.
+    return archives.local_root
+
+
+def find_extracted_root(local_root: Path, table_name: str, series_table_name: str) -> Path:
+    """Find exactly one extracted data root containing both required CSV tables."""
+    # Find every parent folder that contains the requested study-level table.
+    candidates = [
+        path.parent
+        for path in local_root.rglob(table_name)
+        if (path.parent / series_table_name).is_file()
+    ]
+    # Stop when archives did not extract the expected pair of tables.
+    if not candidates:
+        raise FileNotFoundError(
+            f"Could not find {table_name} and {series_table_name} below {local_root}"
+        )
+    # Stop rather than guessing if archives contain more than one matching dataset folder.
+    if len(candidates) != 1:
+        raise RuntimeError(
+            f"Expected one folder with {table_name} and {series_table_name}; found {candidates}"
+        )
+    # Return the unambiguous extracted dataset folder.
+    return candidates[0]
+
+
+@dataclass(frozen=True)
+class DrivePaths:
+    """Locations for local training data and persistent Drive outputs."""
+
+    # Hold the local folder containing train.csv, train_series.csv, and training DICOM files.
     data_root: Path
-    # Hold the folder where this notebook writes its newly created results.
+    # Hold the Drive folder where this notebook writes persistent new results.
     output_root: Path
 
     @property
@@ -249,12 +330,42 @@ class DrivePaths:
         return self.data_root / "train_series.csv"
 
 
-def make_paths(dataset_root: str | Path) -> DrivePaths:
-    """Build all paths from the one Drive folder chosen by the user."""
+def make_paths(dataset_root: str | Path, output_root: str | Path | None = None) -> DrivePaths:
+    """Build training-data and output paths from extracted local data and an optional Drive output folder."""
     # Convert either a string or Path into a Path object.
     root = Path(dataset_root)
-    # Keep all new output files in an outputs folder inside the selected dataset folder.
-    return DrivePaths(data_root=root, output_root=root / "outputs")
+    # Use a local outputs folder only when no persistent Drive output folder was supplied.
+    results = root / "outputs" if output_root is None else Path(output_root)
+    # Return the complete training input and output path bundle.
+    return DrivePaths(data_root=root, output_root=results)
+
+
+@dataclass(frozen=True)
+class TestPaths:
+    """Locations for the separately extracted test subset."""
+
+    # Hold the local folder containing test.csv, test_series.csv, and test DICOM files.
+    data_root: Path
+
+    @property
+    def test_csv(self) -> Path:
+        """Return the test study table path."""
+        # Join the test root and fixed test-table filename.
+        return self.data_root / "test.csv"
+
+    @property
+    def series_csv(self) -> Path:
+        """Return the test series metadata table path."""
+        # Join the test root and fixed test-series table filename.
+        return self.data_root / "test_series.csv"
+
+
+def make_test_paths(dataset_root: str | Path) -> TestPaths:
+    """Build test-subset paths from the extracted local folder."""
+    # Convert either a string or Path into a Path object.
+    root = Path(dataset_root)
+    # Return the complete test input path bundle.
+    return TestPaths(data_root=root)
 
 
 @dataclass(frozen=True)
@@ -303,12 +414,28 @@ class RunConfig:
 
 # Mount the user's Google Drive once for this notebook session.
 DRIVE_ROOT = mount_drive()
-# Point to the subset folder; change only this line if the folder has another name.
-PATHS = make_paths(DRIVE_ROOT / "MyDrive" / "knee_mri_subset")
+# Declare the two archive names supplied by the user and the fast local extraction folder.
+ARCHIVES = ArchivePaths(
+    training_archive=DRIVE_ROOT / "MyDrive" / "colab_subset.zip",
+    test_archive=DRIVE_ROOT / "MyDrive" / "test.zip",
+    local_root=Path("/content/knee_mri_subset"),
+)
+# Copy and unpack both archives before any training or test DICOM read.
+LOCAL_ROOT = copy_and_extract_archives(ARCHIVES)
+# Find the extracted training root without assuming how the ZIP file nests its top folder.
+TRAINING_ROOT = find_extracted_root(LOCAL_ROOT, "train.csv", "train_series.csv")
+# Find the extracted test root without assuming how the ZIP file nests its top folder.
+TEST_ROOT = find_extracted_root(LOCAL_ROOT, "test.csv", "test_series.csv")
+# Read high-volume training images from local storage and save results persistently to Drive.
+PATHS = make_paths(TRAINING_ROOT, DRIVE_ROOT / "MyDrive" / "knee_mri_subset_outputs")
+# Read high-volume test images from local storage.
+TEST_PATHS = make_test_paths(TEST_ROOT)
 # Create the default conservative training configuration.
 CONFIG = RunConfig()
-# Display the resolved paths for confirmation.
+# Display the resolved training paths for confirmation.
 print(PATHS)
+# Display the resolved test paths for confirmation.
+print(TEST_PATHS)
 # Display all active model and memory settings for confirmation.
 print(CONFIG)
 ''')
@@ -358,7 +485,7 @@ def normalise_plane(value: object) -> str:
 
 
 def validate_dataset(paths: DrivePaths) -> dict:
-    """Validate the CSV schema and Drive directory layout before using the GPU."""
+    """Validate the local training CSV schema and DICOM layout before using the GPU."""
     # List the two CSV files required by the standalone workflow.
     required_files = (paths.train_csv, paths.series_csv)
     # Collect every missing CSV filename so one error explains the whole problem.
@@ -440,6 +567,70 @@ def validate_dataset(paths: DrivePaths) -> dict:
     return result
 
 
+def validate_test_dataset(paths: TestPaths) -> dict:
+    """Validate the extracted test CSV schema and DICOM layout before inference."""
+    # List the two test CSV files required for prediction.
+    required_files = (paths.test_csv, paths.series_csv)
+    # Collect all missing test files for one actionable error message.
+    missing_files = [str(path) for path in required_files if not path.is_file()]
+    # Stop before model inference if the archive omitted a required file.
+    if missing_files:
+        raise FileNotFoundError("Missing required test file(s):\n" + "\n".join(missing_files))
+    # Load the test study table.
+    test = pd.read_csv(paths.test_csv)
+    # Load the test series metadata table.
+    series = pd.read_csv(paths.series_csv)
+    # Require a unique study identifier in the test study table.
+    test_required = {"StudyInstanceUID"}
+    # Require the same MRI-routing metadata used by the training data.
+    series_required = {
+        "StudyInstanceUID", "SeriesInstanceUID", "Fluid_Sensitive",
+        "Fat_Suppression", "Anatomical_Plane",
+    }
+    # Find missing test-study columns.
+    missing_test = sorted(test_required.difference(test.columns))
+    # Find missing test-series columns.
+    missing_series = sorted(series_required.difference(series.columns))
+    # Explain a malformed test study table.
+    if missing_test:
+        raise ValueError(f"test.csv missing columns: {missing_test}")
+    # Explain a malformed test series table.
+    if missing_series:
+        raise ValueError(f"test_series.csv missing columns: {missing_series}")
+    # Normalize identifiers before checking their uniqueness.
+    test["StudyInstanceUID"] = test["StudyInstanceUID"].astype(str)
+    # Normalize test-series study identifiers.
+    series["StudyInstanceUID"] = series["StudyInstanceUID"].astype(str)
+    # Normalize test-series identifiers.
+    series["SeriesInstanceUID"] = series["SeriesInstanceUID"].astype(str)
+    # Reject duplicate test studies because predictions need one row per study.
+    if test["StudyInstanceUID"].duplicated().any():
+        raise ValueError("test.csv contains duplicate StudyInstanceUID values")
+    # Reject duplicate test series metadata rows.
+    if series[["StudyInstanceUID", "SeriesInstanceUID"]].duplicated().any().any():
+        raise ValueError("test_series.csv contains duplicate study/series rows")
+    # Find recognized anatomical plane metadata rows.
+    eligible = series["Anatomical_Plane"].map(normalise_plane).isin(PLANE_TO_ID)
+    # Accept either original-style test DICOM root name.
+    roots = [paths.data_root / "test_series", paths.data_root / "test_images"]
+    # Stop before inference if no test DICOM hierarchy was extracted.
+    if not any(root.is_dir() for root in roots):
+        raise FileNotFoundError(
+            "Expected test_series/ or test_images/ under " f"{paths.data_root}"
+        )
+    # Build a concise test-subset audit.
+    result = {
+        "test_studies": int(len(test)),
+        "test_series_rows": int(len(series)),
+        "test_recognized_plane_series": int(eligible.sum()),
+        "test_data_root": str(paths.data_root),
+    }
+    # Print the test audit in readable JSON.
+    print(json.dumps(result, indent=2))
+    # Return the test audit for optional later use.
+    return result
+
+
 def build_series_records(series: pd.DataFrame, config: RunConfig) -> dict[str, list[dict]]:
     """Create an ordered list of usable MRI series for each study."""
     # Work on a copy so callers keep their original table unchanged.
@@ -491,6 +682,8 @@ def build_series_records(series: pd.DataFrame, config: RunConfig) -> dict[str, l
 
 # Run the table and directory audit immediately after setting the paths.
 DATASET_SUMMARY = validate_dataset(PATHS)
+# Run the test-table and directory audit immediately after setting the test paths.
+TEST_DATASET_SUMMARY = validate_test_dataset(TEST_PATHS)
 ''')
 
 markdown("## 6. DICOM decoding and 448×448 2.5D preparation")
@@ -500,10 +693,13 @@ code(r'''
 DICOM_SUFFIXES = {"", ".dcm", ".dicom", ".ima"}
 
 
-def find_series_dir(data_root: Path, study_uid: str, series_uid: str) -> Path | None:
-    """Locate a DICOM series in either accepted directory hierarchy."""
-    # Check both accepted DICOM root names in a fixed order.
-    for root_name in ("train_series", "train_images"):
+def find_series_dir(data_root: Path, split: str, study_uid: str, series_uid: str) -> Path | None:
+    """Locate one train or test DICOM series in either accepted directory hierarchy."""
+    # Reject an unexpected split name before constructing a filesystem path.
+    if split not in {"train", "test"}:
+        raise ValueError(f"split must be 'train' or 'test', got {split!r}")
+    # Check both accepted DICOM root names in a fixed order for this split.
+    for root_name in (f"{split}_series", f"{split}_images"):
         # Build the expected study/series directory path.
         candidate = data_root / root_name / str(study_uid) / str(series_uid)
         # Return immediately when the expected directory exists.
@@ -707,32 +903,41 @@ markdown("## 7. Dataset and batch collation classes")
 
 code(r'''
 class KneeMRIDataset(Dataset):
-    """Decode one study as a variable number of high-resolution MRI series."""
+    """Decode one train or test study as a variable number of high-resolution MRI series."""
 
     def __init__(
         self,
         frame: pd.DataFrame,
         series_records: dict[str, list[dict]],
-        paths: DrivePaths,
+        paths: DrivePaths | TestPaths,
         config: RunConfig,
+        split: str,
+        include_targets: bool,
     ) -> None:
         # Store file locations for lazy DICOM loading.
         self.paths = paths
         # Store image and error-handling settings.
         self.config = config
+        # Store whether DICOM folders and CSV rows belong to the train or test subset.
+        self.split = split
+        # Store whether this split carries known training labels.
+        self.include_targets = include_targets
         # Copy rows so filtering cannot mutate a caller's data frame.
         work = frame.copy()
         # Normalize UID strings to match the series-record dictionary keys.
         work["StudyInstanceUID"] = work["StudyInstanceUID"].astype(str)
         # Keep only studies that have at least one recognized-plane MRI series.
         work = work.loc[work["StudyInstanceUID"].isin(series_records)].reset_index(drop=True)
-        # Stop with an actionable error when no training study remains.
+        # Stop with an actionable error when no usable study remains.
         if work.empty:
-            raise ValueError("No labelled studies have a recognized-plane MRI series")
+            raise ValueError("No studies have a recognized-plane MRI series")
         # Store deterministic study order for DataLoader indexing.
         self.study_uids = work["StudyInstanceUID"].tolist()
-        # Store target values as float32, preserving blanks as NaN for the masked loss.
-        self.targets = work[TARGETS].apply(pd.to_numeric, errors="coerce").to_numpy(np.float32)
+        # Store training targets as float32 only for the labelled training split.
+        self.targets = (
+            work[TARGETS].apply(pd.to_numeric, errors="coerce").to_numpy(np.float32)
+            if self.include_targets else None
+        )
         # Store the metadata records used to find and describe each MRI series.
         self.series_records = series_records
 
@@ -759,7 +964,9 @@ class KneeMRIDataset(Dataset):
     def _load_series(self, study_uid: str, record: dict) -> tuple[torch.Tensor, torch.Tensor, float]:
         """Read and preprocess one MRI series, or return a masked placeholder."""
         # Locate the expected DICOM directory for this study and series.
-        series_dir = find_series_dir(self.paths.data_root, study_uid, record["series_uid"])
+        series_dir = find_series_dir(
+            self.paths.data_root, self.split, study_uid, record["series_uid"]
+        )
         # Handle a completely missing series directory.
         if series_dir is None:
             # Raise immediately only when strict DICOM behavior is requested.
@@ -805,14 +1012,18 @@ class KneeMRIDataset(Dataset):
         if not any(present):
             raise RuntimeError(f"Study {study_uid} has no readable MRI series")
         # Return tensors with a variable first dimension equal to the series count.
-        return {
+        item = {
             "study_uid": study_uid,
             "volumes": torch.stack(images),
             "slice_position": torch.stack(positions),
             "present": torch.tensor(present, dtype=torch.float32),
             "series_meta": torch.tensor(metadata, dtype=torch.long),
-            "target": torch.from_numpy(self.targets[index]),
         }
+        # Attach labels only when this is the labelled training subset.
+        if self.targets is not None:
+            item["target"] = torch.from_numpy(self.targets[index])
+        # Return the train or test sample dictionary.
+        return item
 
 
 def collate_studies(batch: list[dict]) -> dict:
@@ -825,14 +1036,18 @@ def collate_studies(batch: list[dict]) -> dict:
         # Extract the only sample dictionary.
         item = batch[0]
         # Add a batch dimension without duplicating the large image tensor.
-        return {
+        result = {
             "study_uid": [item["study_uid"]],
             "volumes": item["volumes"].unsqueeze(0),
             "slice_position": item["slice_position"].unsqueeze(0),
             "present": item["present"].unsqueeze(0),
             "series_meta": item["series_meta"].unsqueeze(0),
-            "target": item["target"].unsqueeze(0),
         }
+        # Add a label tensor only for a labelled training or validation sample.
+        if "target" in item:
+            result["target"] = item["target"].unsqueeze(0)
+        # Return the memory-safe one-study batch.
+        return result
     # Find the largest series count in this multi-study batch.
     max_series = max(int(item["present"].shape[0]) for item in batch)
     # Read image shape information from the first study.
@@ -861,15 +1076,19 @@ def collate_studies(batch: list[dict]) -> dict:
         present[row, :count] = item["present"]
         # Copy categorical metadata.
         metadata[row, :count] = item["series_meta"]
-    # Return a normal multi-study batch dictionary.
-    return {
+    # Build a normal multi-study batch dictionary.
+    result = {
         "study_uid": [item["study_uid"] for item in batch],
         "volumes": volumes,
         "slice_position": positions,
         "present": present,
         "series_meta": metadata,
-        "target": torch.stack([item["target"] for item in batch]),
     }
+    # Stack labels only if every sample in the batch provides them.
+    if all("target" in item for item in batch):
+        result["target"] = torch.stack([item["target"] for item in batch])
+    # Return the padded train or test batch.
+    return result
 
 
 def make_split(frame: pd.DataFrame, fraction: float, seed: int) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -1297,17 +1516,32 @@ def binary_auc(target: np.ndarray, probability: np.ndarray) -> float | None:
     return float((ranks[target == 1].sum() - positive * (positive + 1) / 2) / (positive * negative))
 
 
-def move_batch(batch: dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Move image data and labels to the selected device without pinned-memory pressure."""
+def move_model_inputs(batch: dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Move model inputs to the selected device for either train or test batches."""
     # Keep non-blocking transfers disabled because the loader intentionally avoids pinned memory.
     non_blocking = False
-    # Return tensors in the order expected by the model and loss functions.
+    # Return only the tensors required by the MRI model forward pass.
     return (
         batch["volumes"].to(DEVICE, non_blocking=non_blocking),
         batch["present"].to(DEVICE, non_blocking=non_blocking),
         batch["series_meta"].to(DEVICE, non_blocking=non_blocking),
         batch["slice_position"].to(DEVICE, non_blocking=non_blocking),
-        batch["target"].to(DEVICE, non_blocking=non_blocking),
+    )
+
+
+def move_batch(batch: dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Move one labelled training batch to the selected device without pinned-memory pressure."""
+    # Move the four MRI model-input tensors first.
+    volumes, present, metadata, position = move_model_inputs(batch)
+    # Move the labelled target matrix required by the training loss.
+    target = batch["target"].to(DEVICE, non_blocking=False)
+    # Return tensors in the order expected by the model and loss functions.
+    return (
+        volumes,
+        present,
+        metadata,
+        position,
+        target,
     )
 
 
@@ -1345,7 +1579,7 @@ class Experiment:
 
 
 def build_experiment(paths: DrivePaths, config: RunConfig = CONFIG) -> Experiment:
-    """Build loaders, a new model, optimizer, and loss weights from Drive data."""
+    """Build loaders, a new model, optimizer, and loss weights from local training data."""
     # Reapply the seed so repeated construction produces the same split and initialization.
     set_seed(config.seed)
     # Validate paths and CSV schemas before allocating a model.
@@ -1372,10 +1606,14 @@ def build_experiment(paths: DrivePaths, config: RunConfig = CONFIG) -> Experimen
         train_table, config.validation_fraction, config.seed
     )
     # Create the training dataset with lazy DICOM decoding.
-    train_dataset = KneeMRIDataset(train_frame, records, paths, config)
+    train_dataset = KneeMRIDataset(
+        train_frame, records, paths, config, split="train", include_targets=True
+    )
     # Create a validation dataset only when the split contains validation studies.
     validation_dataset = (
-        KneeMRIDataset(validation_frame, records, paths, config)
+        KneeMRIDataset(
+            validation_frame, records, paths, config, split="train", include_targets=True
+        )
         if not validation_frame.empty else None
     )
     # Define memory-safe loader settings shared by train and validation loaders.
@@ -1421,6 +1659,42 @@ def build_experiment(paths: DrivePaths, config: RunConfig = CONFIG) -> Experimen
     )
     # Return the new run container.
     return experiment
+
+
+def build_test_loader(paths: TestPaths, config: RunConfig = CONFIG) -> DataLoader:
+    """Build a no-label DataLoader from the extracted test subset."""
+    # Validate the test tables and DICOM hierarchy before creating a loader.
+    validate_test_dataset(paths)
+    # Read the test study table.
+    test_table = pd.read_csv(paths.test_csv)
+    # Read the test series metadata table.
+    series_table = pd.read_csv(paths.series_csv)
+    # Normalize study identifiers for record matching.
+    test_table["StudyInstanceUID"] = test_table["StudyInstanceUID"].astype(str)
+    # Build deterministic test-series record lists using the same memory limit as training.
+    records = build_series_records(series_table, config)
+    # Keep test studies that have at least one recognized-plane MRI metadata record.
+    test_table = test_table.loc[test_table["StudyInstanceUID"].isin(records)].reset_index(drop=True)
+    # Stop before inference if no test study has a usable MRI metadata record.
+    if test_table.empty:
+        raise ValueError("No test studies remain after matching test CSV rows to MRI metadata")
+    # Create a dataset that omits target tensors because test labels are unavailable.
+    test_dataset = KneeMRIDataset(
+        test_table, records, paths, config, split="test", include_targets=False
+    )
+    # Build a memory-safe, deterministic test loader.
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=config.num_workers,
+        pin_memory=False,
+        collate_fn=collate_studies,
+    )
+    # Report the usable test-study count.
+    print(f"test studies={len(test_dataset)}")
+    # Return the ready-to-run prediction loader.
+    return test_loader
 
 
 def run_preflight(experiment: Experiment) -> dict:
@@ -1574,6 +1848,45 @@ def evaluate_predictions(target: np.ndarray, probability: np.ndarray) -> dict:
     }
 
 
+def predict_test_set(experiment: Experiment, test_loader: DataLoader) -> pd.DataFrame:
+    """Run the new model on every extracted test study and return probability columns."""
+    # Put the model in evaluation mode so dropout is disabled.
+    experiment.model.eval()
+    # Prepare one table fragment per test batch.
+    fragments: list[pd.DataFrame] = []
+    # Disable gradients because test prediction never updates the model.
+    with torch.no_grad():
+        # Process every test batch in deterministic study order.
+        for batch in test_loader:
+            # Preserve study identifiers on CPU for the prediction table.
+            study_uids = list(batch["study_uid"])
+            # Move only model-input tensors because the test batch has no targets.
+            volumes, present, metadata, position = move_model_inputs(batch)
+            # Run one no-update mixed-precision inference pass.
+            with autocast_context():
+                output = experiment.model(volumes, present, metadata, position)
+            # Convert the fused logits into CPU probabilities.
+            probability = torch.sigmoid(output.logits).float().cpu().numpy()
+            # Build one prediction table for this batch using the original target column names.
+            fragment = pd.DataFrame(probability, columns=TARGETS)
+            # Insert study IDs as the first column.
+            fragment.insert(0, "StudyInstanceUID", study_uids)
+            # Add a thresholded human-readable classification summary.
+            fragment["predicted_positive"] = [
+                format_positive_predictions(row) for row in probability
+            ]
+            # Keep the completed batch table.
+            fragments.append(fragment)
+            # Release large GPU references before decoding the next test batch.
+            del batch, volumes, present, metadata, position, output
+    # Join all batch fragments into one test prediction table.
+    predictions = pd.concat(fragments, ignore_index=True)
+    # Print the number of generated test predictions.
+    print(f"Generated predictions for {len(predictions)} test studies")
+    # Return probabilities and thresholded classes for saving or review.
+    return predictions
+
+
 def train_model(experiment: Experiment) -> list[dict]:
     """Train for the configured epochs and append transparent history rows."""
     # Iterate from one so printed epoch numbers are human-friendly.
@@ -1641,8 +1954,12 @@ def plot_loss_history(experiment: Experiment) -> None:
     plt.show()
 
 
-def save_results(experiment: Experiment, run_name: str = "standalone_sparse_mil") -> Path:
-    """Save this notebook's new model, configuration, and epoch history to Drive."""
+def save_results(
+    experiment: Experiment,
+    test_predictions: pd.DataFrame | None = None,
+    run_name: str = "standalone_sparse_mil",
+) -> Path:
+    """Save this notebook's new model, history, configuration, and optional test predictions to Drive."""
     # Create a unique output directory name under the selected data folder.
     run_root = experiment.paths.output_root / run_name
     # Create missing output parent folders safely.
@@ -1660,6 +1977,10 @@ def save_results(experiment: Experiment, run_name: str = "standalone_sparse_mil"
     (run_root / "history.json").write_text(json.dumps(experiment.history, indent=2), encoding="utf-8")
     # Save readable configuration beside the model weights.
     (run_root / "config.json").write_text(json.dumps(asdict(experiment.config), indent=2), encoding="utf-8")
+    # Save test-subset probabilities and classifications only when inference was requested.
+    if test_predictions is not None:
+        # Write one prediction row per test study in CSV form.
+        test_predictions.to_csv(run_root / "test_predictions.csv", index=False)
     # Print the Drive location for the user.
     print("Saved new run to:", run_root)
     # Return the output directory for optional follow-up code.
@@ -1681,8 +2002,11 @@ def format_positive_predictions(probability: np.ndarray, threshold: float = 0.50
     return "none at or above 0.50" if not selected else "; ".join(selected)
 
 
-def format_known_labels(target: np.ndarray) -> str:
-    """Format only labels present in the CSV for compact image annotations."""
+def format_known_labels(target: np.ndarray | None) -> str:
+    """Format known labels when available, or clearly mark an unlabelled test case."""
+    # Explain why the test subset cannot show truth labels.
+    if target is None:
+        return "test labels unavailable"
     # Build readable target/value pairs while skipping blank target cells.
     selected = [
         f"{name}: {int(value)}"
@@ -1694,7 +2018,7 @@ def format_known_labels(target: np.ndarray) -> str:
 
 
 def collect_case_examples(experiment: Experiment, loader: DataLoader, max_cases: int) -> list[dict]:
-    """Collect up to max_cases images, labels, and classifications without updating the model."""
+    """Collect up to max_cases images and classifications from labelled or unlabelled data."""
     # Put the model in evaluation mode so dropout is disabled.
     experiment.model.eval()
     # Prepare an output list of per-study review records.
@@ -1705,14 +2029,14 @@ def collect_case_examples(experiment: Experiment, loader: DataLoader, max_cases:
         for batch in loader:
             # Keep a CPU copy of study IDs before moving tensors to the device.
             study_uids = list(batch["study_uid"])
-            # Keep CPU tensors for image display and true labels.
+            # Keep CPU tensors for image display.
             cpu_volumes = batch["volumes"]
             # Keep CPU readable-series flags to select a real MRI image.
             cpu_present = batch["present"]
-            # Keep CPU targets for annotations and table rows.
-            cpu_targets = batch["target"]
+            # Keep CPU targets when this loader represents a labelled train or validation split.
+            cpu_targets = batch.get("target")
             # Move model inputs to the selected device.
-            volumes, present, metadata, position, _ = move_batch(batch)
+            volumes, present, metadata, position = move_model_inputs(batch)
             # Run a combined-logit inference pass.
             with autocast_context():
                 output = experiment.model(volumes, present, metadata, position)
@@ -1724,8 +2048,8 @@ def collect_case_examples(experiment: Experiment, loader: DataLoader, max_cases:
                 first_series = int(torch.nonzero(cpu_present[row] > 0, as_tuple=False)[0].item())
                 # Select the central sampled triplet and its middle channel for display.
                 image = cpu_volumes[row, first_series, experiment.config.slices_per_series // 2, 1].numpy()
-                # Copy targets into a NumPy row for stable later formatting.
-                target = cpu_targets[row].numpy().copy()
+                # Copy targets into a NumPy row only when labels are present.
+                target = None if cpu_targets is None else cpu_targets[row].numpy().copy()
                 # Copy predicted probabilities into a NumPy row.
                 probability = probabilities[row].copy()
                 # Save every element needed for plotting and the summary table.
@@ -1748,10 +2072,15 @@ def collect_case_examples(experiment: Experiment, loader: DataLoader, max_cases:
     return cases
 
 
-def show_case_examples(experiment: Experiment, max_cases: int = 12) -> pd.DataFrame:
-    """Plot up to 12 MRI examples with true labels and thresholded classifications."""
-    # Prefer validation examples when a validation split exists.
-    loader = experiment.validation_loader or experiment.train_loader
+def show_case_examples(
+    experiment: Experiment,
+    loader: DataLoader | None = None,
+    max_cases: int = 12,
+    title_prefix: str = "Case",
+) -> pd.DataFrame:
+    """Plot up to 12 labelled or test MRI examples with thresholded classifications."""
+    # Prefer validation examples when no explicit loader was supplied.
+    loader = loader or experiment.validation_loader or experiment.train_loader
     # Collect the requested examples and their predictions.
     cases = collect_case_examples(experiment, loader, max_cases)
     # Stop clearly if the selected loader contained no cases.
@@ -1771,8 +2100,8 @@ def show_case_examples(experiment: Experiment, max_cases: int = 12) -> pd.DataFr
         axis.imshow(case["image"], cmap="gray")
         # Hide axes because pixel coordinates are not part of the case review.
         axis.axis("off")
-        # Show the study ID above the MRI image.
-        axis.set_title(f"Study {case['StudyInstanceUID']}", fontsize=10)
+        # Show the split label and study ID above the MRI image.
+        axis.set_title(f"{title_prefix} study {case['StudyInstanceUID']}", fontsize=10)
         # Add known truth and thresholded classification below the image.
         axis.text(
             0.0,
@@ -1815,10 +2144,10 @@ def show_results(experiment: Experiment) -> pd.DataFrame:
     return table
 ''')
 
-markdown("## 11. Run the standalone workflow")
+markdown("## 11. Train on the extracted training subset and predict the extracted test subset")
 
 code(r'''
-# Build fresh loaders, a new model, and a new optimizer using only the Drive subset.
+# Build fresh local-training loaders, a new model, and a new optimizer.
 EXPERIMENT = build_experiment(PATHS, CONFIG)
 ''')
 
@@ -1829,7 +2158,7 @@ code(r'''
 PREFLIGHT = run_preflight(EXPERIMENT)
 ''')
 
-markdown("### 11b. Train, plot losses, review 12 classifications, and save")
+markdown("### 11b. Train, plot losses, review cases, predict test studies, and save")
 
 code(r'''
 # Keep training off until the preflight cell prints PASS.
@@ -1841,12 +2170,20 @@ if RUN_TRAINING:
     HISTORY = train_model(EXPERIMENT)
     # Plot the training and validation loss curves.
     plot_loss_history(EXPERIMENT)
-    # Plot up to twelve classified MRI examples and show their summary table.
-    CASE_TABLE = show_case_examples(EXPERIMENT, max_cases=12)
+    # Plot up to twelve labelled validation MRI examples and their classifications.
+    VALIDATION_CASE_TABLE = show_case_examples(EXPERIMENT, max_cases=12, title_prefix="Validation")
     # Display the numeric epoch history table.
     RESULTS = show_results(EXPERIMENT)
-    # Save this newly trained model and its JSON metadata to Drive.
-    RUN_DIRECTORY = save_results(EXPERIMENT)
+    # Build a local-DICOM loader for the separately extracted test subset.
+    TEST_LOADER = build_test_loader(TEST_PATHS, CONFIG)
+    # Generate one probability row and thresholded classification summary per test study.
+    TEST_PREDICTIONS = predict_test_set(EXPERIMENT, TEST_LOADER)
+    # Plot up to twelve unlabelled test MRI examples with their classifications.
+    TEST_CASE_TABLE = show_case_examples(
+        EXPERIMENT, loader=TEST_LOADER, max_cases=12, title_prefix="Test"
+    )
+    # Save this newly trained model, history, configuration, and test predictions to Drive.
+    RUN_DIRECTORY = save_results(EXPERIMENT, test_predictions=TEST_PREDICTIONS)
 ''')
 
 markdown(r"""
