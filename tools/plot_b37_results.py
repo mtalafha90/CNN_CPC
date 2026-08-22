@@ -120,12 +120,17 @@ def _gate_values(history: pd.DataFrame) -> np.ndarray:
     """Extract the twelve effective sparse-MIL gates from every epoch, if stored."""
     values: list[list[float]] = []
     for row in history.to_dict(orient="records"):
-        try:
-            gate = row["gate"]["head"]["gate_effective"]
-        except (KeyError, TypeError) as error:
+        gate_state = row.get("gate")
+        if not isinstance(gate_state, dict):
             raise B37ReportError(
                 "history.json does not contain B37 effective sparse-MIL gates"
-            ) from error
+            )
+        # B37 writes ``model.head.state()`` directly into each epoch row, so
+        # the current fixed-endpoint contract stores this field at the top
+        # level.  The nested form is accepted only for earlier report drafts.
+        gate = gate_state.get("gate_effective")
+        if gate is None and isinstance(gate_state.get("head"), dict):
+            gate = gate_state["head"].get("gate_effective")
         if not isinstance(gate, list) or len(gate) != len(TARGETS):
             raise B37ReportError(
                 "each history gate must contain one value for every B37 target"

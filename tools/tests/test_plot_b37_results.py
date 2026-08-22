@@ -22,7 +22,7 @@ def _history_row(epoch: int, gate: float) -> dict:
         "loss_total": 1.5 - epoch * 0.1,
         "loss_combined": 0.8 - epoch * 0.05,
         "loss_local_aux": 0.7 - epoch * 0.05,
-        "gate": {"head": {"gate_effective": [gate] * len(TARGETS)}},
+        "gate": {"gate_effective": [gate] * len(TARGETS)},
     }
 
 
