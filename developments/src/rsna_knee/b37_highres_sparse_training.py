@@ -10,6 +10,8 @@ No expert labels enter gradients, checkpoint selection, stopping, or tuning.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import gc
 import json
 import time
 from pathlib import Path
@@ -65,6 +67,97 @@ B37_GRAD_CLIP = 1.0
 B37_EQUIVALENCE_TOLERANCE = 2e-3
 B37_CONSTRUCTION_SEED_OFFSET = 47_000_000
 B37_LOADER_SEED_OFFSET = 47_100_000
+
+
+def _largest_series_indices(dataset, batch_size: int) -> tuple[int, ...]:
+    """Return a deterministic batch containing the largest series counts."""
+    if int(batch_size) < 1:
+        raise ValueError("B37 preflight batch size must be positive")
+    ranked = sorted(
+        range(len(dataset)),
+        key=lambda idx: (
+            -len(dataset.series_records[dataset.study_uids[idx]]),
+            str(dataset.study_uids[idx]),
+        ),
+    )
+    if len(ranked) < int(batch_size):
+        raise ValueError("B37 dataset is smaller than the preflight batch")
+    return tuple(ranked[: int(batch_size)])
+
+
+def _memory_state(runtime) -> dict[str, float]:
+    """Return process, host and CUDA memory telemetry in GiB."""
+    status: dict[str, int] = {}
+    try:
+        for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key in {"VmRSS", "VmHWM"}:
+                status[key] = int(value.strip().split()[0])
+    except (FileNotFoundError, OSError, ValueError):
+        pass
+
+    available_kib = 0
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemAvailable:"):
+                available_kib = int(line.split()[1])
+                break
+    except (FileNotFoundError, OSError, ValueError):
+        pass
+
+    gib = float(1024**2)
+    result = {
+        "rss_gib": float(status.get("VmRSS", 0)) / gib,
+        "rss_peak_gib": float(status.get("VmHWM", 0)) / gib,
+        "system_available_gib": float(available_kib) / gib,
+        "cuda_allocated_gib": 0.0,
+        "cuda_reserved_gib": 0.0,
+        "cuda_peak_allocated_gib": 0.0,
+        "cuda_peak_reserved_gib": 0.0,
+    }
+    if runtime.device.type == "cuda" and torch.cuda.is_available():
+        divisor = float(1024**3)
+        result.update(
+            {
+                "cuda_allocated_gib": torch.cuda.memory_allocated(runtime.device)
+                / divisor,
+                "cuda_reserved_gib": torch.cuda.memory_reserved(runtime.device)
+                / divisor,
+                "cuda_peak_allocated_gib": torch.cuda.max_memory_allocated(
+                    runtime.device
+                )
+                / divisor,
+                "cuda_peak_reserved_gib": torch.cuda.max_memory_reserved(
+                    runtime.device
+                )
+                / divisor,
+            }
+        )
+    return result
+
+
+def _format_memory_state(state: dict[str, float]) -> str:
+    return (
+        f"rss={state['rss_gib']:.2f}GiB "
+        f"rss_peak={state['rss_peak_gib']:.2f}GiB "
+        f"host_available={state['system_available_gib']:.2f}GiB "
+        f"cuda={state['cuda_allocated_gib']:.2f}/"
+        f"{state['cuda_reserved_gib']:.2f}GiB "
+        f"cuda_peak={state['cuda_peak_allocated_gib']:.2f}/"
+        f"{state['cuda_peak_reserved_gib']:.2f}GiB"
+    )
+
+
+def _trim_host_memory() -> None:
+    """Release unreachable Python objects and return free glibc arenas."""
+    gc.collect()
+    try:
+        malloc_trim = ctypes.CDLL(None).malloc_trim
+        malloc_trim.argtypes = [ctypes.c_size_t]
+        malloc_trim.restype = ctypes.c_int
+        malloc_trim(0)
+    except (AttributeError, OSError):
+        pass
 
 
 def _save_recovery(
@@ -128,14 +221,23 @@ def _preflight(
     scaler,
     aux_weight: float,
 ) -> None:
-    """One no-step forward/backward memory probe on the exact final batch shape."""
+    """One no-step forward/backward probe on the largest-series batch shape."""
     print("[B37 preflight] forward/backward only; no optimizer step", flush=True)
-    if torch.cuda.is_available():
+    if runtime.device.type == "cuda" and torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(runtime.device)
     model.train()
     model.zero_grad(set_to_none=True)
-    batch = next(iter(loader))
+    indices = _largest_series_indices(loader.dataset, B37_MICRO_BATCH)
+    items = [loader.dataset[idx] for idx in indices]
+    counts = [int(item["present"].shape[0]) for item in items]
+    batch = collate_b35(items)
+    del items
+    print(
+        f"[B37 preflight] worst-case series/study={counts} "
+        f"padded_series={int(batch['present'].shape[1])}",
+        flush=True,
+    )
     tensors = _move_batch(batch, runtime.device)
     volumes, _, present, meta, _, _ = tensors
     equivalence = model.base_equivalence_error_448(volumes, present, meta)
@@ -172,15 +274,10 @@ def _preflight(
         f"local={local.detach().item():.6f}",
         flush=True,
     )
-    if torch.cuda.is_available():
-        peak_alloc = torch.cuda.max_memory_allocated(runtime.device) / (1024**3)
-        peak_reserved = torch.cuda.max_memory_reserved(runtime.device) / (1024**3)
-        print(
-            f"[B37 preflight] CUDA peak allocated={peak_alloc:.2f} GiB "
-            f"reserved={peak_reserved:.2f} GiB",
-            flush=True,
-        )
+    print(f"[B37 preflight] {_format_memory_state(_memory_state(runtime))}", flush=True)
     model.zero_grad(set_to_none=True)
+    del _, batch, tensors, volumes, present, meta, total, combined, local
+    _trim_host_memory()
     print("[B37 preflight] PASS", flush=True)
 
 
@@ -333,6 +430,8 @@ def train_b37(
 
     for epoch in range(1, B37_EPOCHS + 1):
         started = time.monotonic()
+        if runtime.device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(runtime.device)
         model.train()
         total_sum = combined_sum = local_sum = 0.0
         batches = studies_seen = series_seen = cells_seen = 0
@@ -399,17 +498,44 @@ def train_b37(
             series_seen += int(present.sum().item())
             cells_seen += int(active.sum().item())
 
-            if step % 50 == 0:
+            report_progress = step % 50 == 0
+            if report_progress:
                 elapsed = (time.monotonic() - started) / 60.0
                 rate = elapsed / step
                 remaining = rate * (len(loader) - step)
+                gate_abs_mean = (
+                    model.head.effective_gate().detach().abs().mean().item()
+                )
+
+            # Drop the completed batch before DataLoader constructs the next
+            # variable-size batch.  Otherwise the previous padded 448 tensor
+            # can overlap the next allocation and double host-memory pressure.
+            del (
+                batch,
+                tensors,
+                volumes,
+                present,
+                meta,
+                target,
+                weight,
+                out,
+                total,
+                combined,
+                local,
+                active,
+            )
+
+            if report_progress:
+                _trim_host_memory()
+                memory = _memory_state(runtime)
                 print(
                     f"[B37] E{epoch} {step}/{len(loader)} "
                     f"total={total_sum/batches:.4f} "
                     f"combined={combined_sum/batches:.4f} "
                     f"local={local_sum/batches:.4f} "
-                    f"gate_abs_mean={model.head.effective_gate().detach().abs().mean().item():.4f} "
-                    f"elapsed={elapsed:.1f} min remaining~{remaining:.1f} min",
+                    f"gate_abs_mean={gate_abs_mean:.4f} "
+                    f"elapsed={elapsed:.1f} min remaining~{remaining:.1f} min "
+                    f"{_format_memory_state(memory)}",
                     flush=True,
                 )
 
@@ -434,6 +560,7 @@ def train_b37(
             "gate": model.head.state(),
             "encoder_sha256": encoder_state_sha256(model.base.encoder),
             "epoch_seconds": float(time.monotonic() - started),
+            "memory": _memory_state(runtime),
         }
         history.append(row)
         print(

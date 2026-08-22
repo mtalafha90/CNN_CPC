@@ -55,7 +55,8 @@ class RuntimeConfig:
         precision = {torch.bfloat16: "bf16", torch.float16: "fp16", None: "fp32"}[self.amp_dtype]
         return (
             f"device={self.device_name} | single-gpu | precision={precision} | "
-            f"workers={self.num_workers} | visible_gpus={self.visible_gpus}"
+            f"workers={self.num_workers} | pin_memory={self.pin_memory} | "
+            f"visible_gpus={self.visible_gpus}"
         )
 
     def loader_kwargs(self, *, seed: int | None = None) -> dict:
@@ -161,12 +162,13 @@ def resolve_runtime(config: dict | None = None) -> RuntimeConfig:
     if context not in {None, "spawn", "fork", "forkserver"}:
         raise ValueError("multiprocessing_context must be spawn, fork, forkserver, or null")
 
+    pin_memory = bool(config.get("pin_memory", use_cuda)) and use_cuda
     return RuntimeConfig(
         device=device,
         amp_dtype=amp_dtype,
         use_scaler=use_scaler,
         num_workers=default_workers(config.get("num_workers")),
-        pin_memory=use_cuda,
+        pin_memory=pin_memory,
         persistent_workers=bool(config.get("persistent_workers", True)),
         prefetch_factor=prefetch,
         visible_gpus=visible,

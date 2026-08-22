@@ -18,12 +18,15 @@ precision: auto
 runtime_budget_hours: 8.5
 runtime_reserve_minutes: 10
 
-# Host-memory safety established by the completed B35/B36 runs.
-num_workers: 2
+# B37's first endpoint attempt was killed by systemd-oomd after the terminal
+# scope reached 22.3 GiB under sustained memory pressure.  Keep the scientific
+# micro-batch at two, but remove worker-prefetch duplication and pinned buffers.
+num_workers: 0
+pin_memory: false
 persistent_workers: false
 prefetch_factor: 1
 multiprocessing_context: spawn
-series_cache_mb_per_worker: 64
+series_cache_mb_per_worker: 0
 strict_dicom: false
 strict_dicom_inference: true
 

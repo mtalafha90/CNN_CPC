@@ -7,6 +7,16 @@
 B37 is frozen before its first expert-58 result.  It is a joint mechanism test,
 not a clean ablation of resolution alone.
 
+The first training attempt on 2026-08-22 was externally killed by
+`systemd-oomd` during epoch 1 at step 1,650/2,175.  The terminal cgroup had
+reached 22.3 GiB under sustained memory pressure.  No epoch completed, no
+checkpoint was written and no expert evaluation was performed, so this was an
+infrastructure interruption rather than an experimental result.  The relaunch
+retains the frozen scientific protocol and seed while disabling worker prefetch
+and pinned host buffers.  Completed variable-size batches are explicitly
+released before the next batch is constructed, and free host arenas are trimmed
+at each 50-step telemetry point.
+
 ## Why this experiment exists
 
 The completed native-DICOM audit inspected 24,371 training series and 819,078
@@ -102,7 +112,9 @@ this does not reintroduce B35's dense-softmax dilution mechanism.
 ## Memory preflight
 
 Do not launch the fixed two-epoch run before the exact forward/backward preflight
-passes on the intended RTX A4500 configuration.
+passes on the intended RTX A4500 configuration.  The preflight deterministically
+selects the two studies with the largest eligible-series counts, so it exercises
+the worst-case padded 14-series micro-batch rather than an arbitrary first batch.
 
 ```bash
 cd /media/talafha/Disk_1/CNN_CPC
@@ -120,8 +132,10 @@ python -m rsna_knee.b37_highres_sparse_training \
 ```
 
 The preflight performs one real forward/backward pass but **no optimizer step**.
-A later training launch starts from a fresh process/seed and therefore remains the
-prospective endpoint.
+It reports process RSS, available host memory, and current/peak CUDA memory.
+A later training launch starts from a fresh process/seed and therefore remains
+the prospective endpoint.  Training reports the same memory telemetry every 50
+steps.
 
 ## Primary expert-58 decision rule
 

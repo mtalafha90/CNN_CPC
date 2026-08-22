@@ -34,6 +34,12 @@ def test_cpu_runs_in_fp32(monkeypatch):
     assert runtime.amp_dtype is None and runtime.use_scaler is False and runtime.pin_memory is False
 
 
+def test_cpu_cannot_enable_pin_memory(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    runtime = resolve_runtime({"device": "cpu", "pin_memory": True})
+    assert runtime.pin_memory is False
+
+
 def test_requested_gpus_must_be_one(monkeypatch):
     monkeypatch.setenv("WORLD_SIZE", "1")
     with pytest.raises(ValueError, match="requested_gpus must be 1"):
@@ -107,6 +113,7 @@ def test_describe_mentions_single_gpu_and_workers(monkeypatch):
     monkeypatch.setenv("WORLD_SIZE", "1")
     text = resolve_runtime({"device": "cpu", "num_workers": 5}).describe()
     assert "fp32" in text and "workers=5" in text and "single-gpu" in text
+    assert "pin_memory=False" in text
 
 
 def test_runtime_config_is_constructible_directly():
