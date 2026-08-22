@@ -493,7 +493,25 @@ def load_phase9_checkpoint(
     if int(payload.get("encoder_trainable_stages", 0)) == 0 and initial_sha != final_sha:
         raise ValueError("Phase-9 checkpoint encoder fingerprint changed")
 
-    model = build_b34_model(payload["model_spec"], pretrained_weights=False)
+    spec = payload["model_spec"]
+    model = build_b34_model(spec, pretrained_weights=False)
+    # A DINO checkpoint stores a replacement encoder rather than the original
+    # ConvNeXtSliceEncoder.  Recreate that module before loading its state so
+    # strict loading and the final fingerprint verify the checkpoint actually
+    # used at training time.  `pretrained_weights=False` is deliberate: the
+    # checkpoint supplies every encoder weight and evaluation must not download
+    # or substitute a newer external model.
+    encoder_source = str(
+        spec.get("encoder_source", payload.get("encoder_source", "report-aligned"))
+    )
+    if encoder_source == "dinov3":
+        encoder_description = payload.get("encoder", {})
+        variant = (
+            encoder_description.get("variant")
+            if isinstance(encoder_description, dict)
+            else None
+        ) or spec.get("dinov3_variant") or "tiny"
+        attach_dinov3_encoder(model, variant=str(variant), pretrained_weights=False)
     model.load_state_dict(payload["model_state"], strict=True)
     freeze_encoder(model)
     # The state dict holds the encoder as it ended, which equals the initial
