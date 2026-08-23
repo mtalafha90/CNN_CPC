@@ -318,6 +318,7 @@ def generate_b37_sparse_mil_submission(
     submission_version: str = B37_VERSION,
     endpoint_name: str = "B37",
     min_reserve_minutes: float = B37_SUBMISSION_MIN_RESERVE_MINUTES,
+    timing_safety_factor: float = 1.35,
     preflight_only: bool = False,
     governance: str | None = None,
 ) -> Path | None:
@@ -328,6 +329,8 @@ def generate_b37_sparse_mil_submission(
     offsets = tuple(int(value) for value in tta_offsets)
     if not offsets:
         raise ValueError("a sparse-MIL submission requires at least one TTA offset")
+    if float(timing_safety_factor) < 1.0:
+        raise ValueError("timing_safety_factor must be at least one")
     crop_policy = _require_sparse_mil_submission_contract(
         config,
         expected_offsets=offsets,
@@ -412,6 +415,7 @@ def generate_b37_sparse_mil_submission(
         projected_seconds = projected_remaining_seconds(
             study_times,
             remaining_studies=remaining_before,
+            safety_factor=float(timing_safety_factor),
         )
         budget.require(
             projected_seconds,
@@ -468,6 +472,7 @@ def generate_b37_sparse_mil_submission(
             remaining = projected_remaining_seconds(
                 study_times,
                 remaining_studies=len(loader) - completed,
+                safety_factor=float(timing_safety_factor),
             )
             print(
                 f"[{endpoint_name} submit] {completed}/{len(loader)} "
@@ -538,6 +543,7 @@ def generate_b37_sparse_mil_submission(
             "per-study full wall time: DICOM/DataLoader materialization, device "
             "transfer, all TTA views, inference, and memory release"
         ),
+        "timing_safety_factor": float(timing_safety_factor),
         "submission_sha256": sha256_file(output_path),
         "governance": governance
         or (
@@ -581,6 +587,7 @@ def generate_b37_submission(
         submission_version=B37_VERSION,
         endpoint_name="B37",
         min_reserve_minutes=B37_SUBMISSION_MIN_RESERVE_MINUTES,
+        timing_safety_factor=1.35,
     )
     if output is None:
         raise RuntimeError("B37 submission unexpectedly returned from preflight")
