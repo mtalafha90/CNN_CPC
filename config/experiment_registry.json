@@ -880,7 +880,7 @@
       "slug": "highres_448_sparse_mil",
       "title": "High-resolution 448 pathology-specific sparse-MIL test",
       "category": "model",
-      "status": "running",
+      "status": "completed_kaggle_0.714",
       "introduced_commit": "cb4198f",
       "active_protocol_commit": "9395665",
       "superseded_protocol": "B37-288 was implemented but never run and was superseded after the native-resolution audit.",
@@ -908,10 +908,22 @@
       "slug": "highres_448_global_tail_ablation",
       "title": "448 high-resolution global-tail ablation",
       "category": "model",
-      "status": "implemented_not_run",
+      "status": "completed_not_promoted",
       "introduced_commit": "c240267",
       "run_patterns": [
         "b38_highres_global_tail"
+      ]
+    },
+    {
+      "number": 74,
+      "code": "B39",
+      "slug": "b37_five_offset_tta",
+      "title": "Five-offset inference refinement of frozen B37",
+      "category": "inference",
+      "status": "implemented_not_run",
+      "introduced_commit": "5a9d4ad",
+      "run_patterns": [
+        "b39_b37_five_offset_tta"
       ]
     }
   ],
