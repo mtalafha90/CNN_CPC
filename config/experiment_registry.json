@@ -937,6 +937,18 @@
       "run_patterns": [
         "b40_b37_e2_continuation"
       ]
+    },
+    {
+      "number": 76,
+      "code": "B41",
+      "slug": "native_aspect_90crop_sparse_mil",
+      "title": "Native-aspect-preserving 90% crop sparse-MIL ablation",
+      "category": "preprocessing",
+      "status": "implemented_not_run",
+      "introduced_commit": "pending",
+      "run_patterns": [
+        "b41_highres_aspect_sparse_mil"
+      ]
     }
   ],
   "shared_groups": [

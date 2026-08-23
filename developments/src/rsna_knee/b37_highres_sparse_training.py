@@ -166,11 +166,12 @@ def _save_recovery(
     epoch: int,
     model: B37HighResSparseMILResidual,
     history: list[dict],
+    version: str = B37_VERSION,
 ) -> None:
     out.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
-            "version": B37_VERSION,
+            "version": str(version),
             "epoch": int(epoch),
             "fixed_endpoint": False,
             "model_selection_allowed": False,
@@ -220,21 +221,24 @@ def _preflight(
     multiplier_t,
     scaler,
     aux_weight: float,
+    *,
+    micro_batch: int = B37_MICRO_BATCH,
+    run_tag: str = "B37",
 ) -> None:
     """One no-step forward/backward probe on the largest-series batch shape."""
-    print("[B37 preflight] forward/backward only; no optimizer step", flush=True)
+    print(f"[{run_tag} preflight] forward/backward only; no optimizer step", flush=True)
     if runtime.device.type == "cuda" and torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(runtime.device)
     model.train()
     model.zero_grad(set_to_none=True)
-    indices = _largest_series_indices(loader.dataset, B37_MICRO_BATCH)
+    indices = _largest_series_indices(loader.dataset, int(micro_batch))
     items = [loader.dataset[idx] for idx in indices]
     counts = [int(item["present"].shape[0]) for item in items]
     batch = collate_b35(items)
     del items
     print(
-        f"[B37 preflight] worst-case series/study={counts} "
+        f"[{run_tag} preflight] worst-case series/study={counts} "
         f"padded_series={int(batch['present'].shape[1])}",
         flush=True,
     )
@@ -242,12 +246,12 @@ def _preflight(
     volumes, _, present, meta, _, _ = tensors
     equivalence = model.base_equivalence_error_448(volumes, present, meta)
     print(
-        f"[B37 preflight] reconstructed 448 B34 max|delta|={equivalence:.8g}",
+        f"[{run_tag} preflight] reconstructed 448 B34 max|delta|={equivalence:.8g}",
         flush=True,
     )
     if equivalence > B37_EQUIVALENCE_TOLERANCE:
         raise RuntimeError(
-            f"B37 448 reconstruction guard failed: {equivalence}"
+            f"{run_tag} 448 reconstruction guard failed: {equivalence}"
         )
     _, total, combined, local = _losses(
         model,
@@ -267,18 +271,23 @@ def _preflight(
         and torch.count_nonzero(model.head.evidence_weight.grad).item() > 0
     )
     if not encoder_grad or not evidence_grad:
-        raise RuntimeError("B37 preflight did not reach encoder tail and sparse evidence head")
+        raise RuntimeError(
+            f"{run_tag} preflight did not reach encoder tail and sparse evidence head"
+        )
     print(
-        f"[B37 preflight] total={total.detach().item():.6f} "
+        f"[{run_tag} preflight] total={total.detach().item():.6f} "
         f"combined={combined.detach().item():.6f} "
         f"local={local.detach().item():.6f}",
         flush=True,
     )
-    print(f"[B37 preflight] {_format_memory_state(_memory_state(runtime))}", flush=True)
+    print(
+        f"[{run_tag} preflight] {_format_memory_state(_memory_state(runtime))}",
+        flush=True,
+    )
     model.zero_grad(set_to_none=True)
     del _, batch, tensors, volumes, present, meta, total, combined, local
     _trim_host_memory()
-    print("[B37 preflight] PASS", flush=True)
+    print(f"[{run_tag} preflight] PASS", flush=True)
 
 
 def train_b37(
@@ -290,15 +299,33 @@ def train_b37(
     base_checkpoint: str | Path,
     out_root: str | Path = B37_RUN_ROOT,
     preflight_only: bool = False,
+    dataset_class=B37HighResSparseDataset,
+    contract_validator=require_b37_sparse_contract,
+    experiment_name: str = B37_EXPERIMENT,
+    version: str = B37_VERSION,
+    run_tag: str = "B37",
+    checkpoint_filename: str = "b37_model.pt",
+    construction_seed_offset: int = B37_CONSTRUCTION_SEED_OFFSET,
+    loader_seed_offset: int = B37_LOADER_SEED_OFFSET,
+    joint_hypothesis: str | None = None,
+    preprocessing: dict | None = None,
+    governance: str | None = None,
 ) -> Path | None:
+    """Train a fixed B37-compatible sparse-MIL endpoint.
+
+    B37 uses every default above.  Later isolated ablations may supply a
+    dataset class and checkpoint metadata while reusing this audited training
+    harness, so memory controls, optimization, and coverage checks remain
+    identical rather than drifting through a copied training loop.
+    """
     config = dict(config)
     config["data_root"] = str(Path(data_root).resolve())
-    crop_policy = require_b37_sparse_contract(config)
+    crop_policy = contract_validator(config)
     if int(config.get("b37_micro_batch", B37_MICRO_BATCH)) != B37_MICRO_BATCH:
-        raise ValueError(f"B37 freezes micro-batch={B37_MICRO_BATCH}")
+        raise ValueError(f"{run_tag} freezes micro-batch={B37_MICRO_BATCH}")
 
     seed = int(config.get("seed", 2026))
-    seed_everything(seed + B37_CONSTRUCTION_SEED_OFFSET)
+    seed_everything(seed + int(construction_seed_offset))
     runtime = resolve_runtime(config)
     print(runtime.describe(), flush=True)
 
@@ -359,7 +386,7 @@ def train_b37(
 
     dataset_config = make_b7_dataset_config(config, root, train=False)
     dataset_config.tta_center_offsets = ()
-    ds = B37HighResSparseDataset(
+    ds = dataset_class(
         uids,
         variable_index,
         dataset_config,
@@ -374,7 +401,7 @@ def train_b37(
         shuffle=True,
         drop_last=False,
         collate_fn=collate_b35,
-        **runtime.loader_kwargs(seed=seed + B37_LOADER_SEED_OFFSET),
+        **runtime.loader_kwargs(seed=seed + int(loader_seed_offset)),
     )
 
     model = B37HighResSparseMILResidual(
@@ -420,7 +447,16 @@ def train_b37(
     clip = float(config.get("b37_grad_clip", B37_GRAD_CLIP))
 
     if preflight_only:
-        _preflight(model, loader, runtime, multiplier_t, scaler, aux_weight)
+        _preflight(
+            model,
+            loader,
+            runtime,
+            multiplier_t,
+            scaler,
+            aux_weight,
+            micro_batch=B37_MICRO_BATCH,
+            run_tag=run_tag,
+        )
         return None
 
     out_root = Path(out_root)
@@ -447,11 +483,11 @@ def train_b37(
                     meta,
                 )
                 print(
-                    f"[B37] reconstructed 448 B34 max|delta|={equivalence_error:.8g}",
+                    f"[{run_tag}] reconstructed 448 B34 max|delta|={equivalence_error:.8g}",
                     flush=True,
                 )
                 if equivalence_error > B37_EQUIVALENCE_TOLERANCE:
-                    raise RuntimeError("B37 reconstructed B34 guard failed")
+                    raise RuntimeError(f"{run_tag} reconstructed B34 guard failed")
 
             optimizer.zero_grad(set_to_none=True)
             out, total, combined, local = _losses(
@@ -529,7 +565,7 @@ def train_b37(
                 _trim_host_memory()
                 memory = _memory_state(runtime)
                 print(
-                    f"[B37] E{epoch} {step}/{len(loader)} "
+                    f"[{run_tag}] E{epoch} {step}/{len(loader)} "
                     f"total={total_sum/batches:.4f} "
                     f"combined={combined_sum/batches:.4f} "
                     f"local={local_sum/batches:.4f} "
@@ -540,13 +576,13 @@ def train_b37(
                 )
 
         if studies_seen != REPORT_ONLY_STUDIES:
-            raise RuntimeError("B37 epoch did not cover all report-only studies")
+            raise RuntimeError(f"{run_tag} epoch did not cover all report-only studies")
         if series_seen != B35_EXPECTED_SERIES:
-            raise RuntimeError("B37 epoch did not cover all expected MRI series")
+            raise RuntimeError(f"{run_tag} epoch did not cover all expected MRI series")
         if cells_seen != B35_EXPECTED_CELLS:
-            raise RuntimeError("B37 epoch did not cover all supervision cells")
+            raise RuntimeError(f"{run_tag} epoch did not cover all supervision cells")
         if not (gate_gradient_seen and evidence_gradient_seen and encoder_gradient_seen):
-            raise RuntimeError("B37 required gradient path was not active")
+            raise RuntimeError(f"{run_tag} required gradient path was not active")
 
         row = {
             "epoch": epoch,
@@ -564,28 +600,54 @@ def train_b37(
         }
         history.append(row)
         print(
-            f"[B37] E{epoch} total={row['loss_total']:.10f} "
+            f"[{run_tag}] E{epoch} total={row['loss_total']:.10f} "
             f"combined={row['loss_combined']:.10f} "
             f"local={row['loss_local_aux']:.10f} "
             f"time={row['epoch_seconds']/60:.1f} min",
             flush=True,
         )
-        _save_recovery(out_root, epoch=epoch, model=model, history=history)
+        _save_recovery(
+            out_root,
+            epoch=epoch,
+            model=model,
+            history=history,
+            version=version,
+        )
 
     encoder_final_sha = encoder_state_sha256(model.base.encoder)
     if encoder_final_sha == encoder_initial_sha:
-        raise RuntimeError("B37 encoder tail was trainable but encoder fingerprint did not move")
+        raise RuntimeError(
+            f"{run_tag} encoder tail was trainable but encoder fingerprint did not move"
+        )
 
-    checkpoint = out_root / "b37_model.pt"
-    payload = {
-        "experiment": B37_EXPERIMENT,
-        "version": B37_VERSION,
-        "fixed_endpoint": True,
-        "completed_epochs": B37_EPOCHS,
-        "joint_hypothesis": (
+    checkpoint = out_root / str(checkpoint_filename)
+    if joint_hypothesis is None:
+        joint_hypothesis = (
             "higher in-plane information plus B36 sparse pathology-specific MIL, "
             "with limited final-stage ConvNeXt adaptation"
-        ),
+        )
+    if preprocessing is None:
+        preprocessing = {
+            "normalization": "full native volume before crop",
+            "crop_fraction": 0.90,
+            "crop_stage": "native resolution before deterministic resize",
+            "image_size": 448,
+            "deterministic_resize_count": 1,
+            "resize": "bilinear antialias=True align_corners=False",
+        }
+    if governance is None:
+        governance = (
+            "Prospective joint B37 endpoint. Expert58 is reused diagnostic only. "
+            "Do not tune resolution, grid size, top-k, crop fraction, target subset, "
+            "or epoch after observing expert58. Hidden competition evidence is required "
+            "for promotion."
+        )
+    payload = {
+        "experiment": str(experiment_name),
+        "version": str(version),
+        "fixed_endpoint": True,
+        "completed_epochs": B37_EPOCHS,
+        "joint_hypothesis": str(joint_hypothesis),
         "base_checkpoint": str(base_path),
         "base_checkpoint_sha256": sha256_file(base_path),
         "base_payload_experiment": base_payload.get("experiment"),
@@ -595,7 +657,7 @@ def train_b37(
         "encoder_sha256_initial": encoder_initial_sha,
         "encoder_sha256_final": encoder_final_sha,
         "head_lr": head_lr,
-        "encoder_lr": head_lr * B37_ENCODER_LR_SCALE,
+        "encoder_lr": head_lr * encoder_scale,
         "local_aux_weight": aux_weight,
         "base_reconstruction_448_max_abs_error": float(equivalence_error or 0.0),
         "training_studies": REPORT_ONLY_STUDIES,
@@ -604,14 +666,7 @@ def train_b37(
         "gold_studies_used_in_gradient": 0,
         "gold_labels_used": False,
         "checkpoint_selection": "none; fixed epoch 2",
-        "preprocessing": {
-            "normalization": "full native volume before crop",
-            "crop_fraction": 0.90,
-            "crop_stage": "native resolution before deterministic resize",
-            "image_size": 448,
-            "deterministic_resize_count": 1,
-            "resize": "bilinear antialias=True align_corners=False",
-        },
+        "preprocessing": preprocessing,
         "sparse_mil": {
             "dense_slices": 32,
             "grid_size": int(model.head.grid_size),
@@ -630,12 +685,7 @@ def train_b37(
         "series_surface": series_summary,
         "metadata_repair": metadata_stats,
         "history": history,
-        "governance": (
-            "Prospective joint B37 endpoint. Expert58 is reused diagnostic only. "
-            "Do not tune resolution, grid size, top-k, crop fraction, target subset, "
-            "or epoch after observing expert58. Hidden competition evidence is required "
-            "for promotion."
-        ),
+        "governance": str(governance),
     }
     torch.save(payload, checkpoint)
     audit = {k: v for k, v in payload.items() if k not in {"base_state", "head_state"}}

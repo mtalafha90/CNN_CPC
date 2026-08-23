@@ -65,19 +65,31 @@ def load_b37_checkpoint(
     *,
     base_checkpoint: str | Path,
     device,
+    expected_version: str = B37_VERSION,
+    expected_experiment: str | None = None,
+    checkpoint_label: str = "B37",
 ):
+    """Load a fixed sparse-MIL checkpoint using B37's shared architecture.
+
+    B37 supplies the defaults.  A later isolated preprocessing ablation can
+    request its own immutable checkpoint identity while reusing the exact same
+    sparse-MIL model reconstruction, avoiding a second checkpoint loader that
+    might drift from the B37/B40 compatibility contract.
+    """
     checkpoint = Path(path).resolve()
     payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    if payload.get("version") != B37_VERSION:
-        raise ValueError("not a B37 high-resolution sparse-MIL checkpoint")
+    if payload.get("version") != str(expected_version):
+        raise ValueError(f"not a {checkpoint_label} high-resolution sparse-MIL checkpoint")
+    if expected_experiment is not None and payload.get("experiment") != str(expected_experiment):
+        raise ValueError(f"{checkpoint_label} checkpoint experiment identity changed")
     if bool(payload.get("fixed_endpoint")) is not True or int(payload.get("completed_epochs", -1)) != 2:
-        raise ValueError("B37 evaluation requires the complete fixed-E2 checkpoint")
+        raise ValueError(f"{checkpoint_label} evaluation requires the complete fixed-E2 checkpoint")
     if int(payload.get("gold_studies_used_in_gradient", -1)) != 0:
-        raise ValueError("B37 checkpoint unexpectedly used expert labels")
+        raise ValueError(f"{checkpoint_label} checkpoint unexpectedly used expert labels")
 
     base_path = Path(base_checkpoint).resolve()
     if sha256_file(base_path) != str(payload.get("base_checkpoint_sha256", "")):
-        raise ValueError("B37 base checkpoint fingerprint mismatch")
+        raise ValueError(f"{checkpoint_label} base checkpoint fingerprint mismatch")
     base, _ = load_phase9_checkpoint(
         base_path,
         expected_arm="llm_fill",
@@ -130,14 +142,25 @@ def _base_loader(config: dict, root: Path, uids: list[str], index: dict, truth: 
     return loader, runtime
 
 
-def _candidate_loader(config: dict, root: Path, uids: list[str], index: dict, truth: np.ndarray):
+def _candidate_loader(
+    config: dict,
+    root: Path,
+    uids: list[str],
+    index: dict,
+    truth: np.ndarray,
+    *,
+    dataset_class=B37HighResSparseDataset,
+    contract_validator=require_b37_sparse_contract,
+    loader_seed_offset: int = 47_300_000,
+):
+    """Build a fixed sparse-MIL Expert-58 loader, defaulting exactly to B37."""
     cfg = dict(config)
     cfg["b7_eval_batch_size"] = 1
     runtime = resolve_runtime(cfg)
-    policy = require_b37_sparse_contract(cfg)
+    policy = contract_validator(cfg)
     dcfg = make_b7_dataset_config(cfg, root, train=False)
     dcfg.tta_center_offsets = ()
-    ds = B37HighResSparseDataset(
+    ds = dataset_class(
         uids,
         index,
         dcfg,
@@ -150,7 +173,9 @@ def _candidate_loader(config: dict, root: Path, uids: list[str], index: dict, tr
         batch_size=1,
         shuffle=False,
         collate_fn=collate_b35,
-        **runtime.loader_kwargs(seed=int(config.get("seed", 2026)) + 47_300_000),
+        **runtime.loader_kwargs(
+            seed=int(config.get("seed", 2026)) + int(loader_seed_offset)
+        ),
     )
     return loader, runtime
 

@@ -1,7 +1,8 @@
 """Generate the standalone Google Colab knee-MRI subset notebook.
 
 The generated notebook contains every class and function it uses.  It trains a
-new high-resolution sparse-MIL model from the data stored in Google Drive.
+new high-resolution sparse-MIL model from the data stored in Google Drive and
+uses B41's aspect-preserving native-geometry preprocessing policy.
 """
 from __future__ import annotations
 
@@ -58,8 +59,14 @@ def build(path: Path) -> Path:
     return path
 
 
+markdown(
+    '<a href="https://colab.research.google.com/github/mtalafha90/CNN_CPC/blob/main/notebook/knee_mri_model.ipynb" '
+    'target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" '
+    'alt="Open In Colab"/></a>'
+)
+
 markdown(r"""
-# Standalone high-resolution sparse-MIL knee MRI training
+# Standalone B37-informed, B41-geometry high-resolution sparse-MIL knee MRI training
 
 This is a self-contained Google Colab notebook for a small MRI subset on
 Google Drive. It creates a new model directly from the CSV labels and DICOM
@@ -73,15 +80,33 @@ DICOM volume
 → percentile normalisation
 → 32 deterministic 2.5D triplets per MRI series
 → native 90% centre crop
-→ one antialiased 448×448 resize
+→ one antialiased aspect-preserving resize-to-fit
+→ symmetric zero padding to a 448×448 canvas
 → 6×6 local feature grid
 → target-specific top-k sparse multiple-instance pooling
 ```
 
 The default configuration is deliberately conservative for a small Colab GPU:
-one study per batch, no loader workers, no pinned host memory, and no more than
-six MRI series per study. The notebook includes a no-update preflight before
-training, a loss plot, and a review of 12 classified cases.
+one study per batch, no loader workers, no pinned host memory, no more than six
+MRI series per study, and B37's fixed two training epochs. The notebook includes
+a no-update preflight before training, a loss plot, and a review of 12
+classified cases.
+""")
+
+markdown(r"""
+## B37 reference result and notebook scope
+
+The completed full-data B37 endpoint achieved a **Kaggle leaderboard score of
+0.714**. Its fixed training contract used 4,349 report-only studies, 24,035 MRI
+series, 34,010 supervision cells, a 448×448 input, 32 slice centres, a 6×6 local
+grid, top-k=8 pooling, and exactly two epochs.
+
+This standalone notebook creates a newly initialized, compact model from the
+supplied subset. It does **not** load B37/B41 weights, previous experiments, or
+any checkpoint. It adopts B41's native-aspect geometry policy—crop 90% at native
+resolution, resize to fit once, then pad—because the dataset contains real
+rectangular series such as 640×1280. Subset hold-out AUC is therefore useful for
+checking learning, not for claiming a direct comparison with B37's 0.714 score.
 """)
 
 markdown(r"""
@@ -219,6 +244,49 @@ print("device:", DEVICE)
 # Print the concrete GPU name when CUDA is available.
 if torch.cuda.is_available():
     print("GPU:", torch.cuda.get_device_name(0))
+''')
+
+code(r'''
+@dataclass(frozen=True)
+class B37Reference:
+    """Record the completed B37 result without loading B37 weights."""
+
+    # Store the historical experiment name for transparent result tracking.
+    experiment: str = "B37 high-resolution 448 sparse-MIL"
+    # Store the verified Kaggle leaderboard score as a reference value.
+    kaggle_score: float = 0.714
+    # State the metric source so it is never confused with subset validation.
+    evaluation: str = "Kaggle leaderboard score"
+    # Record the fixed B37 image size.
+    image_size: int = 448
+    # Record the deterministic number of slice centres per MRI series.
+    slice_centres: int = 32
+    # Record the local evidence-grid side length.
+    grid_size: int = 6
+    # Record the number of local evidence tokens retained per target.
+    top_k: int = 8
+    # Record the fixed completed B37 training duration.
+    epochs: int = 2
+    # Explain why a newly trained subset model cannot reproduce the score directly.
+    scope: str = "Reference only; this notebook trains fresh compact subset weights."
+
+
+# Create the immutable B37 reference used by display and saved-result functions.
+B37_REFERENCE = B37Reference()
+
+
+def display_b37_reference() -> pd.DataFrame:
+    """Display the verified B37 result and the separate subset-model scope."""
+    # Convert the immutable reference dataclass into a one-row table.
+    table = pd.DataFrame([asdict(B37_REFERENCE)])
+    # Render the table clearly in a Colab output cell.
+    display(table)
+    # Return the table for optional later inspection or saving.
+    return table
+
+
+# Show the result context before data loading and model construction.
+B37_REFERENCE_TABLE = display_b37_reference()
 ''')
 
 markdown("## 4. Mount Drive, copy both archives locally, and define the run configuration")
@@ -380,6 +448,10 @@ class RunConfig:
     triplet_gap: int = 1
     # Retain the central 90 percent of each native-resolution image.
     crop_fraction: float = 0.90
+    # Preserve each cropped matrix's aspect ratio while fitting it into the square canvas.
+    resize_policy: str = "aspect_preserving_pad"
+    # Use normalized black pixels for the symmetric margins added after resize-to-fit.
+    pad_value: float = 0.0
     # Pool local encoder features into a 6 by 6 evidence grid.
     grid_size: int = 6
     # Retain the top eight local evidence tokens for every target.
@@ -396,8 +468,8 @@ class RunConfig:
     num_workers: int = 0
     # Reserve twenty percent of usable labelled studies for validation.
     validation_fraction: float = 0.20
-    # Run three epochs by default for a small-subset smoke run.
-    epochs: int = 3
+    # Run B37's fixed two-epoch duration by default; this is not a B37 reproduction.
+    epochs: int = 2
     # Set the AdamW learning rate.
     learning_rate: float = 1e-4
     # Set the AdamW weight decay.
@@ -725,27 +797,24 @@ def dicom_sort_key(dataset) -> float:
         return float(getattr(dataset, "InstanceNumber", 0))
 
 
-def pad_or_crop(image: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
-    """Centre-pad or centre-crop one image to a common in-plane matrix."""
-    # Allocate the output matrix with zeros outside the copied source region.
-    output = np.zeros(target_shape, dtype=image.dtype)
-    # Choose the overlapping row count.
-    rows = min(image.shape[0], target_shape[0])
-    # Choose the overlapping column count.
-    cols = min(image.shape[1], target_shape[1])
-    # Center the source rows.
-    src_r = (image.shape[0] - rows) // 2
-    # Center the source columns.
-    src_c = (image.shape[1] - cols) // 2
-    # Center the destination rows.
+def center_pad_to_shape(image: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
+    """Centre-pad one image without discarding any of its native pixels."""
+    # Reject a target smaller than the source because B41 geometry never crops here.
+    if image.shape[0] > target_shape[0] or image.shape[1] > target_shape[1]:
+        raise ValueError(f"Cannot pad {image.shape} into smaller target {target_shape}")
+    # Allocate NaN margins so percentile normalization ignores synthetic padding values.
+    output = np.full(target_shape, np.nan, dtype=np.float32)
+    # Keep every original source row.
+    rows = image.shape[0]
+    # Keep every original source column.
+    cols = image.shape[1]
+    # Centre the source rows inside the larger common matrix.
     dst_r = (target_shape[0] - rows) // 2
-    # Center the destination columns.
+    # Centre the source columns inside the larger common matrix.
     dst_c = (target_shape[1] - cols) // 2
-    # Copy the centered common area from source to destination.
-    output[dst_r : dst_r + rows, dst_c : dst_c + cols] = image[
-        src_r : src_r + rows, src_c : src_c + cols
-    ]
-    # Return the matrix with the requested shape.
+    # Copy all native pixels with no crop and no interpolation.
+    output[dst_r : dst_r + rows, dst_c : dst_c + cols] = image
+    # Return the padded matrix; normalize_volume will replace NaNs after computing percentiles.
     return output
 
 
@@ -803,12 +872,15 @@ def read_dicom_volume(series_dir: Path) -> np.ndarray:
     frames = [frame for _, frame in items]
     # Inspect whether DICOM files use mixed image matrices.
     shapes = {frame.shape for frame in frames}
-    # Harmonize mixed matrices before stacking frames.
+    # Harmonize mixed matrices before stacking frames without discarding any pixel.
     if len(shapes) > 1:
-        # Choose the largest matrix as the common output size.
-        target_shape = max(shapes, key=lambda shape: shape[0] * shape[1])
-        # Center-pad or crop each frame to that size.
-        frames = [pad_or_crop(frame, target_shape) for frame in frames]
+        # Choose independent maximum height and width so every source matrix fits.
+        target_shape = (
+            max(shape[0] for shape in shapes),
+            max(shape[1] for shape in shapes),
+        )
+        # Centre-pad each frame, leaving its original matrix fully intact.
+        frames = [center_pad_to_shape(frame, target_shape) for frame in frames]
     # Stack frames into the volume expected by preprocessing.
     return np.stack(frames).astype(np.float32, copy=False)
 
@@ -851,7 +923,7 @@ def sample_centers(n_frames: int, n_samples: int, gap: int) -> tuple[np.ndarray,
 
 
 def native_center_crop(triplets: np.ndarray, fraction: float) -> np.ndarray:
-    """Crop every 2.5D triplet before its one high-resolution resize."""
+    """Crop every 2.5D triplet before its one high-resolution resize-to-fit."""
     # Validate the requested retained image fraction.
     if not 0 < fraction <= 1:
         raise ValueError("crop_fraction must be in the interval (0, 1]")
@@ -869,8 +941,53 @@ def native_center_crop(triplets: np.ndarray, fraction: float) -> np.ndarray:
     return triplets[..., top : top + crop_h, left : left + crop_w]
 
 
+def resize_triplets_aspect_preserving_pad(
+    triplets: np.ndarray,
+    image_size: int,
+    pad_value: float,
+) -> torch.Tensor:
+    """Resize a [triplets, channels, H, W] batch once, then centre-pad it square."""
+    # Require the expected 2.5D tensor layout before reading spatial dimensions.
+    if triplets.ndim != 4:
+        raise ValueError(f"Expected [triplets, channels, height, width], got {triplets.shape}")
+    # Require a useful positive target canvas.
+    if image_size < 2:
+        raise ValueError("image_size must be at least two pixels")
+    # Read the retained native crop dimensions.
+    height, width = triplets.shape[-2:]
+    # Choose one common scale so neither resized side exceeds the square canvas.
+    scale = min(image_size / float(height), image_size / float(width))
+    # Round the fitted height while keeping it inside the target canvas.
+    resized_h = max(1, min(image_size, int(round(height * scale))))
+    # Round the fitted width while keeping it inside the target canvas.
+    resized_w = max(1, min(image_size, int(round(width * scale))))
+    # Convert the contiguous crop into the [batch, channels, H, W] PyTorch layout.
+    tensor = torch.from_numpy(np.ascontiguousarray(triplets))
+    # Resize every triplet once with antialiased bilinear interpolation.
+    resized = F.interpolate(
+        tensor,
+        size=(resized_h, resized_w),
+        mode="bilinear",
+        align_corners=False,
+        antialias=True,
+    )
+    # Allocate the fixed square model canvas using normalized black margins.
+    output = resized.new_full(
+        (resized.shape[0], resized.shape[1], image_size, image_size),
+        float(pad_value),
+    )
+    # Calculate the symmetric vertical margin before copying the resized crop.
+    top = (image_size - resized_h) // 2
+    # Calculate the symmetric horizontal margin before copying the resized crop.
+    left = (image_size - resized_w) // 2
+    # Copy the complete resized crop into the centre without a second interpolation.
+    output[..., top : top + resized_h, left : left + resized_w] = resized
+    # Return the fixed 448-by-448-style tensor with the retained aspect ratio intact.
+    return output
+
+
 def prepare_series_tensor(volume: np.ndarray, config: RunConfig) -> tuple[torch.Tensor, torch.Tensor]:
-    """Create [slices, 3, 448, 448] triplets and their slice positions."""
+    """Create aspect-preserving [slices, 3, 448, 448] triplets and positions."""
     # Normalize the entire native volume before taking any crop or resize.
     normalized = normalize_volume(volume)
     # Select deterministic center indices and their continuous positions.
@@ -883,20 +1000,21 @@ def prepare_series_tensor(volume: np.ndarray, config: RunConfig) -> tuple[torch.
     index = np.clip(centres[:, None] + offsets[None, :], 0, len(normalized) - 1)
     # Gather 32 three-channel native-resolution triplets.
     triplets = normalized[index]
-    # Apply the fixed native center crop before resizing.
+    # Apply the fixed native center crop before the sole in-plane resize.
     cropped = native_center_crop(triplets, config.crop_fraction)
-    # Convert a contiguous NumPy array into a PyTorch tensor.
-    tensor = torch.from_numpy(np.ascontiguousarray(cropped))
-    # Resize every triplet once to the configured high-resolution spatial dimensions.
-    resized = F.interpolate(
-        tensor,
-        size=(config.image_size, config.image_size),
-        mode="bilinear",
-        align_corners=False,
-        antialias=True,
+    # Reject a configuration that would silently reintroduce direct square stretching.
+    if config.resize_policy != "aspect_preserving_pad":
+        raise ValueError(
+            "resize_policy must be 'aspect_preserving_pad' for this native-geometry notebook"
+        )
+    # Resize the complete crop once to fit the canvas and then centre-pad it.
+    images = resize_triplets_aspect_preserving_pad(
+        cropped,
+        config.image_size,
+        config.pad_value,
     )
     # Return image data and through-plane coordinates as torch tensors.
-    return resized, torch.from_numpy(positions)
+    return images, torch.from_numpy(positions)
 ''')
 
 markdown("## 7. Dataset and batch collation classes")
@@ -1970,6 +2088,7 @@ def save_results(
             "model_state": experiment.model.state_dict(),
             "config": asdict(experiment.config),
             "targets": TARGETS,
+            "b37_reference": asdict(B37_REFERENCE),
         },
         run_root / "trained_model.pt",
     )
@@ -1977,6 +2096,11 @@ def save_results(
     (run_root / "history.json").write_text(json.dumps(experiment.history, indent=2), encoding="utf-8")
     # Save readable configuration beside the model weights.
     (run_root / "config.json").write_text(json.dumps(asdict(experiment.config), indent=2), encoding="utf-8")
+    # Save the immutable B37 reference separately so it cannot be mistaken for a subset result.
+    (run_root / "b37_reference.json").write_text(
+        json.dumps(asdict(B37_REFERENCE), indent=2),
+        encoding="utf-8",
+    )
     # Save test-subset probabilities and classifications only when inference was requested.
     if test_predictions is not None:
         # Write one prediction row per test study in CSV form.
@@ -2200,6 +2324,11 @@ runs out of memory, change only one setting at a time and rerun the preflight:
 If the preflight passes comfortably, you may set `max_series_per_study=0` to
 retain every recognized-plane series. Recreate `EXPERIMENT` after changing
 `CONFIG`, then run preflight again.
+
+Do not replace `resize_policy="aspect_preserving_pad"` with a direct square
+resize. A rectangular 640×1280 series is first cropped to 576×1152, resized once
+to 224×448, and then padded to the 448×448 model canvas. The blank margins are
+expected; they preserve the retained anatomy's shape rather than stretching it.
 """)
 
 
