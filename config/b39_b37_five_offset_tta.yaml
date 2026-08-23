@@ -16,6 +16,9 @@ device: auto
 precision: auto
 runtime_budget_hours: 8.25
 runtime_reserve_minutes: 45
+# Full-study timing is measured; this modest multiplier plus the 45-minute
+# reserve protects the five-view Kaggle run without forcing an immediate stop.
+b39_timing_safety_factor: 1.10
 
 # Keep B37's memory-safe inference policy: no worker-prefetch duplication,
 # no pinned buffers, and no per-worker series cache.
