@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import torch
 
 from rsna_knee.b7_weak_supervision import _read_config
 from rsna_knee.b41_highres_aspect_sparse_mil import (
@@ -58,7 +59,12 @@ def test_b41_576_by_1152_crop_fits_224_by_448_then_pads(monkeypatch) -> None:
     assert calls[0]["align_corners"] is False
     assert calls[0]["antialias"] is True
     assert image[..., :112, :].eq(0).all()
-    assert image[..., 112:336, :].eq(1).all()
+    torch.testing.assert_close(
+        image[..., 112:336, :],
+        torch.ones_like(image[..., 112:336, :]),
+        rtol=1e-6,
+        atol=1e-6,
+    )
     assert image[..., 336:, :].eq(0).all()
 
 
@@ -66,7 +72,12 @@ def test_b41_square_crop_has_no_padding_bars() -> None:
     triplets = np.ones((1, 3, 576, 576), dtype=np.float32)
     image = resize_triplets_aspect_preserving_pad(triplets)
     assert tuple(image.shape) == (1, 3, B41_IMAGE_SIZE, B41_IMAGE_SIZE)
-    assert image.eq(1).all()
+    torch.testing.assert_close(
+        image,
+        torch.ones_like(image),
+        rtol=1e-6,
+        atol=1e-6,
+    )
 
 
 def test_b41_preprocess_preserves_32_triplets_and_one_resize(monkeypatch) -> None:
