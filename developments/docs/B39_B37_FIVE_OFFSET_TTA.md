@@ -67,9 +67,15 @@ all five views once.
 cd /kaggle/working/CNN_CPC
 export PYTHONPATH="$PWD/developments/src:$PYTHONPATH"
 
-export DATA_ROOT="/kaggle/input/rsna-knee-abnormality-detection"
-export B37_CHECKPOINT="/kaggle/input/cnn-cpc-b37-artifacts/models/b37_model.pt"
-export BASE_CHECKPOINT="/kaggle/input/cnn-cpc-b37-artifacts/models/b34_llm_fill_base_model.pt"
+# These are the mount roots shown by Kaggle for this project.
+export DATA_ROOT="/kaggle/input/competitions/rsna-knee-abnormality-detection"
+find /kaggle/input/datasets/mohammedtalafha -type f | sort | sed -n '1,160p'
+# Set these two paths from the preceding listing. Do not guess their names.
+export B37_CHECKPOINT="/kaggle/input/datasets/mohammedtalafha/.../b37_model.pt"
+export BASE_CHECKPOINT="/kaggle/input/datasets/mohammedtalafha/.../b34_llm_fill_base_model.pt"
+
+test -s "$B37_CHECKPOINT"
+test -s "$BASE_CHECKPOINT"
 
 python -m rsna_knee.b39_b37_five_offset_tta \
   --config config/b39_b37_five_offset_tta.yaml \
