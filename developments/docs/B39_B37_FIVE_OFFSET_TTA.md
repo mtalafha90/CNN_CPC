@@ -94,14 +94,14 @@ python -m rsna_knee.b39_b37_five_offset_tta \
   --data-root "$DATA_ROOT" \
   --checkpoint "$B37_CHECKPOINT" \
   --base-checkpoint "$BASE_CHECKPOINT" \
-  --out submission.csv
+  --out /kaggle/working/submission.csv
 ~~~
 
 The output is:
 
 ~~~text
-submission.csv
-submission.csv.manifest.json
+/kaggle/working/submission.csv
+/kaggle/working/submission.csv.manifest.json
 ~~~
 
 The manifest records the parent B37 checkpoint fingerprint, all five offsets,
