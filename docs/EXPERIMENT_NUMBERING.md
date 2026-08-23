@@ -38,7 +38,7 @@ experiments must be appended to it; existing numbers must not be reordered.
 | 001 | `B0` | Random-initialized Stage-1 baseline | `completed` | `27d9c65` |
 | 002 | `REPORT_TEACHER` | Fold-safe report-teacher benchmark | `completed` | `c4d0af0` |
 | 003 | `B1` | Competition-only MRI SSL plus Stage-1 | `completed` | `dfcf0b7` |
-| 004 | `B2` | Discriminative SSL fine-tuning | `completed` | `db2e984` |
+| 004 | `B2` | Discriminative SSL fine-tuning | `completed` | `dfcf0b7` |
 | 005 | `B3` | Pathology-aware low-capacity MIL | `completed` | `db2e984` |
 | 006 | `B4` | Frozen SSL features with target-wise classical classifiers | `completed` | `80e244e` |
 | 007 | `B4.1` | Shared-policy frozen-SSL classifier | `completed` | `2de14bb` |
