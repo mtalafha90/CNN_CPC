@@ -106,7 +106,8 @@ experiments must be appended to it; existing numbers must not be reordered.
 | 071 | `B37` | High-resolution 448 pathology-specific sparse-MIL test | `completed_kaggle_0.714` | `cb4198f` |
 | 072 | `NATIVE_RESOLUTION_AUDIT` | Dataset-wide native DICOM geometry audit | `completed` | `0cc80eb` |
 | 073 | `B38` | 448 high-resolution global-tail ablation | `completed_not_promoted` | `c240267` |
-| 074 | `B39` | Five-offset inference refinement of frozen B37 | `implemented_not_run` | `5a9d4ad` |
+| 074 | `B39` | Five-offset inference refinement of frozen B37 | `submitted_pending_hidden_score` | `5a9d4ad` |
+| 075 | `B40` | B37 epoch-2 optimizer-reset one-epoch continuation | `implemented_not_run` | `9ad347f` |
 
 ## Organize the local archive safely
 
@@ -140,6 +141,7 @@ runs/by_experiment/
 ├── 072_Experiment_NATIVE_RESOLUTION_AUDIT_native_dicom_geometry/
 ├── 073_Experiment_B38_highres_448_global_tail_ablation/
 ├── 074_Experiment_B39_b37_five_offset_tta/
+├── 075_Experiment_B40_b37_e2_optimizer_reset_continuation/
 ├── _Shared/
 │   ├── Comparisons/
 │   ├── Legacy_pipeline/
@@ -167,8 +169,10 @@ the completed protocol is the frozen 448-resolution sparse-MIL design at commit
 `9395665`. Both possible run names map to the same permanent B37 number so
 historical numbering does not shift. B37 completed its fixed-E2 endpoint and
 reported a Kaggle score of 0.714. B38 completed as a negative global-only
-ablation and is retained rather than promoted. B39 is a separate five-offset
-inference candidate using the immutable B37 checkpoint.
+ablation and is retained rather than promoted. B39 is the submitted five-offset
+inference candidate using the immutable B37 checkpoint, with hidden score
+pending. B40 is a separate one-epoch, explicitly optimizer-reset local
+continuation from B37 E2; it does not modify B37 or B39.
 
 ## Physically migrate run directories
 
