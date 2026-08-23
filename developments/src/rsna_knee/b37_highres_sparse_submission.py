@@ -478,7 +478,8 @@ def generate_b37_sparse_mil_submission(
                 f"[{endpoint_name} submit] {completed}/{len(loader)} "
                 f"elapsed={elapsed:.1f} min "
                 f"estimated_remaining={remaining / 60.0:.1f} min "
-                f"reserve={budget.remaining_seconds / 60.0:.1f} min",
+                f"work_remaining={budget.remaining_work_seconds / 60.0:.1f} min "
+                f"hard_remaining={budget.remaining_seconds / 60.0:.1f} min",
                 flush=True,
             )
 
