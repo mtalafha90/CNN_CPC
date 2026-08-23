@@ -945,7 +945,7 @@
       "title": "Native-aspect-preserving 90% crop sparse-MIL ablation",
       "category": "preprocessing",
       "status": "implemented_not_run",
-      "introduced_commit": "pending",
+      "introduced_commit": "41a3b6a",
       "run_patterns": [
         "b41_highres_aspect_sparse_mil"
       ]

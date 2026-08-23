@@ -108,7 +108,7 @@ experiments must be appended to it; existing numbers must not be reordered.
 | 073 | `B38` | 448 high-resolution global-tail ablation | `completed_not_promoted` | `c240267` |
 | 074 | `B39` | Five-offset inference refinement of frozen B37 | `submitted_pending_hidden_score` | `5a9d4ad` |
 | 075 | `B40` | B37 epoch-2 optimizer-reset one-epoch continuation | `implemented_not_run` | `9ad347f` |
-| 076 | `B41` | Native-aspect-preserving 90% crop sparse-MIL ablation | `implemented_not_run` | `pending` |
+| 076 | `B41` | Native-aspect-preserving 90% crop sparse-MIL ablation | `implemented_not_run` | `41a3b6a` |
 
 ## Organize the local archive safely
 
