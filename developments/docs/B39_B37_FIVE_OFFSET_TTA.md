@@ -38,6 +38,7 @@ operational safety
   no per-worker series cache
   maximum wall-clock budget = 8.25 h
   reserved finalization time = 45 min
+  full-study timing safety factor = 1.10
   timing includes DICOM/DataLoader work, all views, inference, and memory release
 ~~~
 
@@ -54,8 +55,8 @@ deterministic slice centres.
 
 The original three-view Kaggle inference completed in about four hours. Five
 views are expected to scale to roughly 6 hours 40 minutes, but that is only a
-planning estimate. B39 measures full per-study wall time and exits before its
-reserved output time would be consumed.
+planning estimate. B39 measures full per-study wall time and applies a 1.10
+safety factor before it consumes the 45-minute output reserve.
 
 ## Exact local or Kaggle procedure
 
