@@ -88,7 +88,7 @@ residual head.
 
 ### Training trajectory
 
-| Endpoint | Total loss | Combined loss | Local auxiliary loss | Mean |gate| | Max |gate| |
+| Endpoint | Total loss | Combined loss | Local auxiliary loss | Mean abs(gate) | Max abs(gate) |
 |---|---:|---:|---:|---:|---:|
 | B37 E1 | 1.1341568780 | 0.5439505712 | 0.5902063080 | 0.020121 | 0.035931 |
 | B37 E2 | 1.0514200304 | 0.5305002703 | 0.5209197600 | 0.050247 | 0.086884 |
