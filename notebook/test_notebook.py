@@ -54,8 +54,10 @@ def test_notebook_is_standalone_with_clear_functions_and_classes():
         "find_extracted_root",
         "validate_dataset",
         "validate_test_dataset",
-        "read_dicom_volume",
-        "prepare_series_tensor",
+        "list_dicom_frame_references",
+        "decode_dicom_frame",
+        "streaming_percentile_bounds",
+        "prepare_series_tensor_from_dicom",
         "build_experiment",
         "build_test_loader",
         "predict_test_set",
@@ -82,6 +84,20 @@ def test_notebook_is_standalone_with_clear_functions_and_classes():
     assert "git clone" not in text
     assert "load_state_dict" not in text
     assert "448×448" in text
+
+
+def test_notebook_uses_bounded_cpu_and_gpu_memory_controls():
+    """The Colab path must avoid full-volume RAM retention and retain safe defaults."""
+    text = _text()
+    assert "return references" in text
+    assert "percentile_sample_cap: int = 262_144" in text
+    assert "gradient_checkpointing: bool = True" in text
+    assert "encoder_chunk_size: int = 1" in text
+    assert "max_series_per_study: int = 4" in text
+    assert "from torch.utils.checkpoint import checkpoint" in text
+    assert "host_peak_rss_gib" in text
+    assert "def read_dicom_volume" not in text
+    assert "def prepare_series_tensor(" not in text
 
 
 def test_teaching_outputs_are_enabled_but_training_starts_safe():

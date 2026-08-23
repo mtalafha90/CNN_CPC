@@ -87,10 +87,12 @@ DICOM volume
 ```
 
 The default configuration is deliberately conservative for a small Colab GPU:
-one study per batch, no loader workers, no pinned host memory, no more than six
-MRI series per study, and B37's fixed two training epochs. The notebook includes
-a no-update preflight before training, a loss plot, and a review of 12
-classified cases.
+one study per batch, no loader workers, no pinned host memory, no more than four
+MRI series per study, one triplet encoded at a time, and activation
+checkpointing during training. DICOM intensities use a deterministic bounded
+pixel sample for the 1st/99th percentile estimate, so the notebook never holds
+an entire native MRI volume in RAM. The notebook includes a no-update preflight
+before training, a loss plot, and a review of 12 classified cases.
 """)
 
 markdown(r"""
@@ -105,7 +107,9 @@ This standalone notebook creates a newly initialized, compact model from the
 supplied subset. It does **not** load B37/B41 weights, previous experiments, or
 any checkpoint. It adopts B41's native-aspect geometry policy—crop 90% at native
 resolution, resize to fit once, then pad—because the dataset contains real
-rectangular series such as 640×1280. Subset hold-out AUC is therefore useful for
+rectangular series such as 640×1280. For Colab RAM safety, its percentile bounds
+come from a deterministic bounded sample spanning the DICOM series rather than an
+in-memory full-volume array. Subset hold-out AUC is therefore useful for
 checking learning, not for claiming a direct comparison with B37's 0.714 score.
 """)
 
@@ -175,6 +179,8 @@ import json
 import math
 # Import random for reproducible Python-level sampling.
 import random
+# Import Linux resource statistics so Colab preflight reports host-RAM pressure too.
+import resource
 # Import shutil for copying the two Drive archives to Colab's local SSD.
 import shutil
 # Import time for per-epoch timing.
@@ -195,6 +201,8 @@ import torch.nn.functional as F
 from torch import nn
 # Import the dataset and loader interfaces.
 from torch.utils.data import DataLoader, Dataset
+# Import activation checkpointing to trade extra compute for substantially lower GPU memory.
+from torch.utils.checkpoint import checkpoint
 # Import display so summary tables render in Colab.
 from IPython.display import display
 
@@ -458,14 +466,18 @@ class RunConfig:
     top_k: int = 8
     # Use a compact 128-dimensional model for practical Colab memory use.
     feature_dim: int = 128
-    # Encode two 448-pixel triplets at a time to limit GPU activation memory.
-    encoder_chunk_size: int = 2
-    # Keep six series by default; set zero only after a larger preflight passes.
-    max_series_per_study: int = 6
+    # Encode one 448-pixel triplet at a time to minimize the peak activation footprint.
+    encoder_chunk_size: int = 1
+    # Recompute encoder activations during backward instead of retaining every triplet's activations.
+    gradient_checkpointing: bool = True
+    # Keep four series by default; set a larger value only after that exact setting passes preflight.
+    max_series_per_study: int = 4
     # Keep one study per batch to avoid padding and duplicate CPU allocations.
     batch_size: int = 1
     # Decode in the main process so worker processes cannot multiply host RAM use.
     num_workers: int = 0
+    # Cap the deterministic DICOM-pixel sample used for memory-bounded percentile normalization.
+    percentile_sample_cap: int = 262_144
     # Reserve twenty percent of usable labelled studies for validation.
     validation_fraction: float = 0.20
     # Run B37's fixed two-epoch duration by default; this is not a B37 reproduction.
@@ -798,11 +810,11 @@ def dicom_sort_key(dataset) -> float:
 
 
 def center_pad_to_shape(image: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
-    """Centre-pad one image without discarding any of its native pixels."""
-    # Reject a target smaller than the source because B41 geometry never crops here.
+    """Centre-pad one unexpected mixed-matrix frame without discarding native pixels."""
+    # Reject a target smaller than the source because this safety fallback never crops images.
     if image.shape[0] > target_shape[0] or image.shape[1] > target_shape[1]:
         raise ValueError(f"Cannot pad {image.shape} into smaller target {target_shape}")
-    # Allocate NaN margins so percentile normalization ignores synthetic padding values.
+    # Allocate NaN margins so later normalization can replace only synthetic padding.
     output = np.full(target_shape, np.nan, dtype=np.float32)
     # Keep every original source row.
     rows = image.shape[0]
@@ -814,12 +826,26 @@ def center_pad_to_shape(image: np.ndarray, target_shape: tuple[int, int]) -> np.
     dst_c = (target_shape[1] - cols) // 2
     # Copy all native pixels with no crop and no interpolation.
     output[dst_r : dst_r + rows, dst_c : dst_c + cols] = image
-    # Return the padded matrix; normalize_volume will replace NaNs after computing percentiles.
+    # Return the padded single frame.
     return output
 
 
-def read_dicom_volume(series_dir: Path) -> np.ndarray:
-    """Decode one series directory into ordered float32 [frames, height, width]."""
+@dataclass(frozen=True)
+class DicomFrameReference:
+    """Point to one frame without retaining its DICOM pixel matrix in RAM."""
+
+    # Store the DICOM file that contains this frame.
+    path: Path
+    # Store the zero-based frame index inside a multi-frame file.
+    frame_index: int
+    # Store the deterministic physical ordering key.
+    sort_key: float
+    # Store the header-declared native matrix shape.
+    shape: tuple[int, int]
+
+
+def list_dicom_frame_references(series_dir: Path) -> list[DicomFrameReference]:
+    """Read DICOM headers only and return ordered frame references with bounded RAM use."""
     # Import pydicom inside the function so the notebook imports cleanly before installation.
     import pydicom
     # Collect eligible DICOM files in deterministic filename order.
@@ -827,84 +853,178 @@ def read_dicom_volume(series_dir: Path) -> np.ndarray:
         path for path in series_dir.iterdir()
         if path.is_file() and path.suffix.lower() in DICOM_SUFFIXES
     )
-    # Prepare a list of physical-order keys and decoded two-dimensional frames.
-    items: list[tuple[float, np.ndarray]] = []
-    # Count decoding failures for an informative error message.
+    # Prepare a compact list that holds metadata but no image arrays.
+    references: list[DicomFrameReference] = []
+    # Count header failures for an informative error message.
     failures = 0
-    # Decode each candidate file separately so one bad file does not discard a whole series.
+    # Read each header without loading its potentially large PixelData element.
     for path in files:
-        # Attempt to read and decode this DICOM file.
+        # Handle a malformed header independently so another valid slice can still be used.
         try:
-            # Read the DICOM file, allowing a permissive parse for exported data.
-            dataset = pydicom.dcmread(str(path), force=True)
-            # Decode pixel values into float32.
-            pixels = np.asarray(dataset.pixel_array, dtype=np.float32)
-            # Apply the DICOM rescale slope when present.
-            pixels = pixels * float(getattr(dataset, "RescaleSlope", 1.0))
-            # Apply the DICOM rescale intercept when present.
-            pixels = pixels + float(getattr(dataset, "RescaleIntercept", 0.0))
-            # Invert MONOCHROME1 images so bright tissue remains bright.
-            if str(getattr(dataset, "PhotometricInterpretation", "")).upper() == "MONOCHROME1":
-                pixels = pixels.max() - pixels
-            # Compute the physical or instance-number sort key.
+            # Read only metadata; stop before the image payload to keep host RAM bounded.
+            dataset = pydicom.dcmread(str(path), stop_before_pixels=True, force=True)
+            # Read the geometry or instance-number sorting key.
             key = dicom_sort_key(dataset)
-            # Add a normal single-frame DICOM image.
-            if pixels.ndim == 2:
-                items.append((key, pixels))
-            # Split a multi-frame DICOM image into lightly offset ordered frames.
-            elif pixels.ndim == 3:
-                items.extend((key + index * 1e-4, frame) for index, frame in enumerate(pixels))
-            # Refuse unsupported pixel dimensions explicitly.
-            else:
-                raise RuntimeError(f"Unsupported pixel shape: {pixels.shape}")
-        # Count an unreadable file and continue with the remaining files.
+            # Read the header matrix dimensions required for the mixed-matrix safety fallback.
+            shape = (int(dataset.Rows), int(dataset.Columns))
+            # Read the number of frames while treating an ordinary DICOM as one frame.
+            count = int(getattr(dataset, "NumberOfFrames", 1))
+            # Reject invalid frame counts before constructing references.
+            if count < 1:
+                raise RuntimeError(f"Invalid NumberOfFrames={count}")
+            # Add one lightweight reference for every frame in this DICOM file.
+            for frame_index in range(count):
+                # Offset equal-position multi-frame images into a deterministic within-file order.
+                references.append(
+                    DicomFrameReference(path, frame_index, key + frame_index * 1e-4, shape)
+                )
+        # Count the bad header and continue scanning the remaining files.
         except Exception:
             failures += 1
-    # Stop if nothing in the directory yielded readable pixels.
-    if not items:
+    # Stop if no candidate frame had a readable header.
+    if not references:
         raise RuntimeError(
-            f"No readable DICOM pixels in {series_dir} "
-            f"({len(files)} files, {failures} decode failures)"
+            f"No readable DICOM headers in {series_dir} "
+            f"({len(files)} files, {failures} header failures)"
         )
-    # Sort frames along the MRI acquisition direction.
-    items.sort(key=lambda item: item[0])
-    # Extract only the two-dimensional frames from sorted pairs.
-    frames = [frame for _, frame in items]
-    # Inspect whether DICOM files use mixed image matrices.
-    shapes = {frame.shape for frame in frames}
-    # Harmonize mixed matrices before stacking frames without discarding any pixel.
-    if len(shapes) > 1:
-        # Choose independent maximum height and width so every source matrix fits.
-        target_shape = (
-            max(shape[0] for shape in shapes),
-            max(shape[1] for shape in shapes),
-        )
-        # Centre-pad each frame, leaving its original matrix fully intact.
-        frames = [center_pad_to_shape(frame, target_shape) for frame in frames]
-    # Stack frames into the volume expected by preprocessing.
-    return np.stack(frames).astype(np.float32, copy=False)
+    # Sort references along the physical MRI acquisition direction.
+    references.sort(key=lambda reference: reference.sort_key)
+    # Return only compact metadata, never an in-memory full MRI volume.
+    return references
 
 
-def normalize_volume(volume: np.ndarray) -> np.ndarray:
-    """Clip a full volume at its 1st/99th percentiles and scale it to [0, 1]."""
-    # Ensure the computation starts from a float32 NumPy volume.
-    volume = np.asarray(volume, dtype=np.float32)
-    # Require a non-empty sequence of two-dimensional MRI frames.
-    if volume.ndim != 3 or len(volume) == 0:
-        raise ValueError(f"Expected non-empty [frames, height, width], got {volume.shape}")
-    # Select finite values for robust percentile computation.
-    finite = volume[np.isfinite(volume)]
-    # Stop if no valid numerical pixel exists.
-    if finite.size == 0:
-        raise ValueError("DICOM volume has no finite pixels")
-    # Compute robust lower and upper intensity cutoffs from the entire native volume.
-    low, high = np.percentile(finite, [1, 99])
-    # Replace any non-finite pixel using the nearest robust cutoff.
-    volume = np.nan_to_num(volume, nan=float(low), posinf=float(high), neginf=float(low))
-    # Clip outlying intensities to the robust support.
-    volume = np.clip(volume, low, high)
-    # Convert the clipped volume into a stable zero-to-one range.
-    return ((volume - low) / max(float(high - low), 1e-6)).astype(np.float32, copy=False)
+def decode_dicom_frame(reference: DicomFrameReference) -> np.ndarray:
+    """Decode exactly one referenced DICOM frame as a native float32 image."""
+    # Import pydicom locally so this helper is self-contained in Colab.
+    import pydicom
+    # Read the one DICOM file that contains the requested frame.
+    dataset = pydicom.dcmread(str(reference.path), force=True)
+    # Decode its pixel payload; a multi-frame file is still decoded only when encountered.
+    decoded = np.asarray(dataset.pixel_array)
+    # Select a normal single-frame image when the file contains one two-dimensional matrix.
+    if decoded.ndim == 2:
+        # Guard against a malformed reference that asks for a non-existent second frame.
+        if reference.frame_index != 0:
+            raise RuntimeError(f"Single-frame DICOM requested frame {reference.frame_index}")
+        # Keep the two-dimensional decoded matrix.
+        pixels = decoded
+    # Select the requested frame from a three-dimensional multi-frame DICOM.
+    elif decoded.ndim == 3:
+        # Guard against a DICOM whose header and decoded frame count disagree.
+        if reference.frame_index >= decoded.shape[0]:
+            raise RuntimeError(f"Multi-frame DICOM has only {decoded.shape[0]} frames")
+        # Keep exactly the requested two-dimensional frame.
+        pixels = decoded[reference.frame_index]
+    # Refuse unsupported DICOM pixel dimensionality explicitly.
+    else:
+        raise RuntimeError(f"Unsupported decoded DICOM shape: {decoded.shape}")
+    # Convert the retained native frame to float32 before intensity rescaling.
+    pixels = np.asarray(pixels, dtype=np.float32)
+    # Apply the DICOM rescale slope when present.
+    pixels *= float(getattr(dataset, "RescaleSlope", 1.0))
+    # Apply the DICOM rescale intercept when present.
+    pixels += float(getattr(dataset, "RescaleIntercept", 0.0))
+    # Invert MONOCHROME1 images so bright tissue remains bright.
+    if str(getattr(dataset, "PhotometricInterpretation", "")).upper() == "MONOCHROME1":
+        # Create the conventional bright-tissue orientation without changing the source files.
+        pixels = float(np.nanmax(pixels)) - pixels
+    # Return a contiguous float32 matrix suitable for NumPy and PyTorch operations.
+    return np.ascontiguousarray(pixels, dtype=np.float32)
+
+
+def deterministic_pixel_sample(image: np.ndarray, count: int) -> np.ndarray:
+    """Take a bounded, evenly spaced finite-pixel sample from one native MRI frame."""
+    # Flatten only this one frame instead of a whole MRI series.
+    flat = np.asarray(image, dtype=np.float32).reshape(-1)
+    # Exclude NaNs and infinities before percentile estimation.
+    finite = flat[np.isfinite(flat)]
+    # Return all values when this frame is already smaller than the requested sample count.
+    if finite.size <= count:
+        return finite
+    # Choose evenly spaced source indices so the sampling is deterministic and reproducible.
+    index = np.linspace(0, finite.size - 1, num=count, dtype=np.int64)
+    # Return only the bounded representative sample.
+    return finite[index]
+
+
+def streaming_percentile_bounds(
+    references: list[DicomFrameReference],
+    sample_cap: int,
+    retained_indices: set[int],
+) -> tuple[float, float, dict[int, np.ndarray]]:
+    """Estimate robust series percentiles while retaining only selected native frames."""
+    # Reject a nonsensical sample budget before reading any DICOM pixel payload.
+    if sample_cap < 1:
+        raise ValueError("percentile_sample_cap must be positive")
+    # Limit the number of source frames sampled when an unusual series has more frames than the budget.
+    sample_count = min(len(references), sample_cap)
+    # Choose deterministic frame locations that span the whole acquired series.
+    sample_indices = set(
+        np.linspace(0, len(references) - 1, num=sample_count, dtype=np.int64).tolist()
+    )
+    # Allocate the bounded number of pixels contributed by every sampled frame.
+    per_frame = max(1, min(4096, sample_cap // max(len(sample_indices), 1)))
+    # Keep compact sample fragments rather than a full [frames, height, width] volume.
+    samples: list[np.ndarray] = []
+    # Keep only the selected frames needed by the later 32 triplets and their neighbors.
+    retained_frames: dict[int, np.ndarray] = {}
+    # Decode only sampled or later-selected frames one at a time so host RAM stays bounded.
+    for index, reference in enumerate(references):
+        # Skip frames that neither contribute to normalization nor to a final 2.5D triplet.
+        if index not in sample_indices and index not in retained_indices:
+            continue
+        # Allow an unreadable non-selected frame to be skipped during percentile sampling.
+        try:
+            # Decode this one native frame.
+            frame = decode_dicom_frame(reference)
+            # Save its small deterministic intensity sample only when this frame is part of the sample plan.
+            if index in sample_indices:
+                samples.append(deterministic_pixel_sample(frame, per_frame))
+            # Keep the full matrix only when the later 2.5D construction needs it.
+            if index in retained_indices:
+                retained_frames[index] = frame
+            # Release every non-selected image before reading the next DICOM file.
+            else:
+                del frame
+        # Ignore an unreadable frame here; selected frames are checked again before use.
+        except Exception:
+            continue
+    # Stop when no DICOM frame supplied any finite intensity values.
+    if not samples:
+        raise RuntimeError("No finite DICOM pixels were available for percentile normalization")
+    # Join only the bounded representative samples for robust percentile estimation.
+    pooled = np.concatenate(samples).astype(np.float32, copy=False)
+    # Stop when all decoded images happened to contain only non-finite values.
+    if pooled.size == 0:
+        raise RuntimeError("DICOM frames contained no finite pixels")
+    # Estimate the familiar 1st and 99th percentile bounds without a full-volume allocation.
+    low, high = np.percentile(pooled, [1, 99])
+    # Ensure a constant-valued series still has a valid nonzero normalization range.
+    high = max(float(high), float(low) + 1e-6)
+    # Return scalar bounds plus the few native frames that must be reused for triplets.
+    return float(low), float(high), retained_frames
+
+
+def normalize_native_frame(
+    frame: np.ndarray,
+    low: float,
+    high: float,
+    target_shape: tuple[int, int],
+) -> np.ndarray:
+    """Normalize one selected native frame using the series-level streaming bounds."""
+    # Pad an unexpected mixed matrix only after percentiles were estimated from real pixels.
+    if frame.shape != target_shape:
+        frame = center_pad_to_shape(frame, target_shape)
+    # Replace synthetic NaNs and unexpected non-finite values with the nearest valid bound.
+    normalized = np.nan_to_num(frame, nan=low, posinf=high, neginf=low, copy=True)
+    # Move the lower robust intensity bound to zero.
+    normalized -= low
+    # Scale the robust intensity interval into the zero-to-one range.
+    normalized /= max(high - low, 1e-6)
+    # Clip remaining outliers into the same normalized support.
+    np.clip(normalized, 0.0, 1.0, out=normalized)
+    # Return a contiguous float32 native image.
+    return np.ascontiguousarray(normalized, dtype=np.float32)
 
 
 def sample_centers(n_frames: int, n_samples: int, gap: int) -> tuple[np.ndarray, np.ndarray]:
@@ -986,34 +1106,81 @@ def resize_triplets_aspect_preserving_pad(
     return output
 
 
-def prepare_series_tensor(volume: np.ndarray, config: RunConfig) -> tuple[torch.Tensor, torch.Tensor]:
-    """Create aspect-preserving [slices, 3, 448, 448] triplets and positions."""
-    # Normalize the entire native volume before taking any crop or resize.
-    normalized = normalize_volume(volume)
-    # Select deterministic center indices and their continuous positions.
-    centres, positions = sample_centers(
-        len(normalized), config.slices_per_series, config.triplet_gap
-    )
-    # Define the previous, central, and next frame offsets for each 2.5D input.
-    offsets = np.asarray([-config.triplet_gap, 0, config.triplet_gap], dtype=np.int64)
-    # Clip all neighbor indices to valid frame locations.
-    index = np.clip(centres[:, None] + offsets[None, :], 0, len(normalized) - 1)
-    # Gather 32 three-channel native-resolution triplets.
-    triplets = normalized[index]
-    # Apply the fixed native center crop before the sole in-plane resize.
-    cropped = native_center_crop(triplets, config.crop_fraction)
-    # Reject a configuration that would silently reintroduce direct square stretching.
+def prepare_series_tensor_from_dicom(
+    series_dir: Path,
+    config: RunConfig,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Stream one series into aspect-preserving [slices, 3, 448, 448] triplets."""
+    # Reject an accidental return to direct square stretching before any expensive decoding.
     if config.resize_policy != "aspect_preserving_pad":
         raise ValueError(
             "resize_policy must be 'aspect_preserving_pad' for this native-geometry notebook"
         )
-    # Resize the complete crop once to fit the canvas and then centre-pad it.
-    images = resize_triplets_aspect_preserving_pad(
-        cropped,
-        config.image_size,
-        config.pad_value,
+    # List DICOM frame metadata without retaining a full MRI volume in host memory.
+    references = list_dicom_frame_references(series_dir)
+    # Select deterministic centers and their normalized slice positions from header counts.
+    centres, positions = sample_centers(
+        len(references), config.slices_per_series, config.triplet_gap
     )
-    # Return image data and through-plane coordinates as torch tensors.
+    # Define the previous, central, and next frame offsets for each 2.5D input.
+    offsets = np.asarray([-config.triplet_gap, 0, config.triplet_gap], dtype=np.int64)
+    # Clip all neighbor indices to valid DICOM frame locations.
+    index = np.clip(centres[:, None] + offsets[None, :], 0, len(references) - 1)
+    # Record the unique frames that the final 32 triplets will need.
+    retained_indices = {int(value) for value in index.reshape(-1)}
+    # Estimate series normalization bounds while caching only the selected native frames.
+    low, high, cache = streaming_percentile_bounds(
+        references,
+        config.percentile_sample_cap,
+        retained_indices,
+    )
+    # Build a safety shape only for unexpected mixed-matrix series.
+    target_shape = (
+        max(reference.shape[0] for reference in references),
+        max(reference.shape[1] for reference in references),
+    )
+    # Allocate only the final fixed-size image stack, not a full native-resolution volume.
+    images = torch.empty(
+        config.slices_per_series,
+        3,
+        config.image_size,
+        config.image_size,
+        dtype=torch.float32,
+    )
+    # Build one native triplet and one 448-pixel output at a time.
+    for output_index, frame_indices in enumerate(index):
+        # Prepare the three normalized native frames for this one 2.5D triplet.
+        channels: list[np.ndarray] = []
+        # Decode or reuse each of the previous, center, and next source frames.
+        for frame_index in frame_indices:
+            # Convert NumPy's integer type into a normal dictionary key.
+            frame_index = int(frame_index)
+            # Reuse the bounded cache when this frame was retained during percentile sampling.
+            frame = cache.get(frame_index)
+            # Decode a selected frame again only when it failed to enter the cache.
+            if frame is None:
+                frame = decode_dicom_frame(references[frame_index])
+            # Normalize this one frame using the same series-level robust intensity bounds.
+            channels.append(normalize_native_frame(frame, low, high, target_shape))
+        # Stack only the three native channels required for this output triplet.
+        triplet = np.stack(channels, axis=0)[None, ...]
+        # Crop the triplet in native pixels before its one permitted high-resolution resize.
+        cropped = native_center_crop(triplet, config.crop_fraction)
+        # Resize-to-fit and center-pad this one triplet into the fixed model canvas.
+        resized = resize_triplets_aspect_preserving_pad(
+            cropped,
+            config.image_size,
+            config.pad_value,
+        )
+        # Copy the completed triplet into its final compact output slot.
+        images[output_index].copy_(resized[0])
+        # Release the temporary native arrays before the next triplet is constructed.
+        del channels, triplet, cropped, resized
+    # Drop cached native matrices before the caller starts processing the next MRI series.
+    cache.clear()
+    # Ask Python to collect temporary DICOM and NumPy objects before returning.
+    gc.collect()
+    # Return the final 448-pixel image stack and its through-plane coordinates.
     return images, torch.from_numpy(positions)
 ''')
 
@@ -1094,10 +1261,8 @@ class KneeMRIDataset(Dataset):
             return self._zero_series()
         # Try to decode and prepare the available DICOM directory.
         try:
-            # Decode the native MRI volume from its DICOM files.
-            volume = read_dicom_volume(series_dir)
-            # Convert the native volume into high-resolution 2.5D triplets.
-            images, positions = prepare_series_tensor(volume, self.config)
+            # Stream DICOM frames into high-resolution triplets without retaining a full native volume.
+            images, positions = prepare_series_tensor_from_dicom(series_dir, self.config)
             # Mark this series readable so the model uses it.
             return images, positions, 1.0
         # Handle a DICOM decode or preprocessing failure.
@@ -1483,8 +1648,18 @@ class HighResolutionSparseMIL(nn.Module):
         local_blocks = []
         # Encode only a few 448-pixel images at a time to control memory use.
         for image_chunk in images.split(self.config.encoder_chunk_size, dim=0):
-            # Encode this chunk into one global vector and one local grid per image.
-            global_feature, local_feature = self.encoder(image_chunk)
+            # Recompute encoder activations during backward when training to reduce GPU memory.
+            if self.training and self.config.gradient_checkpointing:
+                # Use non-reentrant checkpointing so encoder parameters receive gradients even from input images.
+                global_feature, local_feature = checkpoint(
+                    self.encoder,
+                    image_chunk,
+                    use_reentrant=False,
+                )
+            # Use the ordinary direct encoder path during evaluation or when checkpointing is disabled.
+            else:
+                # Encode this chunk into one global vector and one local grid per image.
+                global_feature, local_feature = self.encoder(image_chunk)
             # Remember the global vectors for concatenation.
             global_blocks.append(global_feature)
             # Remember the local grids for concatenation.
@@ -1862,6 +2037,10 @@ def run_preflight(experiment: Experiment) -> dict:
         "local_loss": float(local_loss.detach().cpu()),
         "encoder_gradient": bool(has_encoder_gradient),
         "sparse_head_gradient": bool(has_sparse_gradient),
+        # Report the resident host-RAM peak in GiB on Colab's Linux runtime.
+        "host_peak_rss_gib": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024**2, 2),
+        # Report the actual one-study input tensor size before GPU activation memory is added.
+        "input_batch_gib": round(volumes.numel() * volumes.element_size() / 1024**3, 2),
     }
     # Add peak GPU memory when a CUDA device is active.
     if DEVICE.type == "cuda":
@@ -2313,17 +2492,20 @@ if RUN_TRAINING:
 markdown(r"""
 ## Memory controls
 
-The defaults are deliberately safe for online DICOM loading. If the preflight
+The defaults stream DICOM data, retain only four series per study, encode one
+triplet at a time, and enable activation checkpointing. If the preflight still
 runs out of memory, change only one setting at a time and rerun the preflight:
 
-1. Reduce `max_series_per_study` from `6` to `4`.
-2. Reduce `encoder_chunk_size` from `2` to `1`.
-3. Keep `image_size=448` unchanged unless you intentionally want a different
+1. Reduce `max_series_per_study` from `4` to `3`.
+2. Keep `encoder_chunk_size=1` and `gradient_checkpointing=True`.
+3. Reduce `slices_per_series` from `32` to `24` only as a last resort; this
+   changes the input representation.
+4. Keep `image_size=448` unchanged unless you intentionally want a different
    image representation.
 
-If the preflight passes comfortably, you may set `max_series_per_study=0` to
-retain every recognized-plane series. Recreate `EXPERIMENT` after changing
-`CONFIG`, then run preflight again.
+If the preflight passes comfortably, increase `max_series_per_study` by only one
+at a time. Recreate `EXPERIMENT` after changing `CONFIG`, then run preflight
+again. Do not set it to zero on Colab, because that removes the memory bound.
 
 Do not replace `resize_policy="aspect_preserving_pad"` with a direct square
 resize. A rectangular 640×1280 series is first cropped to 576×1152, resized once
