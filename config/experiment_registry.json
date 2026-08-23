@@ -920,10 +920,22 @@
       "slug": "b37_five_offset_tta",
       "title": "Five-offset inference refinement of frozen B37",
       "category": "inference",
-      "status": "implemented_not_run",
+      "status": "submitted_pending_hidden_score",
       "introduced_commit": "5a9d4ad",
       "run_patterns": [
         "b39_b37_five_offset_tta"
+      ]
+    },
+    {
+      "number": 75,
+      "code": "B40",
+      "slug": "b37_e2_optimizer_reset_continuation",
+      "title": "B37 epoch-2 optimizer-reset one-epoch continuation",
+      "category": "duration",
+      "status": "implemented_not_run",
+      "introduced_commit": "9ad347f",
+      "run_patterns": [
+        "b40_b37_e2_continuation"
       ]
     }
   ],
