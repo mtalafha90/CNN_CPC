@@ -4,10 +4,12 @@
 
 This ledger was reconstructed from all **1,143 commits** reachable from `main`,
 from the first commit (`934e78b`, 2026-08-07) through `17a98fe`
-(2026-08-22). The numbering follows the canonical scientific sequence declared
-by the experiment ledgers and result records across that history—not raw commit
-timestamp order. That distinction matters because some implementation work was
-committed before the preceding experiment's outcome was recorded.
+(2026-08-22). Later governed experiment outcomes, including the completed B40
+result, are appended without changing any permanent historical number. The
+numbering follows the canonical scientific sequence declared by the experiment
+ledgers and result records across that history—not raw commit timestamp order.
+That distinction matters because some implementation work was committed before
+the preceding experiment's outcome was recorded.
 
 - Matched controls and arms declared by one protocol stay under that experiment.
 - A failed, blocked, superseded, deferred, or never-run experiment keeps its
@@ -36,7 +38,7 @@ experiments must be appended to it; existing numbers must not be reordered.
 | 001 | `B0` | Random-initialized Stage-1 baseline | `completed` | `27d9c65` |
 | 002 | `REPORT_TEACHER` | Fold-safe report-teacher benchmark | `completed` | `c4d0af0` |
 | 003 | `B1` | Competition-only MRI SSL plus Stage-1 | `completed` | `dfcf0b7` |
-| 004 | `B2` | Discriminative SSL fine-tuning | `completed` | `1d154f9` |
+| 004 | `B2` | Discriminative SSL fine-tuning | `completed` | `db2e984` |
 | 005 | `B3` | Pathology-aware low-capacity MIL | `completed` | `db2e984` |
 | 006 | `B4` | Frozen SSL features with target-wise classical classifiers | `completed` | `80e244e` |
 | 007 | `B4.1` | Shared-policy frozen-SSL classifier | `completed` | `2de14bb` |
@@ -107,7 +109,7 @@ experiments must be appended to it; existing numbers must not be reordered.
 | 072 | `NATIVE_RESOLUTION_AUDIT` | Dataset-wide native DICOM geometry audit | `completed` | `0cc80eb` |
 | 073 | `B38` | 448 high-resolution global-tail ablation | `completed_not_promoted` | `c240267` |
 | 074 | `B39` | Five-offset inference refinement of frozen B37 | `submitted_pending_hidden_score` | `5a9d4ad` |
-| 075 | `B40` | B37 epoch-2 optimizer-reset one-epoch continuation | `implemented_not_run` | `9ad347f` |
+| 075 | `B40` | B37 epoch-2 optimizer-reset one-epoch continuation | `completed_not_promoted` | `04c60b4` |
 | 076 | `B41` | Native-aspect-preserving 90% crop sparse-MIL ablation | `implemented_not_run` | `41a3b6a` |
 
 ## Organize the local archive safely
@@ -173,11 +175,15 @@ historical numbering does not shift. B37 completed its fixed-E2 endpoint and
 reported a Kaggle score of 0.714. B38 completed as a negative global-only
 ablation and is retained rather than promoted. B39 is the submitted five-offset
 inference candidate using the immutable B37 checkpoint, with hidden score
-pending. B40 is a separate one-epoch, explicitly optimizer-reset local
-continuation from B37 E2; it does not modify B37 or B39. B41 is the next,
-predeclared preprocessing-only ablation: it preserves native in-plane aspect
-ratio after the same fixed 90% native crop, then resizes to fit and pads to the
-fixed 448 canvas. It does not modify B37 or the running B40 endpoint.
+pending. B40 completed its separate one-epoch optimizer-reset continuation from
+B37 E2 and is not promoted: combined Expert-58 macro changed by `-0.0010456551`,
+focal-six mean changed by `+0.0012755596`, and the paired bootstrap 95% interval
+was `[-0.0128037347, +0.0096924830]` with `P(B40 > B37)=0.429`. The lower training
+loss therefore did not provide evidence for extending the B37 weak-supervision
+trajectory. B41 is the next independent preprocessing/geometry candidate: it
+preserves native in-plane aspect ratio after the same fixed 90% native crop,
+then resizes to fit and pads to the fixed 448 canvas. It does not modify B37 or
+the completed B40 endpoint.
 
 ## Physically migrate run directories
 
