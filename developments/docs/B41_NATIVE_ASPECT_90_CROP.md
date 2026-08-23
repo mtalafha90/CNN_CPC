@@ -2,16 +2,25 @@
 
 ## Purpose
 
-The completed B37 endpoint achieved a Kaggle score of `0.714`.  B37 normalized
+The completed B37 endpoint achieved a Kaggle score of `0.714`. B37 normalized
 each full native DICOM volume, cropped the central 90% in native coordinates,
-then directly resized the retained matrix to `448x448`.  That direct resize
+then directly resized the retained matrix to `448x448`. That direct resize
 stretches rectangular source matrices.
 
 The completed native-resolution header audit found `24,371` model-eligible
 series, all internally consistent in matrix and PixelSpacing, but with genuine
-matrix diversity.  In particular, it found `258` `640x1280` series (1.06%), as
-well as `238` `320x300`, `232` `640x540`, and `148` `384x348` series.  B41 is an
+matrix diversity. In particular, it found `258` `640x1280` series (1.06%), as
+well as `238` `320x300`, `232` `640x540`, and `148` `384x348` series. B41 is an
 isolated answer to that geometry issue; it is not a change to B37 or B40.
+
+B40 has now completed its separate one-epoch optimizer-reset continuation from
+B37 E2. Although its training losses continued to fall, its reused Expert-58
+combined macro AUC changed from `0.6858177916` for B37 E2 to `0.6847721365` for
+B40 E3 (`-0.0010456551`), while the focal-six mean changed by only
+`+0.0012755596`. The paired bootstrap 95% interval for B40 minus B37 was
+`[-0.0128037347, +0.0096924830]`, with `P(B40 > B37)=0.429`. B40 is therefore
+completed and not promoted. B41 remains a distinct geometry/preprocessing
+candidate rather than a continuation of B40.
 
 ## Frozen B41 procedure
 
@@ -45,7 +54,7 @@ still varies across acquisitions.
 ## What B41 does not change
 
 - B37's completed checkpoint and 0.714 score remain immutable.
-- The already-running B40 continuation remains untouched.
+- B40 is completed/not-promoted and remains immutable as its own duration test.
 - B41 does not change the crop fraction, 448 canvas size, slice count, 6x6 grid,
   top-k, labels, base checkpoint, learning rate, encoder stages, or duration.
 - No expert labels enter B41 gradients, checkpoint selection, early stopping, or
