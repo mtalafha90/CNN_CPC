@@ -103,9 +103,10 @@ experiments must be appended to it; existing numbers must not be reordered.
 | 068 | `LLM_FILL_NO_SYNOVITIS` | LLM-fill ablation excluding Synovitis | `local_artifacts_result_not_in_repo` | `9055d47` |
 | 069 | `B35` | Target-conditioned dense spatial residual | `completed` | `63d6565` |
 | 070 | `B36` | Pathology-specific sparse top-k spatial MIL | `completed` | `8412e51` |
-| 071 | `B37` | High-resolution 448 pathology-specific sparse-MIL test | `running` | `cb4198f` |
+| 071 | `B37` | High-resolution 448 pathology-specific sparse-MIL test | `completed_kaggle_0.714` | `cb4198f` |
 | 072 | `NATIVE_RESOLUTION_AUDIT` | Dataset-wide native DICOM geometry audit | `completed` | `0cc80eb` |
-| 073 | `B38` | 448 high-resolution global-tail ablation | `implemented_not_run` | `c240267` |
+| 073 | `B38` | 448 high-resolution global-tail ablation | `completed_not_promoted` | `c240267` |
+| 074 | `B39` | Five-offset inference refinement of frozen B37 | `implemented_not_run` | `5a9d4ad` |
 
 ## Organize the local archive safely
 
@@ -138,6 +139,7 @@ runs/by_experiment/
 ├── 071_Experiment_B37_highres_448_sparse_mil/
 ├── 072_Experiment_NATIVE_RESOLUTION_AUDIT_native_dicom_geometry/
 ├── 073_Experiment_B38_highres_448_global_tail_ablation/
+├── 074_Experiment_B39_b37_five_offset_tta/
 ├── _Shared/
 │   ├── Comparisons/
 │   ├── Legacy_pipeline/
@@ -161,10 +163,12 @@ stops before creating or overwriting links.
 
 B37 remains number 071 because that family was introduced before the native
 resolution audit. Its original 288 design was never run and is now superseded;
-the active implemented protocol is the frozen 448-resolution sparse-MIL design
-at commit `9395665`. Both possible run names map to the same permanent B37
-number so historical numbering does not shift. Its status remains `running`
-until the fixed-E2 checkpoint and frozen Expert-58 diagnostic are complete.
+the completed protocol is the frozen 448-resolution sparse-MIL design at commit
+`9395665`. Both possible run names map to the same permanent B37 number so
+historical numbering does not shift. B37 completed its fixed-E2 endpoint and
+reported a Kaggle score of 0.714. B38 completed as a negative global-only
+ablation and is retained rather than promoted. B39 is a separate five-offset
+inference candidate using the immutable B37 checkpoint.
 
 ## Physically migrate run directories
 
