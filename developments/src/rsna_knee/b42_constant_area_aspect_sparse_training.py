@@ -61,6 +61,7 @@ from .b42_constant_area_aspect_sparse_mil import (
     require_b42_contract,
 )
 from .data import backfill_series_metadata, load_series_csv, load_train_csv
+from .dicom import DICOM_SUFFIXES, find_series_dir
 from .label_confidence import rescale_label_confidence
 from .phase9_matched_supervision_training import load_phase9_checkpoint
 from .phase9_supervision import (
@@ -147,6 +148,138 @@ def _synthetic_geometry_preflight(model, runtime) -> None:
         model.train(True)
 
 
+def _find_real_rectangular_index(
+    dataset,
+    *,
+    min_aspect_ratio: float = 1.20,
+) -> tuple[int, dict]:
+    """Find one active real study containing a rectangular DICOM series by headers only."""
+    import pydicom
+
+    threshold = float(min_aspect_ratio)
+    if threshold <= 1.0:
+        raise ValueError("B42 real rectangular preflight requires aspect ratio > 1")
+    for index, uid in enumerate(dataset.study_uids):
+        if dataset.weights is not None:
+            weight = np.asarray(dataset.weights[index])
+            if not np.any(weight > 0):
+                continue
+        for record in dataset.series_records[uid]:
+            series_uid = str(record["series_uid"])
+            directory = find_series_dir(
+                dataset.config.data_root,
+                dataset.config.split,
+                str(uid),
+                series_uid,
+            )
+            if directory is None:
+                continue
+            files = sorted(
+                path
+                for path in directory.iterdir()
+                if path.is_file() and path.suffix.lower() in DICOM_SUFFIXES
+            )
+            for path in files:
+                try:
+                    header = pydicom.dcmread(
+                        str(path),
+                        force=True,
+                        stop_before_pixels=True,
+                        specific_tags=["Rows", "Columns"],
+                    )
+                    rows = int(getattr(header, "Rows", 0) or 0)
+                    columns = int(getattr(header, "Columns", 0) or 0)
+                except Exception:
+                    continue
+                if rows < 1 or columns < 1:
+                    continue
+                ratio = max(rows, columns) / float(min(rows, columns))
+                if ratio >= threshold:
+                    return index, {
+                        "study_uid": str(uid),
+                        "series_uid": series_uid,
+                        "native_rows": rows,
+                        "native_columns": columns,
+                        "native_aspect_ratio": float(ratio),
+                    }
+                # Native dimensions are expected to be constant within a series;
+                # one readable header is sufficient for deterministic selection.
+                break
+    raise RuntimeError(
+        f"B42 could not find a real MRI series with aspect ratio >= {threshold:.2f}"
+    )
+
+
+def _real_rectangular_preflight(
+    model,
+    dataset,
+    runtime,
+    multiplier_t,
+    scaler,
+    aux_weight: float,
+) -> None:
+    """Run an actual rectangular DICOM study through B42 forward/backward."""
+    index, source = _find_real_rectangular_index(dataset)
+    item = dataset[index]
+    shapes = [(int(v.shape[-2]), int(v.shape[-1])) for v in item["volumes"]]
+    rectangular = [(h, w) for h, w in shapes if h != w]
+    if not rectangular:
+        raise RuntimeError(
+            "B42 header-selected rectangular study became entirely square after preprocessing"
+        )
+    print(
+        "[B42 preflight] real-rectangular "
+        f"study={source['study_uid']} series={source['series_uid']} "
+        f"native={source['native_rows']}x{source['native_columns']} "
+        f"aspect={source['native_aspect_ratio']:.3f} output_shapes={shapes}",
+        flush=True,
+    )
+
+    model.train()
+    model.zero_grad(set_to_none=True)
+    tensors = _move_study(item, runtime.device)
+    out, total, combined, local = _losses(
+        model, runtime, tensors, multiplier_t, aux_weight
+    )
+    if not (
+        torch.isfinite(out.base_logits).all()
+        and torch.isfinite(out.local_logits).all()
+        and torch.isfinite(out.logits).all()
+        and torch.isfinite(total)
+    ):
+        raise RuntimeError("B42 real rectangular preflight produced non-finite values")
+    scaler.scale(total).backward()
+
+    encoder_grad = any(
+        p.grad is not None and torch.count_nonzero(p.grad).item() > 0
+        for p in model.base.encoder.parameters()
+        if p.requires_grad
+    )
+    evidence_grad = bool(
+        model.head.evidence_weight.grad is not None
+        and torch.count_nonzero(model.head.evidence_weight.grad).item() > 0
+    )
+    leaked = any(
+        p.grad is not None
+        for name, p in model.base.named_parameters()
+        if not name.startswith("encoder.") and not p.requires_grad
+    )
+    if leaked:
+        raise RuntimeError("B42 real rectangular probe reached frozen B34 hierarchy")
+    if not encoder_grad or not evidence_grad:
+        raise RuntimeError(
+            "B42 real rectangular probe did not reach encoder tail and sparse evidence head"
+        )
+    print(
+        f"[B42 preflight] real-rectangular total={total.detach().item():.6f} "
+        f"combined={combined.detach().item():.6f} local={local.detach().item():.6f} PASS",
+        flush=True,
+    )
+    model.zero_grad(set_to_none=True)
+    del item, tensors, out, total, combined, local
+    _trim_host_memory()
+
+
 def _preflight(
     model,
     loader,
@@ -162,6 +295,14 @@ def _preflight(
         torch.cuda.reset_peak_memory_stats(runtime.device)
 
     _synthetic_geometry_preflight(model, runtime)
+    _real_rectangular_preflight(
+        model,
+        loader.dataset,
+        runtime,
+        multiplier_t,
+        scaler,
+        aux_weight,
+    )
     model.train()
     model.zero_grad(set_to_none=True)
     indices = _largest_series_indices(loader.dataset, B42_EFFECTIVE_BATCH)
