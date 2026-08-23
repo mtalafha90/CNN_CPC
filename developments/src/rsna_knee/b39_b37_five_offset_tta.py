@@ -27,6 +27,7 @@ B39_RUN_ROOT = f"{B39_NUMBERED_CONTAINER}/b39_b37_five_offset_tta"
 B39_TTA_OFFSETS = (-2, -1, 0, 1, 2)
 B39_RUNTIME_BUDGET_HOURS = 8.25
 B39_RUNTIME_RESERVE_MINUTES = 45.0
+B39_TIMING_SAFETY_FACTOR = 1.10
 B39_SUBMISSION_EXPERIMENT = (
     "B39_b37_five_offset_tta_hidden_test_inference"
 )
@@ -42,6 +43,9 @@ def require_b39_five_offset_contract(config: dict) -> dict:
     budget = float(config.get("runtime_budget_hours", B39_RUNTIME_BUDGET_HOURS))
     reserve = float(
         config.get("runtime_reserve_minutes", B39_RUNTIME_RESERVE_MINUTES)
+    )
+    safety = float(
+        config.get("b39_timing_safety_factor", B39_TIMING_SAFETY_FACTOR)
     )
     if not math.isclose(
         budget,
@@ -60,6 +64,15 @@ def require_b39_five_offset_contract(config: dict) -> dict:
     ):
         raise ValueError(
             f"B39 freezes runtime_reserve_minutes={B39_RUNTIME_RESERVE_MINUTES}"
+        )
+    if not math.isclose(
+        safety,
+        B39_TIMING_SAFETY_FACTOR,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        raise ValueError(
+            f"B39 freezes b39_timing_safety_factor={B39_TIMING_SAFETY_FACTOR}"
         )
     return policy
 
@@ -87,6 +100,7 @@ def generate_b39_submission(
         submission_version=B39_VERSION,
         endpoint_name="B39",
         min_reserve_minutes=B39_RUNTIME_RESERVE_MINUTES,
+        timing_safety_factor=B39_TIMING_SAFETY_FACTOR,
         preflight_only=bool(preflight_only),
         governance=(
             "Prospective B39 inference-only successor: exact frozen B37 fixed-E2 "
