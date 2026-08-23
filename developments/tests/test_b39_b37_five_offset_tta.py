@@ -14,6 +14,7 @@ from rsna_knee.b39_b37_five_offset_tta import (
     B39_RUNTIME_BUDGET_HOURS,
     B39_RUNTIME_RESERVE_MINUTES,
     B39_TTA_OFFSETS,
+    B39_TIMING_SAFETY_FACTOR,
     require_b39_five_offset_contract,
 )
 
@@ -31,6 +32,7 @@ def test_b39_is_exactly_the_symmetric_five_offset_recipe() -> None:
     assert tuple(config["b7_eval_tta_offsets"]) == B39_TTA_OFFSETS
     assert config["runtime_budget_hours"] == B39_RUNTIME_BUDGET_HOURS
     assert config["runtime_reserve_minutes"] == B39_RUNTIME_RESERVE_MINUTES
+    assert config["b39_timing_safety_factor"] == B39_TIMING_SAFETY_FACTOR
     policy = require_b39_five_offset_contract(config)
     assert policy["crop_fraction"] == 0.90
 
@@ -47,6 +49,11 @@ def test_b39_rejects_a_different_tta_or_runtime_recipe() -> None:
     wrong_reserve["runtime_reserve_minutes"] = 30
     with pytest.raises(ValueError, match="runtime_reserve_minutes"):
         require_b39_five_offset_contract(wrong_reserve)
+
+    wrong_safety = dict(config)
+    wrong_safety["b39_timing_safety_factor"] = 1.35
+    with pytest.raises(ValueError, match="b39_timing_safety_factor"):
+        require_b39_five_offset_contract(wrong_safety)
 
 
 def test_original_b37_submission_remains_the_three_offset_endpoint() -> None:
