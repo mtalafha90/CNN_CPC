@@ -61,6 +61,12 @@ def _target_rows(truth, base, b37, b40) -> tuple[float, float, float, dict]:
     return float(base_macro), float(b37_macro), float(b40_macro), rows
 
 
+def _global_macro_auc(truth: np.ndarray, prediction: np.ndarray) -> float:
+    """Return only the scalar macro AUC for a global-logit prediction matrix."""
+    macro_auc, _ = macro_auc_from_arrays(truth, prediction)
+    return float(macro_auc)
+
+
 @torch.no_grad()
 def evaluate_b40(
     config: dict,
@@ -194,8 +200,8 @@ def evaluate_b40(
         raise RuntimeError(
             f"historical base replay changed: expected ~{B37_EXPECTED_BASE_MACRO:.10f}, got {base_macro:.10f}"
         )
-    _, b37_global_macro = macro_auc_from_arrays(truth, b37_global_prediction)
-    _, b40_global_macro = macro_auc_from_arrays(truth, b40_global_prediction)
+    b37_global_macro = _global_macro_auc(truth, b37_global_prediction)
+    b40_global_macro = _global_macro_auc(truth, b40_global_prediction)
     focal_b37 = float(np.mean([per_target[target]["b37_e2_auc"] for target in FOCAL_SIX]))
     focal_b40 = float(np.mean([per_target[target]["b40_e3_auc"] for target in FOCAL_SIX]))
     paired = compare_runs(
