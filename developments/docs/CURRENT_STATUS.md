@@ -1,253 +1,122 @@
 # Current project status
 
-**Snapshot:** 2026-08-22
-**Package:** `0.30.0`
+**Snapshot:** 2026-08-24
 **Primary metric:** macro ROC AUC across 12 targets
-**Best independent evidence:** hidden-test macro AUC **0.694** (encoder
-fine-tuned one stage, all-script supervision), submitted 2026-08-19
+**Best independent displayed Kaggle score:** **0.714**
 
-## The rulers are now calibrated
+This file is the living project-status record. Earlier snapshots remain available in Git history and in the frozen experiment documents.
 
-The first submission ends the project's central measurement problem for the
-expert surface. The frozen-encoder model, trained on all 4,349 report-only
-studies:
+## Independent hidden evidence
 
-```text
-58 expert studies (local)     0.652     understates by about 0.036
-hidden competition test       0.688     the reference
-```
+The current successful hidden submissions are:
 
-The expert surface is biased low rather than merely noisy. It should not be
-quoted as an estimate of competition performance; it remains useful for
-ordering models, not for predicting the score.
+| Endpoint | Main distinction | Kaggle displayed macro AUC |
+|---|---|---:|
+| B37 | direct-square 448 sparse MIL | **0.714** |
+| B41 | aspect-preserving 448 square-pad sparse MIL | **0.714** |
+| B42 | constant-area native-aspect ragged sparse MIL | **0.714** |
 
-**The 499-study surface is not yet calibrated, and an earlier version of this
-page said otherwise.** It listed 0.743 as a third row of the table above, as
-though one model had been measured on three surfaces. It had not. The 0.743 is
-`candidate_macro_auc` from the Phase-9 v2 comparison, and that model was trained
-on **3,850** studies with the 499 held out -- necessarily, since scoring a
-full-population model on those studies would be scoring it on its own training
-data. Subtracting a 3,850-study model's local score from a 4,349-study model's
-hidden score does not measure a surface's bias; it measures two different
-models. The "overstates by about 0.055" that followed from it was not supported.
+These are displayed ties. Kaggle rounds the leaderboard value, so identical displayed scores do not establish identical unrounded AUC.
 
-Calibrating it properly needed the hidden score of the *same* model that scored
-0.743 locally. The third submission supplied it:
+B41 originally failed during the hidden notebook rerun. The same frozen scientific endpoint later completed after inference was changed to hidden-safe streaming: one TTA study view at a time, native normalization once per series, host trimming after each study, and runtime prediction converted from a possible exception into telemetry. The resulting hidden score was `0.714`, demonstrating that the original B41 failure was operational rather than a model result.
+
+B42 completed normally and also scored `0.714`.
+
+B39 remains an inference-only five-offset B37 refinement whose earlier hidden notebook failed operationally; a hidden-safe streaming implementation exists, but no corrected B39 score is recorded here yet.
+
+## B45 closed
+
+B45 tested plane-calibrated target-conditioned sparse MIL on top of B42. It was frozen before training, completed exactly two epochs, used zero expert/gold gradients, and passed its final training audit.
+
+Final checkpoint SHA-256:
 
 ```text
-Phase-9 v2 candidate (all-script, 3,850 studies, 499 held out)
-    499 weak studies (local)    0.7434
-    hidden competition test     0.691     overstates by 0.052
+bd7fbc94b49d45b2cf7fe97a1a7ab371a175dc63b9ee6551a56e251e13e6bc61
 ```
 
-So the surface does overstate by roughly the amount originally guessed, and now
-the figure rests on one model measured twice rather than two models subtracted.
-Both local surfaces are biased, in opposite directions, and the truth sits
-between them:
+The learned target-plane router stayed close to uniform. The fixed post-training Expert-58 diagnostic returned:
 
 ```text
-58 expert studies      understates by about 0.033   (two pairings)
-499 weak studies       overstates  by about 0.052   (one pairing)
+                         macro AUC      focal-six
+B37 combined             0.685818       0.584165
+B42 combined             0.683120       0.580098
+B45 combined             0.679176       0.579334
+
+B45 - B42 macro         -0.003944
+B45 - B37 macro         -0.006641
 ```
 
-The 499-study surface is the better instrument despite the larger offset,
-because its offset is what gets subtracted while its *noise* is what limits
-resolution, and 499 studies carry roughly a third of the noise of 58.
-
-## Three submissions, and the band they fall in
+Paired bootstrap:
 
 ```text
-                          train    encoder      hidden
-frozen encoder            4,349    frozen       0.688
-Phase-9 v2 candidate      3,850    frozen       0.691
-fine-tuned, 1 stage       4,349    1 stage      0.694
+B45 - B42
+median                  -0.003464
+95% CI                  [-0.014613, +0.003548]
+P(B45 > B42)             0.1886
+
+B45 - B37
+median                  -0.006209
+95% CI                  [-0.015937, +0.000392]
+P(B45 > B37)             0.0346
 ```
 
-**Every hidden score sits within 0.006 of every other.** The three differ in
-whether the encoder learned and in 499 studies of training data, and the whole
-spread is smaller than the uncertainty on any one of them.
+ACL, which motivated the plane-routing hypothesis, changed from `0.475490` for B42 to `0.462010` for B45. Lateral Meniscus and Contusion improved, but the aggregate and focal-six endpoints did not.
 
-The middle row is the most informative. It trained on 500 fewer studies than
-the row above it and scored no worse. Whatever is limiting this model, it is
-not the last 12% of the training population -- which also means the remaining
-unlabelled studies are unlikely to be worth much.
+**Decision:** B45 is `completed_not_promoted`. No Kaggle submission will be made for B45 by explicit project decision. Do not tune router temperature, plane weights, target subsets, top-k, geometry, learning rates or epoch count from the reused Expert-58 result.
+
+Full B45 record: [`B45_PLANE_CALIBRATED_SPARSE_MIL.md`](B45_PLANE_CALIBRATED_SPARSE_MIL.md).
+
+## What the late experiments now say
+
+The B37-B45 line has reached a plateau rather than a missing-small-hyperparameter problem.
+
+- B38 showed that higher-resolution global-only encoder-tail training did not improve the reused Expert-58 endpoint.
+- B40 showed that an additional training epoch reduced the weak-supervision objective while failing to improve expert AUC.
+- B41/B42 showed that correcting in-plane geometry did not create visible hidden separation from B37.
+- B44 showed that doubling deterministic center coverage from 32 to 64 did not rescue the weak targets.
+- B45 showed that independent per-plane top-k pooling plus static target-plane fusion did not repair ACL and did not improve the aggregate endpoint.
+
+The project should therefore stop spending experiments on nearby resolution, crop, center-count, top-k, static plane-router or duration variants.
+
+## Main diagnosis
+
+The strongest remaining bottlenecks are now judged to be:
+
+1. **report-to-expert target mismatch** — later models keep optimizing report-derived labels even when lower training loss no longer tracks expert AUC;
+2. **adaptive use of the 58 expert studies** — they remain out of gradients but have been inspected too many times to act as a clean architecture-design surface;
+3. **unused clean supervision** — all `58 x 12 = 696` official gold cells have been withheld from training despite being the only direct competition-target labels;
+4. **insufficient ordered volumetric reasoning** — 2.5D/top-k models sample depth but do not explicitly model long-range slice continuity;
+5. **late/static plane handling** — B45 fuses per-plane logits with study-independent target scalars rather than learning feature-level cross-sequence interactions;
+6. **multicenter/domain shift** — existing UID-hash weak splits are not explicit site/scanner holdouts;
+7. **underpowered report semantics** — B16's full-report teacher is TF-IDF + SVD rather than a modern multilingual semantic representation.
+
+The detailed evidence and corrective plan are frozen in [`POST_B45_PLATEAU_RETROSPECTIVE.md`](POST_B45_PLATEAU_RETROSPECTIVE.md).
+
+## Next experiment
+
+### B46 — gold-anchored cross-fitted supervision
+
+B46 should test the largest unresolved assumption **without changing the image architecture first**:
+
+> Does clean official target supervision improve the frozen parent when used prospectively and cross-fitted, or is the ceiling primarily representational?
+
+The proposed protocol is five-fold OOF use of the 58 gold studies. For each fold, the model trains on all report-only weak studies plus the other gold folds and predicts only gold studies excluded from that fold's gradients. The gold-source weight, architecture, epoch count and fold assignment must be frozen before the OOF result is inspected.
+
+If B46 gives a coherent OOF gain that is not driven by one target, train one final all-gold-anchored model. If B46 is negative/small, move to B47 rather than tuning the weighting.
+
+### B47 — explicit within-series slice sequence modeling
+
+B47 should test ordered through-plane representation while keeping center density fixed. A lightweight slice Transformer/temporal block should operate on ordered per-slice features before study-level series aggregation. This tests depth relationships rather than more slice samples.
+
+### B48 — dynamic cross-series/cross-sequence attention
+
+Only after the preceding question is resolved should plane/sequence modeling be revisited. The next plane mechanism must be study-dependent feature interaction, not a static target-plane scalar router.
+
+## Current direction in one line
 
 ```text
-                        58 expert    hidden    offset
-frozen encoder            0.652       0.688    +0.036
-fine-tuned, 1 stage       0.663       0.694    +0.031
-difference               +0.011      +0.006
+stop small sparse-MIL/geometry tweaks
+-> test clean-label anchoring
+-> then test explicit volumetric sequence reasoning
+-> then dynamic cross-sequence interaction
 ```
-
-The offset held to within 0.005 across the two, the first sign that the expert
-surface is biased rather than merely noisy. If that survives a third point,
-differences measured on it can be read as roughly tracking hidden differences,
-and `hidden ~ expert + 0.033` becomes a usable rough predictor. Two points
-cannot establish it.
-
-**Encoder fine-tuning is not established by this.** Both gaps are smaller than
-either surface can resolve: 58 studies carry an error near +/-0.16 per target,
-and a single hidden score of this size has an uncertainty of roughly +/-0.01.
-What can be said is that two surfaces moved the same way by a similar amount,
-which is weak positive evidence and a reason to keep probing the line, not a
-result. The honest summary is that the recipe has not been shown to hurt and
-may help a little.
-
-The practical consequence is a ceiling on this style of experiment. A change
-worth roughly +0.005 cannot be told from noise one submission at a time, so the
-remaining work should favour changes carrying a mechanism and a measurement
-over further small architectural variations.
-
-For context, published work on this task shape - twelve knee findings from MRI
-- reports roughly 0.73 to 0.81. A first submission at 0.688 is within reach of
-that band, and the long-standing 0.94 target has no published precedent for
-this problem.
-
-## Where things stand
-
-**Nothing has been promoted.** Every result below comes from surfaces built in
-this repository. The frozen governance position remains that B20 is the last
-model promoted on evidence, and no later experiment has cleared a promotion
-path.
-
-**The top-level interface targets the B34/B31 architecture.** That is an
-interface decision recorded in `docs/WORKING_MODEL.md`, made because B34 is the
-strongest candidate on both internal surfaces and has the simplest inference
-path. It is not a promotion, and it does not change any frozen experiment
-record. The interface and the governance record therefore disagree on purpose;
-the submitted scores do not yet identify a clear replacement.
-
-## Current execution
-
-**B37 is running under its frozen 448-resolution sparse-MIL protocol.** Its
-first attempt was an infrastructure interruption caused by host-memory pressure,
-not an experimental result. The relaunch passed the deterministic worst-case
-forward/backward preflight with worker prefetching and pinned host buffers
-disabled. Only the complete fixed-E2 `b37_model.pt` and its subsequent
-Expert-58 diagnostic may be recorded as a B37 result; partial logs and recovery
-files are not selectable endpoints.
-
-## The two findings that matter
-
-**1. The reports are multilingual, and the parser could not read a quarter of
-them.** Phase 5 inspected the zero-cell population and found every sampled
-report contained clear target-relevant statements. Their zero-label status was
-parser coverage, not clinical silence. The decisive detail: all 12 sampled
-Greek B6-active reports had exactly one usable cell, `Contusion = positive`,
-each from the incidental English phrase `bone bruise`. Apparent non-Latin
-coverage was embedded English, not parsing.
-
-Translating before running the unchanged parser (Phases 6-8) produced:
-
-```text
-rescued studies      1053 / 1229 = 85.68%
-coverage             71.74% -> 95.95%
-usable cells         14123 -> 18024   (+3901, +27.62%)
-by script            Cyrillic 99.54%   Latin 83.22%   Greek 81.43%
-```
-
-**2. A powered validation surface now exists.** The prospective weak splits
-(PV1/PV2) give 499-624 validation studies, against 58 for the expert surface.
-PV2's primary test returned a 95% interval entirely below zero
-(`[-0.01257, -0.00399]`, P = 0.9998) — something the expert surface has never
-produced in 34 experiments.
-
-## Architecture ladder: essentially flat
-
-Reused 58-study expert surface, paired against B20 `0.6674066371`:
-
-| Experiment | Macro AUC | Outcome |
-|---|---:|---|
-| B26.2 supervision repair | 0.6663 | closed, not promoted |
-| B27.1 pathology routing | 0.6599 | closed, not promoted |
-| B28 max-evidence residual | 0.6383 | closed, not promoted |
-| B29 complementary pool | 0.6769 | frozen candidate, not promoted |
-| B30 projected complementary | 0.6547 | formulation closed |
-| B31 local context | **0.6823** | highest on this surface |
-| B32 dispersion summary | ~tied | formulation closed |
-| B33 uniform mean | 0.6764 | simplification of B29 |
-| B34 train-only scaffold | — | B31-equivalent, simpler inference |
-
-Eight experiments, roughly +0.015 of point estimate, every interval crossing
-zero. The architecture direction is exhausted in its current form.
-
-## Phase 9 v2 — the matched supervision test
-
-Both arms trained on 3,850 studies with the 499-study PV2 partition held out,
-and scored on original frozen labels only, so the evaluation is not circular.
-
-```text
-BCE        -0.00988   CI [-0.01990, +0.00008]   P = 0.9742
-macro AUC  +0.00322   CI [-0.00847, +0.01508]   P = 0.6897
-```
-
-Both aggregates favour the merged supervision; both intervals include zero. The
-BCE upper bound sits at `+0.000084`, about as close to excluding zero as is
-possible without doing so.
-
-Two per-target results reached significance, but **only one survives correction
-for testing 12 targets**:
-
-```text
-Contusion  +0.0554  CI [+0.0206, +0.0933]  P=0.9990  two-sided p ~ 0.0020
-           survives Bonferroni (0.05/12 = 0.00417) and Benjamini-Hochberg
-
-Effusion   -0.0262  CI [-0.0483, -0.0052]  P=0.0082  two-sided p ~ 0.0164
-           survives neither
-```
-
-Removing Contusion flips the macro sign (`+0.0032 -> -0.0015`). The entire
-aggregate rests on one target.
-
-**This is the third time an aggregate has dissolved into a single target under
-audit** — B25X was 96.4% Synovitis, B24X-Density showed the gain was coverage
-rather than correction, and Phase 9 is Contusion. Leave-one-target-out belongs
-in the standing protocol, not in a post-hoc check.
-
-## Open hypothesis on the Contusion result
-
-Contusion is the only target where the non-Latin population had any
-pre-existing label coverage — the incidental `bone bruise` positives from
-Phase 5. It is also the only target driving the Phase 9 macro result. That
-coincidence is untested.
-
-If the control arm learned a site shortcut from a single-target, positive-only
-signal in a distinct scanner population, the +0.055 would be partly the
-*removal of a control artefact* rather than new signal in the candidate.
-
-The discriminating check is cheap and non-circular: stratify the stored PV2
-per-target results by report script (Latin / Greek / Cyrillic). No retraining,
-no change to the rescue set. Concentration in the non-Latin strata supports the
-shortcut reading; an even spread across Latin studies does not.
-
-## Blocked
-
-The Phase-7 rescue evidence — `translation_cache.jsonl`,
-`full_population_rescue_audit.csv`, `recovered_cells.csv` — was not found at
-the attempted local path, so the label-generation mechanism audit cannot run.
-`phase9_v2_rescue_mechanism_audit.py` exists and is ready; unlike the other
-modules in this campaign it has no test file.
-
-The same path ambiguity affects training: the merged-label export is recorded
-under two different roots across the archive. Verify with the pinned
-fingerprints before launching anything:
-
-```text
-training_targets.csv   c59d78c74743112f09946fd18b64d7726947e6f75b83aabd1f585389a89d045a
-recovered_cells.csv    ed094e5d6f77b1558fe63921f2f22b8e1006443c506f00f921d842cde72025d0
-```
-
-## Next
-
-1. **Preserve the three submitted recipes.** Do not use their leaderboard
-   feedback to tune them. If B37 clears its predeclared Expert-58 threshold, it
-   first needs an exact, runtime-tested B37 inference path and then one
-   predeclared hidden evaluation.
-2. **Script stratification** of the stored PV2 predictions (CPU, minutes).
-3. **Finish paired macro-AUC uncertainty for PV1/PV2.** Phase-9 v2 already has
-   its frozen AUC addendum; the remaining earlier surfaces still rank on soft
-   BCE, whereas the competition scores macro AUC.
-4. **Locate the Phase-7 artifacts** and run the mechanism audit.
-
-Detailed records for every experiment named here are in this directory and are
-frozen; they are not revised when the project's understanding moves on.
