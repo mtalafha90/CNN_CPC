@@ -17,18 +17,6 @@ import torch
 
 from .b7_weak_supervision import _read_config
 from .b35_training import sha256_file
-from .b39_b37_five_offset_tta_dualgpu_fast import generate_b39_submission_dual_gpu_fast
-from .b39_b37_five_offset_tta_dualgpu_streaming import (
-    B39_STREAMING_EXECUTION_VERSION,
-    generate_b39_submission_dual_gpu_streaming,
-)
-from .b41_highres_aspect_sparse_submission_dualgpu_fast import (
-    generate_b41_submission_dual_gpu_fast,
-)
-from .b41_highres_aspect_sparse_submission_dualgpu_streaming import (
-    B41_STREAMING_EXECUTION_VERSION,
-    generate_b41_submission_dual_gpu_streaming,
-)
 
 
 def _release_between_runs() -> None:
@@ -83,7 +71,17 @@ def run_visible_equivalence(
     reference_path = out / f"{endpoint}_audited_fast.csv"
     streaming_path = out / f"{endpoint}_hidden_safe_streaming.csv"
 
+    # Endpoint imports are intentionally lazy so a B41-only Kaggle artifact does
+    # not need to contain B39 modules, and vice versa.
     if endpoint == "b39":
+        from .b39_b37_five_offset_tta_dualgpu_fast import (
+            generate_b39_submission_dual_gpu_fast,
+        )
+        from .b39_b37_five_offset_tta_dualgpu_streaming import (
+            B39_STREAMING_EXECUTION_VERSION,
+            generate_b39_submission_dual_gpu_streaming,
+        )
+
         generate_b39_submission_dual_gpu_fast(
             config,
             data_root=data_root,
@@ -101,6 +99,14 @@ def run_visible_equivalence(
         )
         execution_version = B39_STREAMING_EXECUTION_VERSION
     elif endpoint == "b41":
+        from .b41_highres_aspect_sparse_submission_dualgpu_fast import (
+            generate_b41_submission_dual_gpu_fast,
+        )
+        from .b41_highres_aspect_sparse_submission_dualgpu_streaming import (
+            B41_STREAMING_EXECUTION_VERSION,
+            generate_b41_submission_dual_gpu_streaming,
+        )
+
         generate_b41_submission_dual_gpu_fast(
             config,
             data_root=data_root,
