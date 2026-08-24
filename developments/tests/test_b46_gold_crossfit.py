@@ -76,3 +76,12 @@ def test_b46_assignment_changes_when_salt_changes():
     # Salt is part of the frozen tie-breaking contract; on a nontrivial surface
     # a different salt should not silently reproduce the entire assignment.
     assert not np.array_equal(a, b)
+
+
+def test_b46_training_and_eval_modules_import():
+    # Importing these catches syntax/import drift without constructing a model.
+    from rsna_knee import b46_gold_crossfit_eval as evaluation
+    from rsna_knee import b46_gold_crossfit_training as training
+
+    assert callable(training.train_b46_fold)
+    assert callable(evaluation.evaluate_b46_crossfit)
