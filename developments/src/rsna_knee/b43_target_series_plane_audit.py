@@ -1,17 +1,9 @@
 """B43 precursor diagnostic: target x series x plane evidence audit for frozen B42.
 
-This module is deliberately diagnostic-only.  It does not train, select, tune,
-blend, threshold, or promote a model.  It reuses the post-B42 Expert-58 surface
-to answer a narrower mechanistic question: for each pathology, which acquired
-MRI series and anatomical plane supply the strongest B42 sparse-MIL evidence,
-and does removing that series materially change the frozen study prediction?
-
-The frozen B42 endpoint and its three evaluation offsets [-1, 0, +1] are kept
-unchanged.  Series are never re-encoded for leave-one-series-out diagnostics:
-the already-computed B42 global/spatial features are reused and only the frozen
-B34 aggregation mask plus frozen B42 sparse head are reevaluated.  Therefore the
-leave-one-out quantities measure aggregation/routing sensitivity rather than a
-new model.
+Diagnostic only: no training, selection, tuning, blending, thresholding, or model
+promotion.  The module reuses the post-B42 Expert-58 surface to determine which
+MRI series/plane supplies each pathology's strongest sparse-MIL evidence and
+whether removing that already-encoded series changes the frozen B42 prediction.
 """
 from __future__ import annotations
 
@@ -49,7 +41,6 @@ B43_AUDIT_ROLE = (
     "reused post-B42 Expert-58 mechanistic diagnostic; not independent test evidence, "
     "not a tuning set, and not a B43 training/promotion criterion"
 )
-
 PLANE_NAMES = {0: "Unknown", 1: "Sagittal", 2: "Coronal", 3: "Axial"}
 FLAG_NAMES = {0: "Unknown", 1: "False", 2: "True"}
 
@@ -73,7 +64,7 @@ def decode_sparse_index(
     n_regions: int,
     grid_size: int,
 ) -> tuple[int, int, int, int, int]:
-    """Decode flattened B36/B42 token index into series/slice/grid coordinates."""
+    """Decode B36/B42 flattened token index to series/slice/grid coordinates."""
     index = int(flat_index)
     slices = int(n_slices)
     regions = int(n_regions)
@@ -82,26 +73,32 @@ def decode_sparse_index(
         raise ValueError("invalid sparse-index geometry")
     per_series = slices * regions
     series_index = index // per_series
-    within_series = index % per_series
-    slice_index = within_series // regions
-    region_index = within_series % regions
-    region_row = region_index // grid
-    region_col = region_index % grid
-    return series_index, slice_index, region_index, region_row, region_col
+    within = index % per_series
+    slice_index = within // regions
+    region_index = within % regions
+    return (
+        series_index,
+        slice_index,
+        region_index,
+        region_index // grid,
+        region_index % grid,
+    )
 
 
 def _lme(values: torch.Tensor, temperature: float) -> torch.Tensor:
-    """B36/B42 log-mean-exp pooling on an already selected vector."""
     if values.ndim != 1 or values.numel() < 1:
         raise ValueError("log-mean-exp requires a non-empty 1-D vector")
     tau = float(temperature)
     if tau <= 0:
         raise ValueError("temperature must be positive")
-    return tau * (torch.logsumexp(values.float() / tau, dim=0) - math.log(float(values.numel())))
+    return tau * (
+        torch.logsumexp(values.float() / tau, dim=0)
+        - math.log(float(values.numel()))
+    )
 
 
 def _score_tokens(model, spatial, present, series_meta, slice_position):
-    """Return the exact frozen B42 token evidence surface [1,T,N]."""
+    """Reconstruct exact frozen B42 token evidence scores [B,T,N]."""
     tokens, invalid = model.head._tokens(spatial, present, series_meta, slice_position)
     score = torch.einsum(
         "bnd,td->btn",
@@ -114,7 +111,7 @@ def _score_tokens(model, spatial, present, series_meta, slice_position):
 def _read_reference_prediction(path: Path, uids: list[str]) -> np.ndarray:
     if not path.is_file():
         raise FileNotFoundError(
-            f"B43 audit requires the already-recorded B42 Expert-58 prediction file: {path}"
+            f"B43 audit requires recorded B42 Expert-58 predictions: {path}"
         )
     frame = pd.read_csv(path)
     required = ["StudyInstanceUID", *TARGETS]
@@ -130,46 +127,35 @@ def _read_reference_prediction(path: Path, uids: list[str]) -> np.ndarray:
 
 def _aggregate_series_rows(view_rows: pd.DataFrame, top_k: int) -> pd.DataFrame:
     keys = [
-        "StudyInstanceUID",
-        "target",
-        "target_index",
-        "truth",
-        "series_index",
-        "series_uid",
-        "plane",
-        "plane_id",
-        "fluid_sensitive",
-        "fluid_id",
-        "fat_suppression",
-        "fat_id",
-        "height",
-        "width",
-        "rectangular",
+        "StudyInstanceUID", "target", "target_index", "truth",
+        "series_index", "series_uid", "plane", "plane_id",
+        "fluid_sensitive", "fluid_id", "fat_suppression", "fat_id",
+        "height", "width", "rectangular",
     ]
     means = [
-        "base_probability",
-        "combined_probability",
-        "local_logit",
-        "gate_effective",
-        "gated_local_logit",
-        "series_top1_evidence",
-        "series_topk_lme",
-        "series_mean_evidence",
-        "leave_one_out_base_probability",
-        "leave_one_out_combined_probability",
-        "leave_one_out_logit_delta",
-        "leave_one_out_probability_delta",
+        "base_probability", "combined_probability", "local_logit",
+        "gate_effective", "gated_local_logit", "series_top1_evidence",
+        "series_topk_lme", "series_mean_evidence",
+        "leave_one_out_base_probability", "leave_one_out_combined_probability",
+        "leave_one_out_logit_delta", "leave_one_out_probability_delta",
     ]
     grouped = view_rows.groupby(keys, sort=False, dropna=False)
     out = grouped[means].mean().reset_index()
-    selected = grouped["selected_count"].sum().reset_index(name="selected_count_three_views")
-    top1 = grouped["is_global_top1_series"].sum().reset_index(name="global_top1_views")
+    selected = grouped["selected_count"].sum().reset_index(
+        name="selected_count_three_views"
+    )
+    top1 = grouped["is_global_top1_series"].sum().reset_index(
+        name="global_top1_views"
+    )
     out = out.merge(selected, on=keys, validate="one_to_one")
     out = out.merge(top1, on=keys, validate="one_to_one")
-    out["selected_fraction_three_views"] = out["selected_count_three_views"] / float(
-        len(B37_EVAL_OFFSETS) * int(top_k)
+    out["selected_fraction_three_views"] = (
+        out["selected_count_three_views"]
+        / float(len(B37_EVAL_OFFSETS) * int(top_k))
     )
-    out["global_top1_fraction"] = out["global_top1_views"] / float(len(B37_EVAL_OFFSETS))
+    out["global_top1_fraction"] = (
+        out["global_top1_views"] / float(len(B37_EVAL_OFFSETS))
+    )
     return out
 
 
@@ -179,7 +165,9 @@ def _strongest_series_table(series_rows: pd.DataFrame) -> pd.DataFrame:
         ascending=[True, True, False, True],
         kind="mergesort",
     )
-    strongest = ordered.groupby(["StudyInstanceUID", "target_index"], sort=False).head(1).copy()
+    strongest = ordered.groupby(
+        ["StudyInstanceUID", "target_index"], sort=False
+    ).head(1).copy()
     strongest = strongest.rename(
         columns={
             "series_index": "strongest_series_index",
@@ -195,25 +183,13 @@ def _strongest_series_table(series_rows: pd.DataFrame) -> pd.DataFrame:
         }
     )
     keep = [
-        "StudyInstanceUID",
-        "target",
-        "target_index",
-        "truth",
-        "base_probability",
-        "combined_probability",
-        "local_logit",
-        "gate_effective",
-        "strongest_series_index",
-        "strongest_series_uid",
-        "strongest_plane",
-        "strongest_plane_id",
-        "strongest_fluid_sensitive",
-        "strongest_fat_suppression",
-        "strongest_series_top1_evidence",
-        "strongest_series_topk_lme",
-        "strongest_series_leave_one_out_logit_delta",
-        "strongest_series_leave_one_out_probability_delta",
-        "global_top1_fraction",
+        "StudyInstanceUID", "target", "target_index", "truth",
+        "base_probability", "combined_probability", "local_logit", "gate_effective",
+        "strongest_series_index", "strongest_series_uid", "strongest_plane",
+        "strongest_plane_id", "strongest_fluid_sensitive",
+        "strongest_fat_suppression", "strongest_series_top1_evidence",
+        "strongest_series_topk_lme", "strongest_series_leave_one_out_logit_delta",
+        "strongest_series_leave_one_out_probability_delta", "global_top1_fraction",
         "selected_fraction_three_views",
     ]
     return strongest[keep].reset_index(drop=True)
@@ -221,7 +197,9 @@ def _strongest_series_table(series_rows: pd.DataFrame) -> pd.DataFrame:
 
 def _plane_summary(strongest: pd.DataFrame) -> pd.DataFrame:
     counts = (
-        strongest.groupby(["target", "target_index", "truth", "strongest_plane"], sort=False)
+        strongest.groupby(
+            ["target", "target_index", "truth", "strongest_plane"], sort=False
+        )
         .size()
         .reset_index(name="strongest_count")
     )
@@ -230,8 +208,12 @@ def _plane_summary(strongest: pd.DataFrame) -> pd.DataFrame:
         .size()
         .reset_index(name="study_target_count")
     )
-    counts = counts.merge(totals, on=["target", "target_index", "truth"], validate="many_to_one")
-    counts["strongest_fraction"] = counts["strongest_count"] / counts["study_target_count"]
+    counts = counts.merge(
+        totals, on=["target", "target_index", "truth"], validate="many_to_one"
+    )
+    counts["strongest_fraction"] = (
+        counts["strongest_count"] / counts["study_target_count"]
+    )
     return counts.sort_values(
         ["target_index", "truth", "strongest_fraction", "strongest_plane"],
         ascending=[True, True, False, True],
@@ -248,7 +230,7 @@ def audit_target_series_plane(
     out_root: str | Path = B43_AUDIT_ROOT,
     reference_predictions: str | Path | None = None,
 ) -> dict:
-    """Run the post-B42 Expert-58 target/series/plane mechanistic audit."""
+    """Run the frozen-B42 Expert-58 target/series/plane mechanistic audit."""
     settings = dict(config)
     settings["data_root"] = str(Path(data_root).resolve())
     settings["b7_eval_batch_size"] = 1
@@ -309,6 +291,7 @@ def audit_target_series_plane(
     gate = model.head.effective_gate().detach().float().cpu().numpy()
 
     view_rows: list[dict] = []
+    selected_rows: list[dict] = []
     prediction_rows: list[np.ndarray] = []
     scored_uids: list[str] = []
 
@@ -323,8 +306,8 @@ def audit_target_series_plane(
             records = index[uid]
 
             present_cpu = item["present"]
-            present = present_cpu.to(runtime.device, non_blocking=True)
-            meta = item["series_meta"].to(runtime.device, non_blocking=True)
+            present = present_cpu.to(runtime.device, non_blocking=True).unsqueeze(0)
+            meta = item["series_meta"].to(runtime.device, non_blocking=True).unsqueeze(0)
             position_all = item["slice_position"].to(runtime.device, non_blocking=True)
             if position_all.ndim != 3 or int(position_all.shape[1]) != len(B37_EVAL_OFFSETS):
                 raise RuntimeError("B43 audit TTA position shape changed")
@@ -337,7 +320,7 @@ def audit_target_series_plane(
                     series_tensor[view_index].to(runtime.device, non_blocking=True)
                     for series_tensor in item["volumes"]
                 ]
-                position = position_all[:, view_index]
+                position = position_all[:, view_index].unsqueeze(0)
 
                 with autocast(runtime):
                     global_feature, spatial = model._encode_ragged_study(volumes, present)
@@ -350,26 +333,27 @@ def audit_target_series_plane(
                 gate_device = model.head.effective_gate().to(
                     device=runtime.device, dtype=local_logits.dtype
                 )
-                combined_logits = base_logits.float() + gate_device[None, :] * local_logits.float()
+                combined_logits = (
+                    base_logits.float() + gate_device[None, :] * local_logits.float()
+                )
                 base_probability = torch.sigmoid(base_logits.float())[0]
                 combined_probability = torch.sigmoid(combined_logits)[0]
                 combined_views.append(combined_probability.detach().cpu())
 
                 verify_values, verify_indices = torch.topk(
-                    score,
-                    k=top_k,
-                    dim=-1,
-                    largest=True,
-                    sorted=True,
+                    score, k=top_k, dim=-1, largest=True, sorted=True
                 )
                 if not torch.equal(verify_indices, top_indices):
-                    raise RuntimeError("B43 token-score reconstruction changed B42 top-k indices")
+                    raise RuntimeError(
+                        "B43 token-score reconstruction changed B42 top-k indices"
+                    )
                 max_top_value_delta = float(
                     torch.max(torch.abs(verify_values.float() - top_values.float())).item()
                 )
                 if max_top_value_delta > 1e-5:
                     raise RuntimeError(
-                        f"B43 token-score reconstruction changed B42 top-k values: {max_top_value_delta}"
+                        "B43 token-score reconstruction changed B42 top-k values: "
+                        f"{max_top_value_delta}"
                     )
 
                 valid_series = int((present_cpu > 0).sum().item())
@@ -379,7 +363,7 @@ def audit_target_series_plane(
                         if float(flag.item()) <= 0:
                             continue
                         present_loo = present.clone()
-                        present_loo[series_index] = 0.0
+                        present_loo[0, series_index] = 0.0
                         with autocast(runtime):
                             loo_base_logits = model._base_logits_from_global(
                                 global_feature, present_loo, meta
@@ -387,26 +371,66 @@ def audit_target_series_plane(
                             loo_local_logits, _, _ = model.head(
                                 spatial, present_loo, meta, position
                             )
-                        loo_combined_logits = loo_base_logits.float() + gate_device[None, :] * loo_local_logits.float()
+                        loo_combined_logits = (
+                            loo_base_logits.float()
+                            + gate_device[None, :] * loo_local_logits.float()
+                        )
                         loo_cache[series_index] = (
                             loo_base_logits.detach().float()[0],
                             loo_combined_logits.detach().float()[0],
                         )
 
                 slices = int(spatial.shape[2])
-                per_series_tokens = slices * n_regions
                 if slices != 32:
                     raise RuntimeError(f"B43 expected 32 dense slices, got {slices}")
+                per_series_tokens = slices * n_regions
 
                 for target_index, target in enumerate(TARGETS):
                     target_score = score[0, target_index]
                     selected = top_indices[0, target_index]
+                    selected_values = top_values[0, target_index]
                     selected_series = torch.div(
                         selected, per_series_tokens, rounding_mode="floor"
                     )
                     full_local = float(local_logits[0, target_index].detach().float().item())
                     full_base_logit = float(base_logits[0, target_index].detach().float().item())
-                    full_combined_logit = float(combined_logits[0, target_index].detach().float().item())
+                    full_combined_logit = float(
+                        combined_logits[0, target_index].detach().float().item()
+                    )
+
+                    for rank, (flat_index, evidence_value) in enumerate(
+                        zip(selected.tolist(), selected_values.tolist()), start=1
+                    ):
+                        series_index, slice_index, region_index, region_row, region_col = (
+                            decode_sparse_index(
+                                flat_index,
+                                n_slices=slices,
+                                n_regions=n_regions,
+                                grid_size=grid_size,
+                            )
+                        )
+                        record = records[series_index]
+                        plane_id = int(record["plane_id"])
+                        selected_rows.append(
+                            {
+                                "StudyInstanceUID": uid,
+                                "target": target,
+                                "target_index": target_index,
+                                "truth": float(truth[study_index, target_index]),
+                                "view_index": view_index,
+                                "center_offset": int(center_offset),
+                                "rank": rank,
+                                "evidence_logit": float(evidence_value),
+                                "series_index": series_index,
+                                "series_uid": str(record["series_uid"]),
+                                "plane": PLANE_NAMES.get(plane_id, f"ID{plane_id}"),
+                                "slice_index": slice_index,
+                                "slice_position": float(position[0, series_index, slice_index].item()),
+                                "region_index": region_index,
+                                "region_row": region_row,
+                                "region_col": region_col,
+                            }
+                        )
 
                     for series_index, (record, geom, flag) in enumerate(
                         zip(records, item["geometry"], present_cpu)
@@ -418,7 +442,9 @@ def audit_target_series_plane(
                         series_score = target_score[start:end]
                         finite = series_score[torch.isfinite(series_score)]
                         if finite.numel() != per_series_tokens:
-                            raise RuntimeError("B43 encountered invalid tokens inside a present series")
+                            raise RuntimeError(
+                                "B43 encountered invalid tokens inside a present series"
+                            )
                         series_top_values = torch.topk(
                             finite,
                             k=min(top_k, int(finite.numel())),
@@ -426,7 +452,9 @@ def audit_target_series_plane(
                             sorted=True,
                         ).values
                         series_top1 = float(series_top_values[0].detach().float().item())
-                        series_topk_lme = float(_lme(series_top_values, temperature).detach().item())
+                        series_topk_lme = float(
+                            _lme(series_top_values, temperature).detach().item()
+                        )
                         series_mean = float(finite.float().mean().detach().item())
                         selected_count = int((selected_series == series_index).sum().item())
                         is_top1_series = bool(int(selected_series[0].item()) == series_index)
@@ -438,17 +466,19 @@ def audit_target_series_plane(
                             loo_base_probability = _sigmoid_scalar(loo_base_logit)
                             loo_combined_probability = _sigmoid_scalar(loo_combined_logit)
                             loo_logit_delta = full_combined_logit - loo_combined_logit
-                            loo_probability_delta = float(combined_probability[target_index].item()) - loo_combined_probability
+                            loo_probability_delta = (
+                                float(combined_probability[target_index].item())
+                                - loo_combined_probability
+                            )
                         else:
                             loo_base_probability = float("nan")
                             loo_combined_probability = float("nan")
                             loo_logit_delta = float("nan")
                             loo_probability_delta = float("nan")
 
-                        meta_ids = record
-                        plane_id = int(meta_ids["plane_id"])
-                        fluid_id = int(meta_ids["fluid_id"])
-                        fat_id = int(meta_ids["fat_id"])
+                        plane_id = int(record["plane_id"])
+                        fluid_id = int(record["fluid_id"])
+                        fat_id = int(record["fat_id"])
                         view_rows.append(
                             {
                                 "StudyInstanceUID": uid,
@@ -467,9 +497,13 @@ def audit_target_series_plane(
                                 "fat_id": fat_id,
                                 "height": int(geom["height"]),
                                 "width": int(geom["width"]),
-                                "rectangular": bool(int(geom["height"]) != int(geom["width"])),
+                                "rectangular": bool(
+                                    int(geom["height"]) != int(geom["width"])
+                                ),
                                 "base_probability": float(base_probability[target_index].item()),
-                                "combined_probability": float(combined_probability[target_index].item()),
+                                "combined_probability": float(
+                                    combined_probability[target_index].item()
+                                ),
                                 "base_logit": full_base_logit,
                                 "local_logit": full_local,
                                 "gate_effective": float(gate[target_index]),
@@ -487,45 +521,54 @@ def audit_target_series_plane(
                         )
 
                 del (
-                    volumes,
-                    position,
-                    global_feature,
-                    spatial,
-                    base_logits,
-                    local_logits,
-                    top_indices,
-                    top_values,
-                    score,
-                    verify_values,
-                    verify_indices,
-                    combined_logits,
-                    base_probability,
-                    combined_probability,
-                    loo_cache,
+                    volumes, position, global_feature, spatial, base_logits,
+                    local_logits, top_indices, top_values, score, verify_values,
+                    verify_indices, combined_logits, base_probability,
+                    combined_probability, loo_cache,
                 )
 
-            prediction_rows.append(torch.stack(combined_views, dim=0).mean(dim=0).numpy())
+            prediction_rows.append(
+                torch.stack(combined_views, dim=0).mean(dim=0).numpy()
+            )
             del item, items, present_cpu, present, meta, position_all, combined_views
             _release()
             if batch_index % 10 == 0 or batch_index == len(loader):
-                print(f"[B43 target-series-plane audit] {batch_index}/{len(loader)}", flush=True)
+                print(
+                    f"[B43 target-series-plane audit] {batch_index}/{len(loader)}",
+                    flush=True,
+                )
 
     if scored_uids != uids:
         raise RuntimeError("B43 audit study order changed")
     prediction = np.stack(prediction_rows, axis=0).astype(np.float64)
-    prediction_delta = np.abs(prediction - reference)
-    max_prediction_delta = float(prediction_delta.max())
+    max_prediction_delta = float(np.abs(prediction - reference).max())
     if max_prediction_delta > 1e-6:
         raise RuntimeError(
-            f"B43 audit failed frozen B42 prediction reproduction: max|delta|={max_prediction_delta}"
+            "B43 audit failed frozen B42 prediction reproduction: "
+            f"max|delta|={max_prediction_delta}"
         )
 
     view_frame = pd.DataFrame(view_rows)
-    expected_view_rows = B18_EXPECTED_GOLD_SERIES * len(TARGETS) * len(B37_EVAL_OFFSETS)
+    selected_frame = pd.DataFrame(selected_rows)
+    expected_view_rows = (
+        B18_EXPECTED_GOLD_SERIES * len(TARGETS) * len(B37_EVAL_OFFSETS)
+    )
+    expected_selected_rows = (
+        B18_EXPECTED_GOLD_STUDIES
+        * len(TARGETS)
+        * len(B37_EVAL_OFFSETS)
+        * top_k
+    )
     if len(view_frame) != expected_view_rows:
         raise RuntimeError(
-            f"B43 view evidence row count changed: expected {expected_view_rows}, got {len(view_frame)}"
+            f"B43 view evidence rows: expected {expected_view_rows}, got {len(view_frame)}"
         )
+    if len(selected_frame) != expected_selected_rows:
+        raise RuntimeError(
+            "B43 selected-location row count changed: "
+            f"expected {expected_selected_rows}, got {len(selected_frame)}"
+        )
+
     series_frame = _aggregate_series_rows(view_frame, top_k)
     expected_series_rows = B18_EXPECTED_GOLD_SERIES * len(TARGETS)
     if len(series_frame) != expected_series_rows:
@@ -548,16 +591,24 @@ def audit_target_series_plane(
                 "auc": float(per_target_auc[target_index]),
                 "n_positive": int(len(positive)),
                 "n_negative": int(len(negative)),
-                "positive_mean_strongest_top1_evidence": float(positive["strongest_series_top1_evidence"].mean()),
-                "negative_mean_strongest_top1_evidence": float(negative["strongest_series_top1_evidence"].mean()),
+                "positive_mean_strongest_top1_evidence": float(
+                    positive["strongest_series_top1_evidence"].mean()
+                ),
+                "negative_mean_strongest_top1_evidence": float(
+                    negative["strongest_series_top1_evidence"].mean()
+                ),
                 "positive_mean_strongest_loo_probability_delta": float(
                     positive["strongest_series_leave_one_out_probability_delta"].mean()
                 ),
                 "negative_mean_strongest_loo_probability_delta": float(
                     negative["strongest_series_leave_one_out_probability_delta"].mean()
                 ),
-                "positive_mean_combined_probability": float(positive["combined_probability"].mean()),
-                "negative_mean_combined_probability": float(negative["combined_probability"].mean()),
+                "positive_mean_combined_probability": float(
+                    positive["combined_probability"].mean()
+                ),
+                "negative_mean_combined_probability": float(
+                    negative["combined_probability"].mean()
+                ),
             }
         )
     target_summary = pd.DataFrame(target_summary_rows)
@@ -565,11 +616,13 @@ def audit_target_series_plane(
     out = Path(out_root)
     out.mkdir(parents=True, exist_ok=True)
     view_path = out / "series_evidence_by_view.csv"
+    selected_path = out / "selected_locations.csv"
     series_path = out / "series_evidence_tta_mean.csv"
     strongest_path = out / "strongest_series_by_study_target.csv"
     plane_path = out / "target_plane_summary.csv"
     target_path = out / "target_summary.csv"
     view_frame.to_csv(view_path, index=False)
+    selected_frame.to_csv(selected_path, index=False)
     series_frame.to_csv(series_path, index=False)
     strongest.to_csv(strongest_path, index=False)
     plane_summary.to_csv(plane_path, index=False)
@@ -592,20 +645,26 @@ def audit_target_series_plane(
         "macro_auc_reproduced": float(macro_auc),
         "reference_prediction_max_abs_delta": max_prediction_delta,
         "view_evidence_rows": int(len(view_frame)),
+        "selected_location_rows": int(len(selected_frame)),
         "tta_mean_series_rows": int(len(series_frame)),
         "strongest_series_rows": int(len(strongest)),
         "metadata_repair": metadata_stats,
         "outputs": {
             "series_evidence_by_view": str(view_path),
+            "selected_locations": str(selected_path),
             "series_evidence_tta_mean": str(series_path),
             "strongest_series_by_study_target": str(strongest_path),
             "target_plane_summary": str(plane_path),
             "target_summary": str(target_path),
         },
+        "leave_one_out_definition": (
+            "Remove one already-encoded series from present mask, then rerun only the "
+            "frozen B34 aggregation and frozen B42 sparse head; no image re-encoding."
+        ),
         "interpretation_guardrail": (
-            "Use this audit only to diagnose whether evidence exists in individual series and "
-            "whether frozen aggregation is sensitive to those series. Do not choose B42/B43 "
-            "submission parameters from Expert-58."
+            "Use only to diagnose whether evidence exists in individual series and "
+            "whether frozen aggregation is sensitive to those series. Do not choose "
+            "B42/B43 submission parameters from Expert-58."
         ),
     }
     summary_path = out / "audit.json"
