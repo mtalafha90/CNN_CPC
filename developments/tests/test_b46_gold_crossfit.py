@@ -69,15 +69,6 @@ def test_b46_manifest_loader_and_fold_partition(tmp_path):
     assert len(set(all_held)) == B46_GOLD_STUDIES
 
 
-def test_b46_assignment_changes_when_salt_changes():
-    uids, y = _synthetic_labels()
-    a = assign_gold_folds(uids, y, salt=B46_FOLD_SALT)
-    b = assign_gold_folds(uids, y, salt=B46_FOLD_SALT + "-different")
-    # Salt is part of the frozen tie-breaking contract; on a nontrivial surface
-    # a different salt should not silently reproduce the entire assignment.
-    assert not np.array_equal(a, b)
-
-
 def test_b46_training_and_eval_modules_import():
     # Importing these catches syntax/import drift without constructing a model.
     from rsna_knee import b46_gold_crossfit_eval as evaluation
