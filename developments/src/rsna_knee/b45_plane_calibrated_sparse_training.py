@@ -55,7 +55,6 @@ from .b42_constant_area_aspect_sparse_training import (
     _largest_series_indices,
     _losses,
     _move_study,
-    _synthetic_geometry_preflight,
 )
 from .b45_plane_calibrated_sparse_mil import (
     B45_EFFECTIVE_BATCH,
@@ -78,7 +77,7 @@ from .phase9_supervision import (
     load_fill_merged_export,
     prepare_all_report_only_supervision,
 )
-from .runtime import make_scaler, resolve_runtime
+from .runtime import autocast, make_scaler, resolve_runtime
 
 B45_EPOCHS = B37_EPOCHS
 B45_CONSTRUCTION_SEED_OFFSET = B37_CONSTRUCTION_SEED_OFFSET
@@ -89,6 +88,46 @@ B45_CHECKPOINT = "b45_model.pt"
 def _router_entropy(weights: torch.Tensor) -> float:
     p = weights.detach().float().clamp_min(1e-12)
     return float((-(p * p.log()).sum(dim=-1)).mean().cpu().item())
+
+
+def _synthetic_geometry_preflight(model, runtime) -> None:
+    """Exercise B42 rectangular geometry with a valid explicit sagittal plane."""
+    shapes = ((448, 448), (320, 640), (640, 320), (256, 800))
+    was_training = model.training
+    model.eval()
+    with torch.no_grad():
+        for height, width in shapes:
+            volume = torch.ones(
+                32, 3, height, width, dtype=torch.float32, device=runtime.device
+            )
+            present = torch.ones(1, device=runtime.device)
+            # B45 only accepts recognized anatomical plane pools.  Use sagittal
+            # with unknown fluid/fat metadata for this geometry-only probe.
+            meta = torch.tensor([[1, 0, 0]], dtype=torch.long, device=runtime.device)
+            position = torch.linspace(0.0, 1.0, 32, device=runtime.device).unsqueeze(0)
+            with autocast(runtime):
+                out = model([volume], present, meta, position)
+            if not (
+                torch.isfinite(out.base_logits).all()
+                and torch.isfinite(out.local_logits).all()
+                and torch.isfinite(out.logits).all()
+                and torch.isfinite(out.plane_weights).all()
+            ):
+                raise RuntimeError(
+                    f"B45 synthetic {height}x{width} produced non-finite values"
+                )
+            expected = torch.tensor([[[1.0, 0.0, 0.0]]], device=runtime.device)
+            expected = expected.expand_as(out.plane_weights)
+            if not torch.allclose(out.plane_weights, expected, atol=1e-7, rtol=0):
+                raise RuntimeError("B45 single-plane synthetic routing is not deterministic")
+            print(
+                f"[B45 preflight] synthetic={height}x{width} "
+                f"feature~{height//32}x{width//32} PASS",
+                flush=True,
+            )
+            del volume, present, meta, position, out
+    if was_training:
+        model.train(True)
 
 
 def _preflight(
@@ -108,8 +147,6 @@ def _preflight(
 
     _synthetic_geometry_preflight(model, runtime)
 
-    # Use the largest two studies to stress ragged memory and maximize the
-    # chance that several anatomical planes are simultaneously available.
     model.train()
     model.zero_grad(set_to_none=True)
     indices = _largest_series_indices(loader.dataset, B45_EFFECTIVE_BATCH)
@@ -132,6 +169,7 @@ def _preflight(
 
     scales = _batch_scales(items, multiplier_cpu)
     total_value = combined_value = local_value = 0.0
+    multi_plane_seen = False
     for item, scale in zip(items, scales):
         tensors = _move_study(item, runtime.device)
         out, total, combined, local = _losses(
@@ -148,12 +186,24 @@ def _preflight(
             rtol=0,
         ):
             raise RuntimeError("B45 preflight plane weights do not sum to one")
+        available = out.plane_available[0]
+        n_available = int(available.sum().item())
+        if n_available > 1:
+            multi_plane_seen = True
+            expected = 1.0 / float(n_available)
+            actual = out.plane_weights[0, :, available]
+            if not torch.allclose(
+                actual, torch.full_like(actual, expected), atol=1e-6, rtol=0
+            ):
+                raise RuntimeError("B45 zero-logit router is not uniform at initialization")
         scaler.scale(total * float(scale)).backward()
         total_value += float(total.detach().item()) * float(scale)
         combined_value += float(combined.detach().item()) * float(scale)
         local_value += float(local.detach().item()) * float(scale)
         del tensors, out, total, combined, local
 
+    if not multi_plane_seen:
+        raise RuntimeError("B45 preflight did not exercise a multi-plane study")
     encoder_grad = any(
         p.grad is not None and torch.count_nonzero(p.grad).item() > 0
         for p in model.base.encoder.parameters()
@@ -167,8 +217,7 @@ def _preflight(
         model.head.plane_router_logits.grad is not None
         and torch.count_nonzero(model.head.plane_router_logits.grad).item() > 0
     )
-    plane_embedding_grad = model.head.plane_embedding.weight.grad
-    if plane_embedding_grad is not None:
+    if model.head.plane_embedding.weight.grad is not None:
         raise RuntimeError("B45 plane embedding unexpectedly received a gradient")
     leaked = any(
         p.grad is not None
@@ -495,7 +544,7 @@ def train_b45(
         "completed_epochs": B45_EPOCHS,
         "prospective_hypothesis": (
             "B42 local evidence is impaired by cross-plane score calibration: plane "
-            "identity can shift token scores before one global top-k.  Factor plane "
+            "identity can shift token scores before one global top-k. Factor plane "
             "identity out of token scoring, pool top-k evidence independently inside "
             "each available plane, and learn target-specific plane fusion using only "
             "report-supervised training labels."
@@ -574,9 +623,9 @@ def train_b45(
         "metadata_repair": metadata_stats,
         "history": history,
         "governance": (
-            "Prospective B45 fixed endpoint.  Do not tune plane pooling, target-plane "
+            "Prospective B45 fixed endpoint. Do not tune plane pooling, target-plane "
             "weights, router temperature, token metadata, top-k, grid, crop, geometry, "
-            "learning rates, target subset, or epoch count after Expert-58.  No model "
+            "learning rates, target subset, or epoch count after Expert-58. No model "
             "promotion may be based on the reused Expert-58 surface alone."
         ),
     }
