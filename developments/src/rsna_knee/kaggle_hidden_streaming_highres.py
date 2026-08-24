@@ -31,7 +31,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from .b35_target_spatial_residual import b35_centers
+from .b35_target_spatial_residual import B35_DENSE_SLICES, b35_centers
 from .b37_highres_sparse_mil import (
     B37_IMAGE_SIZE,
     _native_center_crop as _b37_native_center_crop,
@@ -182,34 +182,51 @@ def build_streamed_view(
     crop_fraction: float,
     preprocess_view: Callable[..., tuple[torch.Tensor, torch.Tensor]],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Materialize exactly one [K,32,3,448,448] study view and its metadata."""
+    """Materialize exactly one [K,32,3,448,448] study view and its metadata.
+
+    The destination tensor is preallocated and filled one series at a time.  This
+    avoids retaining K individual resized tensors and then allocating a second
+    K-series copy through ``torch.stack``.
+    """
     if len(normalized_series) != len(records) or not records:
         raise ValueError("streaming normalized-series/record surface mismatch")
-    images: list[torch.Tensor] = []
-    positions: list[torch.Tensor] = []
-    meta: list[list[int]] = []
-    for normalized, record in zip(normalized_series, records):
-        image, position = preprocess_view(
+    count = len(records)
+    volume = torch.empty(
+        count,
+        B35_DENSE_SLICES,
+        3,
+        B37_IMAGE_SIZE,
+        B37_IMAGE_SIZE,
+        dtype=torch.float32,
+    )
+    position = torch.empty(count, B35_DENSE_SLICES, dtype=torch.float32)
+    meta = torch.empty(count, 3, dtype=torch.long)
+    for series_index, (normalized, record) in enumerate(zip(normalized_series, records)):
+        image, series_position = preprocess_view(
             normalized,
             gap=int(gap),
             center_offset=int(center_offset),
             crop_fraction=float(crop_fraction),
         )
-        images.append(image)
-        positions.append(position)
-        meta.append(
+        expected = (B35_DENSE_SLICES, 3, B37_IMAGE_SIZE, B37_IMAGE_SIZE)
+        if tuple(image.shape) != expected or tuple(series_position.shape) != (B35_DENSE_SLICES,):
+            raise RuntimeError(
+                f"streamed view shape changed for series_index={series_index}: "
+                f"image={tuple(image.shape)} position={tuple(series_position.shape)}"
+            )
+        volume[series_index].copy_(image)
+        position[series_index].copy_(series_position)
+        meta[series_index] = torch.tensor(
             [
                 int(record["plane_id"]),
                 int(record["fluid_id"]),
                 int(record["fat_id"]),
-            ]
+            ],
+            dtype=torch.long,
         )
-    volume = torch.stack(images, dim=0)
-    position = torch.stack(positions, dim=0)
-    present = torch.ones(len(records), dtype=torch.float32)
-    series_meta = torch.tensor(meta, dtype=torch.long)
-    del images, positions, meta
-    return volume, position, present, series_meta
+        del image, series_position
+    present = torch.ones(count, dtype=torch.float32)
+    return volume, position, present, meta
 
 
 def infer_streaming_shard(
@@ -298,14 +315,23 @@ def infer_streaming_shard(
             # Telemetry only.  The former B39/B41 code raised RuntimeError here,
             # which could fail a hidden rerun after an unusually slow early study.
             window = np.asarray(durations[-5:], dtype=np.float64)
-            projected = float(window.mean() * (len(indices) - local_position - 1) * timing_safety_factor)
+            projected = float(
+                window.mean()
+                * (len(indices) - local_position - 1)
+                * timing_safety_factor
+            )
             elapsed = time.monotonic() - global_started
-            available = float(runtime_hours) * 3600.0 - float(reserve_minutes) * 60.0 - elapsed
+            available = (
+                float(runtime_hours) * 3600.0
+                - float(reserve_minutes) * 60.0
+                - elapsed
+            )
             print(
                 f"[{endpoint_name} hidden-safe gpu{rank}] done row={index} "
                 f"seconds={duration:.1f} projected_remaining={projected/60.0:.1f}min "
                 f"available={available/60.0:.1f}min telemetry_only=True "
-                f"rss={rss:.2f}GiB cuda_alloc={torch.cuda.memory_allocated(device)/(1024**3):.2f}GiB",
+                f"rss={rss:.2f}GiB "
+                f"cuda_alloc={torch.cuda.memory_allocated(device)/(1024**3):.2f}GiB",
                 flush=True,
             )
 
@@ -317,8 +343,12 @@ def infer_streaming_shard(
         "max_study_seconds": float(np.max(durations)) if durations else 0.0,
         "max_observed_rss_gib": float(max_rss),
         "process_rss_peak_gib": float(max_rss_peak),
-        "cuda_peak_allocated_gib": float(torch.cuda.max_memory_allocated(device) / (1024**3)),
-        "cuda_peak_reserved_gib": float(torch.cuda.max_memory_reserved(device) / (1024**3)),
+        "cuda_peak_allocated_gib": float(
+            torch.cuda.max_memory_allocated(device) / (1024**3)
+        ),
+        "cuda_peak_reserved_gib": float(
+            torch.cuda.max_memory_reserved(device) / (1024**3)
+        ),
     }
     return rows, stats
 
