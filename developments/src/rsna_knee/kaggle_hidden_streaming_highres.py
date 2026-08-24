@@ -17,6 +17,10 @@ RAM.  The helpers below instead:
 
 The per-view preprocessing functions are intentionally factored from the exact
 existing B39/B41 fast helpers and are unit-tested for exact tensor equality.
+
+B39 must remain importable in a B39-only Kaggle artifact.  Therefore B41-only
+geometry helpers are imported lazily inside ``normalized_view_b41`` rather than
+at module import time.
 """
 from __future__ import annotations
 
@@ -35,12 +39,6 @@ from .b35_target_spatial_residual import B35_DENSE_SLICES, b35_centers
 from .b37_highres_sparse_mil import (
     B37_IMAGE_SIZE,
     _native_center_crop as _b37_native_center_crop,
-)
-from .b41_highres_aspect_sparse_mil import (
-    B41_IMAGE_SIZE,
-    B41_PAD_VALUE,
-    _native_center_crop as _b41_native_center_crop,
-    resize_triplets_aspect_preserving_pad,
 )
 from .dicom import _normalise_volume, find_series_dir
 
@@ -114,6 +112,15 @@ def normalized_view_b41(
     crop_fraction: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Build one exact B41 aspect-preserving padded view from normalized native data."""
+    # Keep B41 imports local so a B39-only Kaggle code artifact does not need to
+    # carry B41 modules merely to import the shared streaming helper.
+    from .b41_highres_aspect_sparse_mil import (
+        B41_IMAGE_SIZE,
+        B41_PAD_VALUE,
+        _native_center_crop as _b41_native_center_crop,
+        resize_triplets_aspect_preserving_pad,
+    )
+
     gap = int(gap)
     if gap < 1:
         raise ValueError("B41 streaming 2.5D gap must be positive")
