@@ -6,7 +6,7 @@ set -euo pipefail
 # Kaggle dataset and are intentionally NOT duplicated here.
 
 REPO_ROOT="${1:-$(pwd)}"
-OUT_ROOT="${2:-$REPO_ROOT/kaggle_b39_hidden_safe}"
+OUT_ROOT="${2:-$REPO_ROOT/kaggle_b39_artifacts}"
 PROJECT_ROOT="$OUT_ROOT/CNN_CPC"
 
 cd "$REPO_ROOT"
@@ -63,4 +63,4 @@ echo "B39 Kaggle hidden-safe artifact ready:"
 echo "$OUT_ROOT"
 echo
 echo "Upload the entire directory as the new cnn-b39 dataset content, preserving:"
-echo "  kaggle_b39_hidden_safe/CNN_CPC/..."
+echo "  kaggle_b39_artifacts/CNN_CPC/..."
