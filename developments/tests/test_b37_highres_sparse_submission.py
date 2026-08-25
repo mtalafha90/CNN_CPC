@@ -214,6 +214,6 @@ def test_generate_b37_submission_averages_three_probability_views_and_writes_man
     assert manifest["tta_center_offsets"] == [-1, 0, 1]
     assert (
         manifest["prediction"]
-        == "B37 combined sparse-MIL logits; raw sigmoid probability"
+        == "frozen B37 combined sparse-MIL logits; raw sigmoid probability"
     )
     assert manifest["checkpoint_base_sha256_verified"] is True

@@ -86,6 +86,13 @@ def test_multiple_runs_share_one_numbered_container(tmp_path, registry):
 
 
 def test_every_numbered_container_is_created(tmp_path, registry):
+    """One container per registered experiment, however many there now are.
+
+    The count used to be written out as a literal, which went stale each time an
+    experiment was registered. Comparing against the register itself keeps what
+    this test is for -- no experiment silently loses its container -- while
+    letting the register grow.
+    """
     runs = tmp_path / "runs"
     runs.mkdir()
     apply_migration(build_migration_plan(runs, registry), runs, registry)
@@ -95,7 +102,7 @@ def test_every_numbered_container_is_created(tmp_path, registry):
         for path in runs.iterdir()
         if path.is_dir() and path.name[:3].isdigit() and "_Experiment_" in path.name
     ]
-    assert len(containers) == 72
+    assert len(containers) == len(registry["experiments"])
 
 
 def test_migration_is_idempotent(tmp_path, registry):

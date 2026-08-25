@@ -21,8 +21,14 @@ def test_out_dirname_defaults_to_the_arm_name():
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
 
 
-def test_the_arm_is_still_validated_against_the_frozen_pair():
-    assert trainer.PHASE9_ARMS == ("control", "candidate")
+def test_the_arm_is_still_validated_against_a_closed_set():
+    """The set is closed, so a typo cannot quietly become a new arm.
+
+    It was a pair -- the two report-label surfaces the matched comparison ran
+    on -- until `llm_fill` was added deliberately as a third. What this guards
+    is that the list stays exhaustive, not that it never grows.
+    """
+    assert trainer.PHASE9_ARMS == ("control", "candidate", "llm_fill")
 
 
 @pytest.mark.parametrize("directory", ["a/b", "a\\b", "..", "."])
