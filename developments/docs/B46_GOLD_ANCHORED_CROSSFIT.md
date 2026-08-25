@@ -272,6 +272,30 @@ Required for every fold:
 
 Train folds one at a time. Do not launch multiple folds concurrently on the single GPU.
 
+The preferred way to do that is the runner, which verifies the frozen manifest
+SHA before every fold, refuses to overwrite any existing checkpoint, and keeps
+the Python exit status intact through `tee`:
+
+```bash
+bash developments/scripts/run_b46_all_folds.sh
+```
+
+**The runner is resumable, and the sequence is longer than one working
+session.** A fold that already has a complete checkpoint is skipped rather than
+retrained, so running the script again carries on from the first fold that has
+none. Nothing is resumed *inside* a fold: each fold is a fixed two-epoch run
+from the common base checkpoint, so an interrupted fold simply starts again from
+the base. This is an operational convenience only. It does not change the fold
+manifest, the gold weight, the architecture, the optimiser, the epoch count or
+the decision rule.
+
+Two cases stop the runner rather than being guessed about: a manifest whose
+SHA-256 does not match (exit 3), and a checkpoint that exists but is empty
+because a save was cut off part-way (exit 4). Deleting a checkpoint is the
+operator's decision.
+
+The equivalent loop, if the runner is not used:
+
 ```bash
 for FOLD in 0 1 2 3 4; do
   python -m rsna_knee.b46_gold_crossfit_training \

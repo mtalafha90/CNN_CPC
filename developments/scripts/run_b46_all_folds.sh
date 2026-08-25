@@ -7,9 +7,18 @@ set -euo pipefail
 # Optional:
 #   PYTHON_BIN (default: python)
 #
+# Five folds train one after another on a single GPU, and the machine this runs
+# on has a session limit shorter than the whole sequence is likely to take. So
+# the run is resumable: a fold that already has a complete checkpoint is
+# skipped, not retrained and not overwritten, and the next invocation carries on
+# from the first fold that has none. Nothing is resumed *inside* a fold -- each
+# fold is a fixed two-epoch run from the common base checkpoint, so an
+# interrupted fold simply starts again from the base.
+#
 # Governance:
 # - verifies the frozen manifest SHA before every fold;
-# - refuses to overwrite an already completed fold checkpoint;
+# - never overwrites an existing fold checkpoint;
+# - refuses to guess about a checkpoint that exists but is empty;
 # - trains folds sequentially on one GPU;
 # - preserves Python failure through tee via pipefail/PIPESTATUS;
 # - does not inspect metrics or choose checkpoints between folds.
@@ -62,6 +71,9 @@ printf 'B46 run root: %s\n' "$B46_ROOT"
 printf 'Python: %s\n' "$PYTHON_BIN"
 printf '\n'
 
+trained_now=()
+already_complete=()
+
 for FOLD in 0 1 2 3 4; do
   verify_manifest
 
@@ -71,9 +83,22 @@ for FOLD in 0 1 2 3 4; do
 
   mkdir -p "$FOLD_ROOT"
 
+  # A non-empty checkpoint means this fold finished on an earlier invocation.
+  # Leave it exactly as it is and move on.
+  if [[ -s "$CHECKPOINT" ]]; then
+    echo
+    echo "B46 FOLD $FOLD ALREADY COMPLETE -- skipping"
+    sha256sum "$CHECKPOINT"
+    already_complete+=("$FOLD")
+    continue
+  fi
+
+  # Present but empty: a save was cut off part-way. Deleting a checkpoint is the
+  # operator's decision, never this script's, so stop and say what to look at.
   if [[ -e "$CHECKPOINT" ]]; then
-    echo "ERROR: refusing to overwrite completed B46 fold $FOLD checkpoint:" >&2
+    echo "ERROR: B46 fold $FOLD checkpoint exists but is empty:" >&2
     echo "  $CHECKPOINT" >&2
+    echo "A save was interrupted. Inspect it, then remove it to retrain this fold." >&2
     exit 4
   fi
 
@@ -86,6 +111,13 @@ for FOLD in 0 1 2 3 4; do
   echo "log=$LOG"
   echo
 
+  # Append rather than truncate: if this fold is being retried after a crash,
+  # the log of the attempt that failed is the evidence of why.
+  {
+    echo
+    echo "=== B46 fold $FOLD attempt started $(date -Is) ==="
+  } >> "$LOG"
+
   set +e
   "$PYTHON_BIN" -m rsna_knee.b46_gold_crossfit_training \
     --config "$CONFIG" \
@@ -96,7 +128,7 @@ for FOLD in 0 1 2 3 4; do
     --fold-manifest "$B46_MANIFEST" \
     --fold "$FOLD" \
     --out-root "$B46_ROOT" \
-    2>&1 | tee "$LOG"
+    2>&1 | tee -a "$LOG"
   python_status=${PIPESTATUS[0]}
   set -e
 
@@ -115,7 +147,10 @@ for FOLD in 0 1 2 3 4; do
   echo
   echo "B46 FOLD $FOLD FIXED-E2 COMPLETE"
   sha256sum "$CHECKPOINT"
+  trained_now+=("$FOLD")
 done
 
 echo
 echo "ALL B46 FIXED-E2 FOLDS: COMPLETE"
+echo "trained on this invocation: ${trained_now[*]:-none}"
+echo "already complete beforehand: ${already_complete[*]:-none}"
