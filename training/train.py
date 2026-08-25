@@ -30,6 +30,7 @@ from model._implementation import (
     read_config,
     run_directory,
     set_label_confidence,
+    set_schedule_epochs,
     set_seed,
     train_working_model,
 )
@@ -106,6 +107,15 @@ def main() -> None:
         help="the same for a report's 'no', whose measured agreement is 96%%",
     )
     parser.add_argument(
+        "--schedule-epochs",
+        type=int,
+        help=(
+            "how many epochs the learning-rate schedule anneals over. The "
+            "shipped value is 5 while only 2 are trained, so the rate never "
+            "comes down; setting this to 2 completes the cosine at no extra cost"
+        ),
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         help=(
@@ -136,6 +146,10 @@ def main() -> None:
         )
         if config.get("ensemble_member"):
             print("[seed] recorded as an ensemble member, not a matched arm")
+
+    config = set_schedule_epochs(config, args.schedule_epochs)
+    if args.schedule_epochs is not None:
+        print(f"[schedule] the learning rate anneals over {args.schedule_epochs} epoch(s)")
 
     config = set_label_confidence(
         config,

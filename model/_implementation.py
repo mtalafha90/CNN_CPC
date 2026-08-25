@@ -373,6 +373,23 @@ def set_label_confidence(config: dict, **targets: float | None) -> dict:
 # not protocol-matched, and has to say so rather than quietly differ.
 FROZEN_PROTOCOL_SEED = 2026
 
+# The cosine schedule's horizon. It is not the number of epochs trained: the
+# shipped setting anneals over five while training stops at two, so the rate
+# never comes down. Setting it to the number of epochs actually run completes
+# the schedule at identical cost.
+SCHEDULE_EPOCHS_KEY = "schedule_epochs"
+
+
+def set_schedule_epochs(config: dict, epochs: int | None) -> dict:
+    """Return `config` with the cosine horizon set."""
+    if epochs is None:
+        return config
+    if int(epochs) < 1:
+        raise ValueError("schedule epochs must be at least 1")
+    updated = dict(config)
+    updated[SCHEDULE_EPOCHS_KEY] = int(epochs)
+    return updated
+
 
 def set_seed(config: dict, seed: int | None) -> dict:
     """Return `config` with the seed set, declared as an ensemble member.

@@ -241,9 +241,23 @@ def train_phase9_arm(
         ),
         weight_decay=float(config.get("b7_weight_decay", 1e-4)),
     )
+    # The cosine's horizon, which is not the same thing as the number of epochs
+    # run. Historically it was five while training stopped at two, so the rate
+    # never annealed: both epochs ran at 100% and 90.5% of peak and the low-rate
+    # refinement phase never happened. `schedule_epochs` exposes that horizon so
+    # a completed cosine can be tried at identical cost. Deliberately not the
+    # b18_* key, which is contract-checked and describes a different experiment.
+    schedule_epochs = int(config.get("schedule_epochs", B18_CANDIDATE_EPOCHS))
+    if schedule_epochs < 1:
+        raise ValueError("schedule_epochs must be at least 1")
+    if schedule_epochs != B18_CANDIDATE_EPOCHS:
+        print(
+            f"[schedule] cosine over {schedule_epochs} epoch(s) instead of "
+            f"{B18_CANDIDATE_EPOCHS}; {PHASE9_FIXED_EPOCHS} will be trained"
+        )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
-        T_max=B18_CANDIDATE_EPOCHS,
+        T_max=schedule_epochs,
         eta_min=float(config.get("b7_min_lr", 1e-6)),
     )
     scaler = make_scaler(runtime)
@@ -414,6 +428,7 @@ def train_phase9_arm(
         # Non-zero means the seed was varied on purpose to build an ensemble
         # member, so this run is not stochastically matched to the others.
         "ensemble_member": int(config.get("ensemble_member", 0) or 0),
+        "schedule_epochs": schedule_epochs,
         "construction_seed": construction_seed,
         "loader_seed": loader_seed,
         "post_construction_training_seed": post_seed,
