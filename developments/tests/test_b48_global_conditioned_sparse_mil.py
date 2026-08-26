@@ -213,6 +213,34 @@ def test_post_attention_query_reconstructs_the_unchanged_b42_base_logit():
     assert not torch.allclose(static, post)
 
 
+def test_context_reconstruction_accepts_an_unbatched_real_study_metadata_item():
+    """The preflight supplies one dataset item, not a collated batch."""
+    torch.manual_seed(99)
+    base = _TinyB34().eval()
+    fake = SimpleNamespace(base=base)
+    fake._base_logits_from_global = lambda global_feature, present, meta: (
+        B37HighResSparseMILResidual._base_logits_from_global(
+            fake, global_feature, present, meta
+        )
+    )
+    fake._global_query_states = lambda global_feature, present, meta: (
+        B48GlobalConditionedSparseMILResidual._global_query_states(
+            fake, global_feature, present, meta
+        )
+    )
+    global_feature = torch.randn(1, 3, 32, 8)
+    present = torch.tensor([1.0, 1.0, 0.0])
+    meta = torch.tensor([[1, 1, 1], [2, 2, 2], [0, 0, 0]], dtype=torch.long)
+
+    error = B48GlobalConditionedSparseMILResidual.context_reconstruction_error(
+        fake,
+        global_feature,
+        present,
+        meta,
+    )
+    assert error == 0.0
+
+
 def _config() -> dict:
     return {
         "b7_image_size": 448,

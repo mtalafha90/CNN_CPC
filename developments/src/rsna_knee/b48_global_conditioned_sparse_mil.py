@@ -475,6 +475,13 @@ class B48GlobalConditionedSparseMILResidual(B42ConstantAreaAspectSparseMILResidu
         series_meta: torch.Tensor,
     ) -> float:
         """Assert the extracted post query still reconstructs B42's base logits."""
+        # Training batches carry a batch dimension, but the real-study
+        # preflight operates on one dataset item.  Match ``forward`` so the
+        # reconstruction contract accepts both representations.
+        if present.ndim == 1:
+            present = present.unsqueeze(0)
+        if series_meta.ndim == 2:
+            series_meta = series_meta.unsqueeze(0)
         expected = self._base_logits_from_global(global_feature, present, series_meta)
         _, _, reconstructed = self._global_query_states(global_feature, present, series_meta)
         return float((expected.float() - reconstructed.float()).abs().max().item())
