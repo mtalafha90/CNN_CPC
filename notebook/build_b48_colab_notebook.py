@@ -72,7 +72,7 @@ def build(path: Path) -> Path:
 replace_cell(
     0,
     "markdown",
-    '<a href="https://colab.research.google.com/github/mtalafha90/CNN_CPC/blob/main/notebook/b48_global_conditioned_sparse_mil_colab.ipynb" '
+    '<a href="https://colab.research.google.com/github/mtalafha90/CNN_CPC/blob/codex/b48-global-conditioned/notebook/b48_global_conditioned_sparse_mil_colab.ipynb" '
     'target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" '
     'alt="Open In Colab"/></a>',
 )
