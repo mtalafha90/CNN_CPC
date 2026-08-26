@@ -1,6 +1,6 @@
 # Current project status
 
-**Snapshot:** 2026-08-24
+**Snapshot:** 2026-08-26
 **Primary metric:** macro ROC AUC across 12 targets
 **Best independent displayed Kaggle score:** **0.714**
 
@@ -104,13 +104,30 @@ The proposed protocol is five-fold OOF use of the 58 gold studies. For each fold
 
 If B46 gives a coherent OOF gain that is not driven by one target, train one final all-gold-anchored model. If B46 is negative/small, move to B47 rather than tuning the weighting.
 
+**Operational state:** the five frozen B46 folds are in progress. The runner
+pins the fold manifest but not a source revision, so no new experiment branch is
+merged into the checkout executing B46 until all five checkpoints exist.
+
 ### B47 — explicit within-series slice sequence modeling
 
 B47 should test ordered through-plane representation while keeping center density fixed. A lightweight slice Transformer/temporal block should operate on ordered per-slice features before study-level series aggregation. This tests depth relationships rather than more slice samples.
 
-### B48 — dynamic cross-series/cross-sequence attention
+The current repository also contains a separately prepared, unrun `B47` native
+evidence-grid implementation. Neither B47 direction has a result. This naming
+drift is recorded explicitly so a prepared experiment is not mistaken for an
+executed one.
 
-Only after the preceding question is resolved should plane/sequence modeling be revisited. The next plane mechanism must be study-dependent feature interaction, not a static target-plane scalar router.
+### B48 — prepared global-query-conditioned cross-series sparse MIL
+
+At the project owner's direction, B48 is prepared as a separate B42-parent
+architecture test to run only after B46 has completed. It uses the frozen B34
+post-cross-attention pathology-query features to softly re-rank B42 local
+spatial evidence, with a matched static-query control and no official-gold/B46
+supervision. It does not claim that B47 was run, negative, or superseded.
+
+The primary B48 comparison is on a frozen scanner-grouped weak-label surface,
+not on the repeatedly reused Expert-58 surface. The full frozen specification is
+in [`B48_GLOBAL_CONDITIONED_SPARSE_MIL.md`](B48_GLOBAL_CONDITIONED_SPARSE_MIL.md).
 
 ## Current direction in one line
 
