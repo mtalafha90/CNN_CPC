@@ -271,11 +271,37 @@ def choose_seen_scanner_validation(
         raise ValueError(
             "the seen-scanner validation set would consume the whole training side"
         )
+    # A UID-level draw must still leave at least one study from every selected
+    # profile in training.  Otherwise a singleton (or the last row of a small
+    # profile) turns the supposedly seen-scanner comparator into a second
+    # unseen-scanner holdout.
+    profile_by_uid = (
+        candidates.assign(StudyInstanceUID=candidates["StudyInstanceUID"].astype(str))
+        .set_index("StudyInstanceUID")["scanner_profile"]
+        .astype(str)
+    )
+    remaining_by_profile = profile_by_uid.value_counts().to_dict()
     ranked = sorted(
-        candidates["StudyInstanceUID"].astype(str),
+        profile_by_uid.index.astype(str),
         key=lambda uid: hashlib.sha256(f"{salt}|seen|{uid}".encode("utf-8")).hexdigest(),
     )
-    return set(ranked[:wanted])
+
+    chosen: set[str] = set()
+    for uid in ranked:
+        profile = str(profile_by_uid.loc[uid])
+        if remaining_by_profile[profile] <= 1:
+            continue
+        chosen.add(uid)
+        remaining_by_profile[profile] -= 1
+        if len(chosen) == wanted:
+            return chosen
+
+    capacity = sum(max(int(count) - 1, 0) for count in profile_by_uid.value_counts())
+    raise ValueError(
+        "the seen-scanner validation set cannot reach the requested size while "
+        f"leaving every scanner profile represented in training "
+        f"(requested={wanted}, capacity={capacity})"
+    )
 
 
 def summarise_split(

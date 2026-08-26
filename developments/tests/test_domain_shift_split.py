@@ -397,6 +397,19 @@ def test_the_comparator_is_drawn_from_scanners_training_keeps(population):
     assert comparator.issubset(trained)
 
 
+def test_seen_validation_refuses_to_consume_a_profile_entirely():
+    """A comparator cannot use the only training example of a scanner."""
+    candidates = pd.DataFrame(
+        {
+            "StudyInstanceUID": ["scanner-a-0", "scanner-a-1", "scanner-b-0"],
+            "scanner_profile": ["scanner-a", "scanner-a", "scanner-b"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="leaving every scanner profile"):
+        choose_seen_scanner_validation(candidates, wanted=2)
+
+
 def test_a_comparator_from_an_unseen_scanner_is_caught(population):
     rows, *_ = _three_way(population)
     # Move every study of one training profile into the comparator, so that
