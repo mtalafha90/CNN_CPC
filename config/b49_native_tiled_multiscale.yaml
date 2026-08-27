@@ -1,0 +1,135 @@
+# B49 — full-FOV native-tiled, globally conditioned sparse MIL.
+#
+# This is intentionally a new representation experiment.  It reuses B48's
+# frozen report-only scanner split but does not alter B48's code, inputs or
+# checkpoints.  The local branch never centre-crops or resizes source pixels.
+
+data_root: /data/rsna-knee-abnormality-detection
+train_csv: train.csv
+train_series_csv: train_series.csv
+
+seed: 2026
+competition_mode: true
+requested_gpus: 1
+allow_external_pretrained: true
+pretrained: true
+
+device: auto
+precision: auto
+# B49 can process several native tiles per series.  This is a planning budget,
+# not an automatic timeout; the required real-DICOM preflight reports measured
+# memory and tile counts before either arm trains.
+runtime_budget_hours: 36.0
+runtime_reserve_minutes: 15
+
+num_workers: 0
+pin_memory: false
+persistent_workers: false
+prefetch_factor: 1
+multiprocessing_context: spawn
+# The local branch deliberately reopens one source at a time while streaming
+# tiles; do not retain decoded volumes in a worker cache.
+series_cache_mb_per_worker: 0
+strict_dicom: false
+strict_dicom_inference: true
+
+# Frozen B34 global hierarchy and weak-label settings.
+b12_use_physical_scale: false
+b12_1_series_pool_heads: 8
+b7_n_slices: 16
+b7_image_size: 448
+b7_triplet_gap: 1
+b7_batch_size: 2
+b7_encoder_batch_size: 4
+b7_gradient_checkpointing: true
+b7_dropout: 0.25
+b7_transformer_layers: 2
+b7_transformer_heads: 8
+b7_transformer_ff_mult: 2.0
+b7_pathology_layers: 1
+
+b7_epochs: 5
+b7_max_batches_per_epoch: 1560
+b7_encoder_lr: 0.0
+b7_head_lr: 0.0001
+b7_min_lr: 0.000001
+b7_weight_decay: 0.0001
+b7_grad_clip: 1.0
+b17_encoder_frozen: true
+b17_label_smoothing: 0.0
+b17_robust_loss: none
+
+b18_expert_selection: true
+b18_selection_metric: macro_auc_12_target_global
+b18_selection_tie_break: earliest_epoch
+b18_candidate_epochs: 5
+b18_save_candidate_checkpoints: true
+
+# Retained only so the common configuration parser has a complete historical
+# surface.  B49's own contract explicitly forbids a local crop (fraction 1.0).
+b19_joint_focus_enabled: false
+b20_crop_focus_enabled: true
+b20_crop_focus_version: joint_focus_center_crop_only_v1
+b20_crop_focus_crop_fraction: 0.90
+
+b7_min_confidence: 0.75
+b7_positive_target: 0.85
+b7_negative_target: 0.05
+b7_positive_weight: 0.50
+b7_negative_weight: 1.00
+
+# Dataset is deterministic in B49 training.  These legacy augmentation knobs
+# remain defined but are not applied by B49NativeTiledFullFOVDataset.
+b7_noise_std: 0.02
+b7_slice_dropout: 0.08
+b7_train_gap_choices: [1, 2]
+b7_center_jitter: 2
+b7_rotation_deg: 5.0
+b7_translate_frac: 0.03
+b7_scale_jitter: 0.05
+b7_gamma_jitter: 0.12
+b7_bias_field_strength: 0.08
+b7_eval_tta_offsets: [-1, 0, 1]
+b7_eval_batch_size: 1
+
+# Retained optimizer / residual controls.
+b37_micro_batch: 2
+b37_grid_size: 6
+b37_top_k: 8
+b37_temperature: 1.0
+b37_local_aux_weight: 1.0
+b37_head_lr: 0.0001
+b37_weight_decay: 0.0001
+b37_grad_clip: 1.0
+b37_encoder_trainable_stages: 1
+b37_encoder_lr_scale: 0.05
+# The small full-FOV global-context images can retain B42's chunk of four.
+b37_encoder_chunk_size: 4
+b42_effective_batch: 2
+
+# B49 representation contract.
+b49_local_preprocessing: full_fov_native_tiled_no_inplane_resize_no_center_crop
+b49_local_crop_fraction: 1.0
+b49_global_context_preprocessing: full_fov_constant_area_aspect_downsample_for_B34_context_only
+b49_global_context_crop_fraction: 1.0
+b49_tile_size: 640
+b49_tile_overlap: 128
+b49_tile_stride: 512
+b49_tile_padding: reflect_outside_native_fov_only
+b49_evidence_precision: fp32_scoring_and_topk_for_large_native_token_pool
+# Two 640px triplets are encoded at a time.  This is deliberately separate
+# from b37_encoder_chunk_size and is measured by the real native preflight.
+b49_tile_encoder_chunk_size: 2
+
+# The same read-only global-query mechanism as B48, now applied to native tile
+# features.  --arm is the only arm-specific argument.
+b49_context_dim: 96
+b49_context_metric: cosine_low_rank_query_token_compatibility
+b49_context_eps: 0.000001
+b49_context_gate_init: zero_tanh_targetwise
+b49_context_query_gradient: detached_before_local_head
+b49_supervision: report_only_weak_no_official_gold
+b49_fixed_epochs: 2
+b49_checkpoint_selection: none_fixed_epoch_2
+b49_replication_seeds: [2026, 2037, 2048]
+b49_validation_surface: frozen_scanner_grouped_domain_split_v1
