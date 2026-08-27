@@ -13,6 +13,11 @@ from rsna_knee.b49_native_tiled_multiscale_mil import (
     tile_feature_coordinates,
     verify_native_tile_coverage,
 )
+from rsna_knee.b49_native_tiled_multiscale_training import B42_EFFECTIVE_BATCH
+
+
+def test_b49_training_uses_the_frozen_b42_effective_batch():
+    assert B42_EFFECTIVE_BATCH == 2
 
 
 @pytest.mark.parametrize(

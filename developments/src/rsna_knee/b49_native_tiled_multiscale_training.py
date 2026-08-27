@@ -40,6 +40,7 @@ from .b37_highres_sparse_training import (
     _save_recovery,
     _trim_host_memory,
 )
+from .b42_constant_area_aspect_sparse_mil import B42_EFFECTIVE_BATCH
 from .b42_constant_area_aspect_sparse_training import _batch_scales
 from .b48_global_conditioned_sparse_training import (
     _config_sha256,
