@@ -390,7 +390,13 @@ def native_tile_triplet_chunks(
         y0, x0 = int(tile.y0) + y_shift, int(tile.x0) + x_shift
         for begin in range(0, len(centres), int(chunk_size)):
             chosen = np.arange(begin, min(begin + int(chunk_size), len(centres)), dtype=np.int64)
-            patch = padded[index[chosen], :, y0 : y0 + int(tile_size), x0 : x0 + int(tile_size)]
+            # ``padded`` is [S, H, W]; triplet indexing already yields
+            # [C, 3, H, W], so there is no source channel axis to index.
+            patch = padded[
+                index[chosen],
+                y0 : y0 + int(tile_size),
+                x0 : x0 + int(tile_size),
+            ]
             expected = (len(chosen), 3, int(tile_size), int(tile_size))
             if tuple(patch.shape) != expected:
                 raise RuntimeError(f"B49 tiled crop shape changed: {tuple(patch.shape)} != {expected}")
