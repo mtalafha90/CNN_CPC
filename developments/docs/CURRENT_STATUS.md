@@ -131,11 +131,17 @@ The detailed evidence and corrective plan are frozen in [`POST_B45_PLATEAU_RETRO
 - The repository still contains an unrun B47 native-grid implementation. It is
   not an automatically approved successor; any future training must begin with
   a separate prospective question, locked endpoint, and resource preflight.
+- B50 ordered slice-sequence MIL is protocol-only. Its fresh selection gate is
+  built from former B48/B49 training rows while excluding every former B48/B49
+  validation row. No B50 model code may be scored until that gate is created
+  once, hashed, and recorded. See
+  [`B50_ORDERED_SLICE_SEQUENCE_MIL.md`](B50_ORDERED_SLICE_SEQUENCE_MIL.md).
 
 ## Current direction in one line
 
 ```text
 preserve the completed B46/B48/B49 records
 -> do not tune closed mechanisms from their results
+-> freeze B50's fresh gate before implementing its sequence block
 -> define any future hypothesis and endpoint prospectively
 ```

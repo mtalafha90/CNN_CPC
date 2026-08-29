@@ -53,6 +53,7 @@ jobs:
             developments/tests/test_b49_native_tiled_multiscale_mil.py \
             developments/tests/test_b49_native_tiled_multiscale_submission.py \
             developments/tests/test_b49_native_tiled_multiscale_submission_dualgpu_streaming.py \
+            developments/tests/test_b50_ordered_slice_selection_split.py \
             developments/tests/test_prospective_weak_v1.py \
             developments/tests/test_pv1_b31_context_counterfactual.py \
             developments/tests/test_prospective_weak_v2.py \

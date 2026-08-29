@@ -42,6 +42,7 @@ The full scientific contract is in
 | B48 global-query conditioning | no meaningful support | archive; do not tune query source/rank/gate |
 | B49 native tiled candidate | no practical support; Kaggle `0.707` | archive; do not tune tiles, overlap, crop, TTA, or blend |
 | B47 native grid | implemented but unrun | not an approved successor; do not launch automatically |
+| B50 ordered slice sequence | protocol/gate preparation only | create and hash its fresh gate before model implementation |
 
 The complete result evidence and governance rules are in
 [`developments/docs/CURRENT_STATUS.md`](../developments/docs/CURRENT_STATUS.md).
