@@ -419,13 +419,54 @@ def test_the_fresh_gate_is_read_and_prior_rows_are_dropped(tmp_path):
     )
 
     _payload, loaded, meta = load_b50_selection_gate(tmp_path)
-    assert "d" not in set(loaded["StudyInstanceUID"]), "a spent row must not train"
+
+    # Every row is returned, spent ones still labelled. They are excluded by
+    # never being selected, not by being deleted -- deleting them would defeat
+    # the shared check that every report-only study belongs to exactly one split.
+    assert len(loaded) == 4
     assert set(loaded["split"]) == {
         "train",
         "validation_seen_scanners",
         "validation_unseen_scanners",
+        "excluded_prior_surface",
     }
+    spent = loaded.loc[loaded["split"].eq("excluded_prior_surface"), "StudyInstanceUID"]
+    assert set(spent) == {"d"}
+
+    # And the training selection never reaches them.
+    from rsna_knee.b48_global_conditioned_sparse_training import _indices_for_split
+
+    chosen = _indices_for_split(["a", "b", "c", "d"], loaded, "train")
+    assert [["a", "b", "c", "d"][i] for i in chosen] == ["a"]
     assert meta["sha256"] and meta["rows_sha256"]
+
+
+def test_a_gate_marking_nothing_as_spent_is_refused(tmp_path):
+    """The parent's validation rows must all be carried through as excluded."""
+    import json
+
+    import pandas as pd
+    from rsna_knee.b50_adapted_hierarchy_training import load_b50_selection_gate
+
+    # Well formed in every other respect -- all three groups non-empty, and the
+    # seen comparator drawn from a profile training keeps -- so the gate module's
+    # own verifier passes and this check is the one being exercised.
+    rows = pd.DataFrame(
+        {
+            "StudyInstanceUID": ["a", "b", "c"],
+            "scanner_profile": ["P1", "P1", "P2"],
+            "parent_b48_split": ["train", "train", "train"],
+            "b50_split": [
+                "train",
+                "validation_seen_scanners",
+                "validation_unseen_scanners",
+            ],
+        }
+    )
+    rows.to_csv(tmp_path / "b50_selection_split_by_study.csv", index=False)
+    (tmp_path / "b50_selection_split.json").write_text(json.dumps({}))
+    with pytest.raises(ValueError, match="marks no rows as spent"):
+        load_b50_selection_gate(tmp_path)
 
 
 def test_a_gate_that_reuses_a_spent_row_is_refused(tmp_path):

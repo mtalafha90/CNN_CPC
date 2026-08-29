@@ -111,10 +111,17 @@ def load_b50_selection_gate(path: str | Path) -> tuple[dict, "pd.DataFrame", dic
 
     The gate stores its assignment under `b50_split` with an
     `excluded_prior_surface` label the parent format has no equivalent for, so
-    it is verified here and then renamed to the `split` column the shared
-    index helper expects. Requiring this file rather than accepting either
-    format is deliberate: a trainer that silently accepted the spent split
-    would let the boundary be crossed by a path argument.
+    it is verified here and then renamed to the `split` column the shared index
+    helper expects. Requiring this file rather than accepting either format is
+    deliberate: a trainer that silently accepted the spent split would let the
+    boundary be crossed by a path argument.
+
+    Every one of the 4,349 report-only rows is returned, the spent ones still
+    carrying their `excluded_prior_surface` label. They are excluded by never
+    being asked for -- only the `train` split is selected -- rather than by being
+    deleted here. Deleting them would defeat the shared surface check that every
+    report-only study is accounted for by exactly one split, which is a guard
+    worth keeping.
     """
     import pandas as pd
 
@@ -146,8 +153,13 @@ def load_b50_selection_gate(path: str | Path) -> tuple[dict, "pd.DataFrame", dic
         "version": payload.get("version"),
         "salt": payload.get("salt"),
     }
-    rows = rows.loc[rows["b50_split"].astype(str) != B50_SPLIT_EXCLUDED].copy()
+    rows = rows.copy()
     rows["split"] = rows["b50_split"].astype(str)
+    if not (rows["split"] == B50_SPLIT_EXCLUDED).any():
+        raise ValueError(
+            "B50 gate marks no rows as spent by B48/B49, which cannot be right: "
+            "the parent's validation rows must all carry excluded_prior_surface"
+        )
     return payload, rows, meta
 
 
