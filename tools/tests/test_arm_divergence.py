@@ -155,3 +155,28 @@ def test_the_report_states_no_verdict():
     assert "discordant" in text
     for verdict in ("fail", "pass", "too similar", "no effect", "conclusion"):
         assert verdict not in text
+
+
+# --- the ceiling an AUC difference cannot exceed --------------------------
+
+
+def test_no_reordering_means_no_possible_auc_difference():
+    from tools.arm_divergence import auc_difference_ceiling
+
+    assert auc_difference_ceiling(0.0) == 0.0
+
+
+def test_the_ceiling_is_the_discordant_fraction():
+    """An AUC moves only on pairs the two arms order differently."""
+    from tools.arm_divergence import auc_difference_ceiling
+
+    assert auc_difference_ceiling(0.002382) == pytest.approx(0.002382)
+    assert auc_difference_ceiling(1.0) == pytest.approx(1.0)
+
+
+def test_the_ceiling_appears_in_the_report_with_its_assumption_stated():
+    frame_a = _frame([[0.1, 0.1], [0.2, 0.2], [0.3, 0.3], [0.4, 0.4]])
+    frame_b = _frame([[0.4, 0.1], [0.3, 0.2], [0.2, 0.3], [0.1, 0.4]])
+    text = describe(compare(frame_a, frame_b))
+    assert "max |dAUC|" in text
+    assert "assuming" in text, "a bound without its assumption invites misuse"

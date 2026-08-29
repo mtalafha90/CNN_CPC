@@ -127,24 +127,53 @@ def compare(first: pd.DataFrame, second: pd.DataFrame) -> dict:
     }
 
 
+def auc_difference_ceiling(discordant: float) -> float:
+    """The largest AUC difference a given amount of reordering can produce.
+
+    An ROC AUC is the share of positive/negative pairs a model orders correctly,
+    so two models' AUCs can differ only on pairs they order differently. Pairs
+    they agree on -- both right or both wrong -- cancel exactly.
+
+    If the discordant pairs fall among positive/negative pairs at the same rate
+    as among pairs generally, then the share of scoring pairs that could have
+    flipped is the discordant fraction itself, and the AUC difference is largest
+    when every one of them flips the same way. That makes the discordant
+    fraction a direct ceiling on |AUC_candidate - AUC_control|.
+
+    The uniformity assumption is what makes this an estimate rather than a proof.
+    It could be beaten if a mechanism disturbed exactly the pairs that separate
+    the classes and left every other pair alone, which is not how a small dense
+    perturbation behaves. Treat it as the right order of magnitude.
+    """
+    return float(discordant)
+
+
 def describe(result: dict) -> str:
     frame = result["per_target"]
     lines = [
         f"{result['studies']} studies x {result['targets']} targets",
         "",
-        f"{'target':<18} {'mean |dp|':>11} {'max |dp|':>10} {'spearman':>9} {'discordant':>11}",
+        f"{'target':<18} {'mean |dp|':>11} {'max |dp|':>10} {'spearman':>9} "
+        f"{'discordant':>11} {'max |dAUC|':>11}",
     ]
     for row in frame.itertuples():
         lines.append(
             f"{row.target:<18} {row.mean_abs_delta:>11.6f} {row.max_abs_delta:>10.6f} "
-            f"{row.spearman:>9.5f} {row.discordant_pair_fraction:>11.6f}"
+            f"{row.spearman:>9.5f} {row.discordant_pair_fraction:>11.6f} "
+            f"{auc_difference_ceiling(row.discordant_pair_fraction):>11.6f}"
         )
+    mean_discordant = result["mean_discordant_pair_fraction"]
     lines.extend(
         [
             "",
             f"mean over targets   |dp| {result['mean_abs_delta']:.6f}   "
-            f"discordant {result['mean_discordant_pair_fraction']:.6f}   "
+            f"discordant {mean_discordant:.6f}   "
             f"lowest spearman {result['min_spearman']:.5f}",
+            "",
+            "max |dAUC| is the discordant fraction: an AUC can only move on pairs",
+            "the two arms order differently, so this bounds how far their AUCs",
+            "could differ, assuming discordance falls on class-separating pairs at",
+            "the same rate as on pairs generally.",
         ]
     )
     return "\n".join(lines)
