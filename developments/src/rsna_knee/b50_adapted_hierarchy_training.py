@@ -69,7 +69,6 @@ from .b48_global_conditioned_sparse_training import (
     _report_only_surface,
     _uid_sha256,
     b48_fill_artifacts,
-    load_b48_domain_split,
 )
 from .b50_adapted_hierarchy_mil import (
     B50_ARMS,
@@ -99,6 +98,57 @@ B50_SUPERVISION = "report-only weak labels, scanner-split train rows only"
 
 def _read_config(path: str | Path) -> dict:
     return yaml.safe_load(Path(path).read_text())
+
+
+def load_b50_selection_gate(path: str | Path) -> tuple[dict, "pd.DataFrame", dict]:
+    """Read the fresh B50 gate, not the split B48 and B49 already spent.
+
+    B50 must not be selected on the B48/B49 scanner surface. Those rows have
+    been inspected twice, and the project's own governance records that split as
+    spent for new architecture selection. The fresh gate is built only from the
+    parent's former `train` rows, with every former B48/B49 validation row
+    excluded outright.
+
+    The gate stores its assignment under `b50_split` with an
+    `excluded_prior_surface` label the parent format has no equivalent for, so
+    it is verified here and then renamed to the `split` column the shared
+    index helper expects. Requiring this file rather than accepting either
+    format is deliberate: a trainer that silently accepted the spent split
+    would let the boundary be crossed by a path argument.
+    """
+    import pandas as pd
+
+    from .b50_ordered_slice_selection_split import (
+        B50_SPLIT_EXCLUDED,
+        verify_b50_selection_split,
+    )
+
+    directory = Path(path)
+    if directory.is_file():
+        directory = directory.parent
+    payload_path = directory / "b50_selection_split.json"
+    rows_path = directory / "b50_selection_split_by_study.csv"
+    if not payload_path.exists() or not rows_path.exists():
+        raise FileNotFoundError(
+            f"B50 requires its fresh selection gate at {directory}. Build it once "
+            "with developments/scripts/prepare_b50_ordered_slice_gate.sh; the "
+            "B48/B49 domain_split.json is spent and must not be used here."
+        )
+
+    payload = json.loads(payload_path.read_text())
+    rows = pd.read_csv(rows_path)
+    verify_b50_selection_split(rows)
+
+    meta = {
+        "path": str(payload_path),
+        "sha256": sha256_file(payload_path),
+        "rows_sha256": sha256_file(rows_path),
+        "version": payload.get("version"),
+        "salt": payload.get("salt"),
+    }
+    rows = rows.loc[rows["b50_split"].astype(str) != B50_SPLIT_EXCLUDED].copy()
+    rows["split"] = rows["b50_split"].astype(str)
+    return payload, rows, meta
 
 
 def _hierarchy_gradient_present(model) -> bool:
@@ -161,7 +211,7 @@ def train_b50_domain_arm(
     contract = require_b50_contract(settings)
     adapt_hierarchy = bool(contract["adapt_hierarchy"])
 
-    domain_payload, domain_rows, domain_meta = load_b48_domain_split(domain_split)
+    domain_payload, domain_rows, domain_meta = load_b50_selection_gate(domain_split)
     settings["seed"] = seed
     seed_everything(seed + B50_CONSTRUCTION_SEED_OFFSET)
     runtime = resolve_runtime(settings)
@@ -518,7 +568,12 @@ def main() -> None:
     parser.add_argument("--labels-root", required=True)
     parser.add_argument("--series-policy", required=True)
     parser.add_argument("--base-checkpoint", required=True)
-    parser.add_argument("--domain-split", required=True)
+    parser.add_argument(
+        "--selection-gate",
+        required=True,
+        dest="domain_split",
+        help="directory holding the fresh b50_selection_split.json",
+    )
     parser.add_argument("--arm", choices=B50_ARMS, required=True)
     parser.add_argument("--seed", type=int, default=B50_SEED)
     parser.add_argument("--out-root", default=B50_RUN_ROOT)

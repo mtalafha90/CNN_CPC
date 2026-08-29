@@ -380,3 +380,70 @@ def test_the_trainer_passes_the_crop_policy_the_contract_resolved():
         "developments/src/rsna_knee/b50_adapted_hierarchy_training.py"
     ).read_text()
     assert 'crop_focus_policy=contract["crop_policy"]' in source
+
+
+# --- the split boundary B48 and B49 already spent --------------------------
+
+
+def test_the_trainer_refuses_the_spent_b48_split(tmp_path):
+    """The B48/B49 surface has been inspected twice; B50 needs its own gate."""
+    from rsna_knee.b50_adapted_hierarchy_training import load_b50_selection_gate
+
+    (tmp_path / "domain_split.json").write_text("{}")
+    with pytest.raises(FileNotFoundError, match="fresh selection gate"):
+        load_b50_selection_gate(tmp_path)
+
+
+def test_the_fresh_gate_is_read_and_prior_rows_are_dropped(tmp_path):
+    import json
+
+    import pandas as pd
+    from rsna_knee.b50_adapted_hierarchy_training import load_b50_selection_gate
+
+    rows = pd.DataFrame(
+        {
+            "StudyInstanceUID": ["a", "b", "c", "d"],
+            "scanner_profile": ["P1", "P1", "P2", "P3"],
+            "parent_b48_split": ["train", "train", "train", "validation_seen_scanners"],
+            "b50_split": [
+                "train",
+                "validation_seen_scanners",
+                "validation_unseen_scanners",
+                "excluded_prior_surface",
+            ],
+        }
+    )
+    rows.to_csv(tmp_path / "b50_selection_split_by_study.csv", index=False)
+    (tmp_path / "b50_selection_split.json").write_text(
+        json.dumps({"version": "b50_fresh_scanner_grouped_selection_split_v1"})
+    )
+
+    _payload, loaded, meta = load_b50_selection_gate(tmp_path)
+    assert "d" not in set(loaded["StudyInstanceUID"]), "a spent row must not train"
+    assert set(loaded["split"]) == {
+        "train",
+        "validation_seen_scanners",
+        "validation_unseen_scanners",
+    }
+    assert meta["sha256"] and meta["rows_sha256"]
+
+
+def test_a_gate_that_reuses_a_spent_row_is_refused(tmp_path):
+    import json
+
+    import pandas as pd
+    from rsna_knee.b50_adapted_hierarchy_training import load_b50_selection_gate
+
+    rows = pd.DataFrame(
+        {
+            "StudyInstanceUID": ["a", "b"],
+            "scanner_profile": ["P1", "P2"],
+            # This row was B48/B49 validation and must be excluded, not trained on.
+            "parent_b48_split": ["train", "holdout_unseen_scanners"],
+            "b50_split": ["train", "train"],
+        }
+    )
+    rows.to_csv(tmp_path / "b50_selection_split_by_study.csv", index=False)
+    (tmp_path / "b50_selection_split.json").write_text(json.dumps({}))
+    with pytest.raises(ValueError, match="reuse a B48/B49 validation row"):
+        load_b50_selection_gate(tmp_path)

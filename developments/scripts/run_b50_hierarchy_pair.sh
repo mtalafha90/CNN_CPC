@@ -4,7 +4,7 @@ set -euo pipefail
 # Sequential runner for the B50 matched pair.
 #
 # Required environment variables:
-#   DATA_ROOT LABELS_ROOT SERIES_POLICY BASE_CHECKPOINT DOMAIN_SPLIT B50_ROOT
+#   DATA_ROOT LABELS_ROOT SERIES_POLICY BASE_CHECKPOINT B50_SELECTION_GATE B50_ROOT
 # Optional:
 #   PYTHON_BIN (default: python)
 #
@@ -24,15 +24,16 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 CONFIG="${CONFIG:-config/b50_adapted_hierarchy.yaml}"
 ARMS=(frozen_hierarchy_control adapted_hierarchy_candidate)
 
-for name in DATA_ROOT LABELS_ROOT SERIES_POLICY BASE_CHECKPOINT DOMAIN_SPLIT B50_ROOT; do
+for name in DATA_ROOT LABELS_ROOT SERIES_POLICY BASE_CHECKPOINT B50_SELECTION_GATE B50_ROOT; do
   if [[ -z "${!name:-}" ]]; then
     echo "ERROR: required environment variable $name is not set" >&2
     exit 2
   fi
 done
 
-if [[ ! -f "$DOMAIN_SPLIT" ]]; then
-  echo "ERROR: domain split does not exist: $DOMAIN_SPLIT" >&2
+if [[ ! -f "$B50_SELECTION_GATE/b50_selection_split.json" ]]; then
+  echo "ERROR: B50 fresh selection gate not found in: $B50_SELECTION_GATE" >&2
+  echo "Build it once with developments/scripts/prepare_b50_ordered_slice_gate.sh" >&2
   exit 2
 fi
 
@@ -49,14 +50,14 @@ run_arm() {
     --labels-root "$LABELS_ROOT" \
     --series-policy "$SERIES_POLICY" \
     --base-checkpoint "$BASE_CHECKPOINT" \
-    --domain-split "$DOMAIN_SPLIT" \
+    --selection-gate "$B50_SELECTION_GATE" \
     --arm "$arm" \
     --out-root "$arm_root" \
     "${extra[@]}"
 }
 
 printf 'B50 run root: %s\n' "$B50_ROOT"
-printf 'domain split: %s\n' "$DOMAIN_SPLIT"
+printf 'selection gate: %s\n' "$B50_SELECTION_GATE"
 printf 'config:       %s\n\n' "$CONFIG"
 
 echo "============================================================"
