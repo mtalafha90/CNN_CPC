@@ -2,7 +2,10 @@
 
 **Date:** 2026-08-25
 
-**Status:** ALL FIVE PREFLIGHTS PASSED. B46 fixed-E2 fold training is authorized under the already-frozen protocol. This record does not change the fold manifest, gold weight, architecture, optimizer, or decision rule.
+**Status:** ALL FIVE PREFLIGHTS PASSED. The authorized fixed-E2 fold training
+subsequently completed under the already-frozen protocol. The pooled OOF result
+was **no support for gold anchoring at the frozen 4.0 cell weight**; it does not
+change the fold manifest, architecture, optimizer, or decision rule.
 
 ## Frozen manifest
 
@@ -99,4 +102,8 @@ B46 fold 4 preflight PASS
 ALL B46 PREFLIGHTS PASS
 ```
 
-Training may now proceed for folds 0 through 4, sequentially, with exactly two epochs each. Intermediate loss values, gates, or fold-specific behavior must not be used to alter the frozen protocol or stop/select a fold checkpoint. The only valid endpoint for every fold is fixed epoch 2.
+The five folds subsequently ran sequentially with exactly two epochs each.
+Intermediate loss values, gates, or fold-specific behaviour were not used to
+alter the frozen protocol or select a checkpoint; fixed epoch 2 remained the
+only valid endpoint for every fold. The final pooled OOF record is in
+[`B46_GOLD_ANCHORED_CROSSFIT.md`](B46_GOLD_ANCHORED_CROSSFIT.md).

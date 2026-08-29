@@ -1,14 +1,30 @@
 # Experiment status
 
-**Snapshot:** 2026-08-18
+**Snapshot:** 2026-08-18 (**historical snapshot**)
 **Package:** `0.30.0`
 **Last model promoted on evidence:** `B20_crop_only_joint_focus`, fixed epoch 2
 **Architecture targeted by the top-level interface:** B34 / B31
 **Primary metric:** macro ROC AUC across 12 targets
 
-The 58-study expert-labelled surface has been reused repeatedly and is therefore a **development/post-hoc surface, not independent validation**. Hidden competition evaluation remains the independent predictive-performance signal, and **no submission has been made**.
+The 58-study expert-labelled surface has been reused repeatedly and is therefore a **development/post-hoc surface, not independent validation**. At the time of this snapshot, no submission had been made. Current hidden competition evidence is recorded in [`CURRENT_STATUS.md`](CURRENT_STATUS.md).
 
 Rows below are historical records. They are not revised when later work changes the project's understanding; see `CURRENT_STATUS.md` for the present position.
+
+## Post-snapshot update (2026-08-29)
+
+Later frozen work is deliberately not folded into the historical ladder below:
+
+- B46 completed with **no support** for the 4.0 gold-cell anchor
+  (`B46 − B42 = −0.004946`, paired 95% CI `[−0.014664, +0.003402]`).
+- B48 completed with **no support** for global conditioning on the scanner
+  surface (`+0.0000749` unseen candidate-minus-control macro AUC).
+- B49 completed with **no support** for global conditioning within its native
+  tiled representation (`+0.0005468`, below the predeclared `+0.010`
+  threshold). Its one exploratory candidate-only Kaggle endpoint scored `0.707`;
+  B37, B41, and B42 remain at displayed `0.714`.
+
+See [`CURRENT_STATUS.md`](CURRENT_STATUS.md) and the individual B46–B49 records
+for the current decision and full provenance.
 
 ## Current headline
 

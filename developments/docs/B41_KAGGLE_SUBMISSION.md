@@ -2,11 +2,11 @@
 
 ## Status
 
-B41 is a completed fixed-E2 native-aspect candidate.  Its reused Expert-58
-combined macro AUC is `0.6778722842`; this is development evidence only and does
-not alter the frozen endpoint.  B41 is submitted once unchanged to test whether
-preserving rectangular acquisition geometry generalizes on the hidden
-competition distribution.
+B41 is a completed fixed-E2 native-aspect candidate. Its reused Expert-58
+combined macro AUC is `0.6778722842`; this is development evidence only and did
+not alter the frozen endpoint. The unchanged hidden-safe dual-T4 endpoint
+completed with a displayed Kaggle score of **`0.714`**. This is a displayed tie
+with B37/B42 and does not promote a B41 variant or permit B41 retuning.
 
 The hidden inference path **must** use B41's aspect-preserving preprocessing.
 The B37 submission launcher must not be reused directly because it constructs
@@ -18,7 +18,7 @@ B41 checkpoint observed during the completed Expert-58 run:
 fd8898cb2c642e3695e11c3f2e96057202a4d68c9a17c64abdea85625d44f5c4
 ```
 
-## Frozen hidden-test endpoint
+## Frozen hidden-test endpoint (historical reproducibility)
 
 ```text
 full native-volume percentile normalization

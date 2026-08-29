@@ -6,6 +6,15 @@ This is the one permitted Kaggle endpoint for completed B49: the
 `post_cross_attention_candidate` checkpoint. It is an **exploratory hidden-test
 submission**, not a promotion of B49's matched-domain result.
 
+## Completed result
+
+The candidate-only hidden submission completed on **GPU T4 x2** and received a
+displayed Kaggle score of **`0.707`**. The previously successful B42 endpoint
+displayed `0.714`, so B49 is `−0.007` on that leaderboard scale. This result is
+recorded, not tuned against: it does not change B49's predeclared matched-domain
+verdict of no support and does not permit a B49 rerun, blend, calibration,
+control-arm submission, or architecture change.
+
 Use GPU **T4 x2**. Do not use P100 (one GPU) or TPU v5e-8 (this is a PyTorch
 CUDA endpoint).
 
@@ -140,8 +149,15 @@ for name, uid in required.items():
     assert decoder.is_available, f"Missing DICOM decoder for {name} ({uid})"
 ```
 
-If that fails, stop. Internet installation is not reliable during code
-competition scoring.
+The completed run initially lacked the JPEG Lossless P14 decoder. It was fixed
+operationally by attaching an offline GDCM/Python package and installing
+`python-gdcm` before importing `pydicom`; all four decoder assertions then
+passed. This is a runtime dependency fix only. It must not change the candidate
+checkpoint, preprocessing, TTA, or prediction policy.
+
+If a decoder is still unavailable after installing an approved offline decoder
+package, stop. Internet installation is not reliable during code competition
+scoring.
 
 ## 5. Visible three-study numerical-equivalence check
 
@@ -173,7 +189,7 @@ if len(pd.read_csv(DATA_ROOT / "test.csv")) == 3:
     assert delta <= 1e-5
 ```
 
-## 6. Final scoring call
+## 6. Final scoring call (historical reproducibility)
 
 This is the only B49 inference call that should execute on Kaggle's hidden
 test set:

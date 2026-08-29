@@ -2,11 +2,13 @@
 
 ## Status
 
-**IMPLEMENTED / PREFLIGHT NOT RUN / NOT TRAINED.**
+**COMPLETED / KAGGLE `0.714` / NOT PROMOTED ABOVE B37 OR B41.**
 
-B42 remains a prospective fixed endpoint. Its scientific contract was defined
-before implementation and before any B42 Expert-58 or hidden competition result.
-B37 and B41 remain immutable.
+B42's scientific contract was defined before implementation and before any B42
+Expert-58 or hidden competition result. Its fixed endpoint and unchanged hidden
+submission subsequently completed at a displayed Kaggle score of `0.714`, tied
+with B37 and B41. The result does not authorise a B42 geometry or inference
+variant; B37, B41, and B42 remain immutable.
 
 Implementation files:
 
@@ -266,9 +268,9 @@ training_audit.json
 preflight.log
 ```
 
-## Evaluation plan
+## Completed evaluation plan
 
-After the fixed E2 endpoint exists, the B42 evaluator must compare the matching
+For the completed fixed-E2 endpoint, the B42 evaluator compares the matching
 preprocessing paths for:
 
 ```text
@@ -278,7 +280,7 @@ B41 E2 aspect-fit + zero-pad 448
 B42 E2 constant-area rectangular native-aspect
 ```
 
-Report global macro, combined macro, focal-six mean, per-target AUC, sparse
+It records global macro, combined macro, focal-six mean, per-target AUC, sparse
 residual increment, paired B42-minus-B37 bootstrap, paired B42-minus-B41
 bootstrap, rectangular tensor-size distribution, and feature-cell occupancy.
 Expert-58 remains reused development evidence only.
@@ -287,6 +289,6 @@ Expert-58 remains reused development evidence only.
 
 B42 is one fixed candidate, not a geometry sweep. Do not change reference area,
 padding mode, aspect handling, grid size, top-k, learning rates, target subset,
-or epoch count after Expert-58. If the fixed endpoint completes successfully,
-one unchanged hidden Kaggle submission is justified. Promotion still requires
-hidden competition evidence, with B37's `0.714` as the benchmark.
+or epoch count after Expert-58. The one unchanged hidden Kaggle submission
+completed at `0.714`; it did not separate visibly from B37 or B41 and does not
+justify further B42 tuning.

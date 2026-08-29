@@ -2,12 +2,20 @@
 
 ## Status
 
-**COMPLETED / EXPLORATORY CANDIDATE-ONLY KAGGLE PATH AVAILABLE.**
+**COMPLETED / NOT PROMOTED.**
 
-For seed 2026, the candidate-minus-control unseen macro-AUC difference was
-`+0.00055`, below B49's predeclared `+0.010` support threshold. The Kaggle
-candidate route is therefore exploratory only and does not promote the new
-global-conditioning mechanism.
+For seed 2026, the candidate-minus-control unseen-scanner macro-AUC difference
+was `+0.0005468` (`0.776117` versus `0.775570`), with paired 95% CI
+`[+0.0003146, +0.0008120]`, `P(candidate > control) = 1.0`, and 10 of 12 targets
+improved. The effect is far below B49's predeclared `+0.010` support threshold,
+so it is **no support for global conditioning within the native-tiled
+representation**.
+
+The one permitted exploratory candidate-only Kaggle submission completed with a
+displayed hidden score of **`0.707`**. This is `−0.007` versus the successful
+`0.714` B42 hidden endpoint. It does not change the matched-domain verdict or
+authorise a B49 retune, calibration, blend, control submission, or another B49
+candidate submission.
 
 B49 is a separate post-B48 experiment. It does not modify B48, reuse a B48
 checkpoint, use a B46 fold checkpoint, use B47 output, or use official gold

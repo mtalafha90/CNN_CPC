@@ -2,13 +2,28 @@
 
 ## Status
 
-**PREPARED / NOT RUN.**
+**COMPLETED / NO SUPPORT FOR GLOBAL CONDITIONING.**
 
-B48 is frozen before any B48 preflight, optimizer step, scanner-domain score, or
-Expert-58 diagnostic is inspected. It was prepared in a separate branch while
-the five B46 folds are running. It must not be merged into the checkout running
-B46 until all five B46 checkpoints exist, because B46's runner pins its fold
-manifest but does not pin a source revision.
+The seed-2026 matched pair completed after both B48 preflights passed. On the
+frozen unseen-scanner primary surface, the control macro AUC was `0.774202` and
+the post-cross-attention candidate macro AUC was `0.774277`:
+
+```text
+candidate − control             +0.0000749
+paired 95% CI                   [−0.0000972, +0.0002786]
+P(candidate > control)          0.8010
+targets improved                 7 / 12
+```
+
+This is below the predeclared `+0.010` support threshold and its paired interval
+crosses zero, so the verdict is **no support for global conditioning**. No B48
+hyperparameter, seed, scanner split, target subset, calibration, blend, or
+hidden-test submission is authorised by this result.
+
+The historical protocol was frozen before any B48 preflight, optimizer step,
+scanner-domain score, or Expert-58 diagnostic was inspected. It was prepared in
+a separate branch while the five B46 folds were running, so the B46 execution
+checkout remained unchanged.
 
 B48 is deliberately **not** a B46 continuation. It starts every arm from the
 same full-fill Phase-9/B34 base checkpoint used by B42; it never loads a B46
@@ -216,7 +231,7 @@ reported without selecting a best seed. A three-seed promotion claim requires
 all three unseen deltas positive, mean unseen delta at least `+0.010`, and a
 three-seed nested paired-bootstrap lower bound above zero.
 
-## Post-B46 launch sequence
+## Historical post-B46 launch sequence
 
 Do not do steps 1–2 while B46 is reading the same DICOM disk. After all five
 B46 checkpoints exist:

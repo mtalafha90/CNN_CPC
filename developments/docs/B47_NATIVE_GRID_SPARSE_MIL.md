@@ -7,10 +7,11 @@
 Frozen before any B47 training and before any B47 result is inspected. No
 number in this document is a result.
 
-B47 must not start until all five B46 folds have finished. Each fold is a
-separate Python process, so editing or adding modules mid-run would let later
-folds load different code from earlier ones. B47 adds new files and modifies
-none, but the sequencing rule stands regardless.
+The B46 completion guard has now been met, but B47 remains unrun. The historical
+sequencing rule existed because each B46 fold was a separate Python process and
+an intervening source revision could have let later folds load different code.
+B48 and B49 subsequently completed as independent frozen experiments; neither
+outcome automatically authorises a B47 run or changes this document's contract.
 
 ## The fault
 
@@ -194,13 +195,11 @@ temperature, the grid policy, the learning rates, the epoch count, or any target
 subset. Expert-58 has been reused extensively and is a descriptive audit surface,
 not independent evidence; a B47 result does not authorise a hidden submission.
 
-If B47 is positive, the next step is a seed replication on the powered
-development surface before any submission is spent — the retrospective's item 10.
-
-If B47 is negative, the conclusion is that spatial resolution in the evidence
-head was not the constraint, and the sparse-MIL family closes for good. The next
-direction is then B48, explicit within-series slice-sequence modelling, which
-tests ordered depth relationships rather than finer in-plane detail.
+If B47 is ever run, its outcome must be interpreted under the frozen rule above.
+The historical forward path to B48 is no longer an active instruction: B48 and
+B49 have already completed independently and both were not promoted. A future
+B47 decision requires a separately current protocol decision, not post-hoc
+selection from those outcomes.
 
 ## Implementation
 

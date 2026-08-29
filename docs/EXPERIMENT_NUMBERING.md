@@ -110,7 +110,13 @@ experiments must be appended to it; existing numbers must not be reordered.
 | 073 | `B38` | 448 high-resolution global-tail ablation | `completed_not_promoted` | `c240267` |
 | 074 | `B39` | Five-offset inference refinement of frozen B37 | `submitted_pending_hidden_score` | `5a9d4ad` |
 | 075 | `B40` | B37 epoch-2 optimizer-reset one-epoch continuation | `completed_not_promoted` | `04c60b4` |
-| 076 | `B41` | Native-aspect-preserving 90% crop sparse-MIL ablation | `implemented_not_run` | `41a3b6a` |
+| 076 | `B41` | Native-aspect-preserving 90% crop sparse-MIL ablation | `completed_kaggle_0.714` | `41a3b6a` |
+| 077 | `B42` | Constant-area native-aspect ragged sparse MIL | `completed_kaggle_0.714` | `ff8d32f` |
+| 078 | `B45` | Plane-calibrated target-conditioned sparse MIL | `completed_not_promoted` | `47bfaf9` |
+| 079 | `B46` | Gold-anchored five-fold cross-fitted supervision | `completed_not_promoted` | `61dc824` |
+| 080 | `B47` | Native encoder-grid sparse MIL | `implemented_not_run` | `cb07b89` |
+| 081 | `B48` | Global-query-conditioned cross-series sparse MIL | `completed_not_promoted` | `89ca1c7` |
+| 082 | `B49` | Full-FOV native tiled multi-resolution sparse MIL | `completed_not_promoted_kaggle_0.707` | `0e36eb9` |
 
 ## Organize the local archive safely
 
@@ -146,6 +152,12 @@ runs/by_experiment/
 ├── 074_Experiment_B39_b37_five_offset_tta/
 ├── 075_Experiment_B40_b37_e2_optimizer_reset_continuation/
 ├── 076_Experiment_B41_native_aspect_90crop_sparse_mil/
+├── 077_Experiment_B42_constant_area_aspect_sparse_mil/
+├── 078_Experiment_B45_plane_calibrated_sparse_mil/
+├── 079_Experiment_B46_gold_anchored_crossfit/
+├── 080_Experiment_B47_native_grid_sparse_mil/
+├── 081_Experiment_B48_global_conditioned_spatial_mil/
+├── 082_Experiment_B49_native_tiled_multiscale_mil/
 ├── _Shared/
 │   ├── Comparisons/
 │   ├── Legacy_pipeline/
@@ -180,10 +192,12 @@ B37 E2 and is not promoted: combined Expert-58 macro changed by `-0.0010456551`,
 focal-six mean changed by `+0.0012755596`, and the paired bootstrap 95% interval
 was `[-0.0128037347, +0.0096924830]` with `P(B40 > B37)=0.429`. The lower training
 loss therefore did not provide evidence for extending the B37 weak-supervision
-trajectory. B41 is the next independent preprocessing/geometry candidate: it
-preserves native in-plane aspect ratio after the same fixed 90% native crop,
-then resizes to fit and pads to the fixed 448 canvas. It does not modify B37 or
-the completed B40 endpoint.
+trajectory. B41 subsequently completed its hidden endpoint at `0.714`, as did
+B42's constant-area native-aspect variant. B45, B46, B48, and B49 all completed
+as non-promoted frozen experiments; B47 remains implemented but unrun. B49's
+one exploratory candidate-only hidden endpoint scored `0.707`. The current
+interpretation and all result provenance are maintained in
+[`developments/docs/CURRENT_STATUS.md`](../developments/docs/CURRENT_STATUS.md).
 
 ## Physically migrate run directories
 

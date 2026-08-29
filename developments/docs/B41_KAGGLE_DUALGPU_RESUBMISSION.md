@@ -1,5 +1,13 @@
 # B41 Kaggle dual-T4 resubmission after hidden scoring failure
 
+## Completed outcome
+
+The unchanged B41 endpoint subsequently completed on the hidden run and scored
+**`0.714`**. The dual-T4 implementation repaired the operational path only; it
+did not alter the B41 checkpoint, preprocessing, TTA, or prediction policy.
+This is a displayed tie with B37/B42 and does not authorise another B41
+submission or tuning.
+
 ## Diagnosis
 
 The original B41 notebook completed successfully on the three visible example

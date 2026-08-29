@@ -2,9 +2,23 @@
 
 **Date:** 2026-08-25
 
-**Status:** IMPLEMENTED / NOT RUN. The split has not been created on the real
-data, so every number in this document is a description of the method, not a
-result.
+**Status:** COMPLETED / FROZEN / USED BY B48 AND B49.
+
+The real-data split was created once and then reused unchanged by B48 and B49:
+
+```text
+domain_split.json SHA-256     7b2ead781b921f3e811ab15aecb66b6145b0f4ff92734d8dd06a5b26a6e97bc2
+scanner profiles              51 total
+train                         2,543 studies / 48 profiles / 19,693 cells
+validation_seen_scanners        903 studies / 37 profiles /  6,996 cells
+holdout_unseen_scanners          903 studies /  3 profiles /  7,321 cells
+holdout share                 20.8% of studies
+comparable targets            12 / 12 on both scanner surfaces
+multi-profile studies         2; assigned by dominant profile
+```
+
+The frozen artifact is a scanner proxy, not official-gold or hidden-test
+evidence. It remains closed to regeneration or outcome-driven modification.
 
 This closes item 9 of the post-B45 plateau retrospective and step 5 of its
 recommended sequence, which asks for a site/scanner-grouped validation surface

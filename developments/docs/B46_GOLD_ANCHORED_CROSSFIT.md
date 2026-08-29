@@ -2,9 +2,23 @@
 
 ## Status
 
-**PROSPECTIVE / IMPLEMENTED / NOT RUN.**
+**COMPLETED / NO SUPPORT FOR GOLD ANCHOR AT THE FROZEN WEIGHT.**
 
-B46 is frozen before creation of the gold-fold manifest, before any B46 training, and before any B46 out-of-fold result is inspected.
+B46 was frozen before creation of the gold-fold manifest, before any B46
+training, and before any B46 out-of-fold result was inspected. All five fixed-E2
+folds completed and the pooled 58-study OOF evaluation passed its leakage checks.
+
+| Frozen OOF comparison | Macro AUC |
+|---|---:|
+| B42 parent | 0.683120 |
+| B46 gold-anchored OOF | 0.678174 |
+| B46 − B42 | **−0.004946** |
+
+The paired 5,000-replicate bootstrap gave a 95% CI of
+`[−0.014664, +0.003402]` and `P(B46 > B42) = 0.1296`; only 5 of 12 targets
+improved and every leave-one-target-out delta was negative. This meets B46's
+predeclared **no-support** rule. The 4.0 gold-cell weight, fold assignment, and
+all B42 parent settings remain closed to post-hoc tuning.
 
 B46 follows the post-B45 plateau retrospective. It tests the highest-priority unresolved hypothesis: whether the current ceiling is substantially caused by mismatch between report-derived weak labels and the official expert image labels.
 
@@ -196,9 +210,10 @@ thresholds
 model mixtures
 ```
 
-If B46 is strongly/directionally positive, a separate final all-58-gold anchored model may be defined prospectively afterward. It is not part of B46.
-
-If B46 is negative or small, close gold anchoring at this frozen weight and proceed to B47 explicit slice-sequence modeling.
+The completed result closes gold anchoring at this frozen weight. It does not
+authorise a B46.1 weight sweep, fold change, target-wise mixture, or a final
+all-58-gold model. Any future supervision experiment requires a separately
+declared source and endpoint.
 
 ## Implementation
 
@@ -211,7 +226,7 @@ developments/src/rsna_knee/b46_gold_crossfit_eval.py
 developments/tests/test_b46_gold_crossfit.py
 ```
 
-## Required local sequence
+## Historical local sequence
 
 ```bash
 cd /media/talafha/Disk_1/CNN_CPC

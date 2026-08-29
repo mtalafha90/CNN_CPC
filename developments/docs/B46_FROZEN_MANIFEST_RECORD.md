@@ -25,6 +25,17 @@ Frozen SHA-256:
 
 This fingerprint is now the B46 fold identity. Do not recreate or replace the manifest after this record.
 
+## Completed use and outcome
+
+All five fixed-E2 fold checkpoints were trained against this exact manifest and
+passed the pooled 58-study OOF leakage audit. The completed B46 result was
+`0.678174` macro AUC versus the B42 parent at `0.683120`
+(`B46 − B42 = −0.004946`; paired 95% CI `[−0.014664, +0.003402]`,
+`P(B46 > B42) = 0.1296`). It is therefore **no support for gold anchoring at
+the frozen 4.0 cell weight**. See
+[`B46_GOLD_ANCHORED_CROSSFIT.md`](B46_GOLD_ANCHORED_CROSSFIT.md) for the full
+predeclared decision and governance.
+
 ## Fold sizes
 
 ```text

@@ -1,5 +1,13 @@
 # B41: native-aspect-preserving 90% crop sparse-MIL ablation
 
+## Status
+
+**COMPLETED / KAGGLE `0.714` / NOT PROMOTED ABOVE B37 OR B42.**
+
+B41 completed its frozen endpoint and, after the hidden-safe dual-T4 execution
+repair, produced a displayed Kaggle score of `0.714`. The score is a displayed
+tie with B37 and B42, not evidence for a further B41 preprocessing sweep.
+
 ## Purpose
 
 The completed B37 endpoint achieved a Kaggle score of `0.714`. B37 normalized
@@ -19,7 +27,7 @@ combined macro AUC changed from `0.6858177916` for B37 E2 to `0.6847721365` for
 B40 E3 (`-0.0010456551`), while the focal-six mean changed by only
 `+0.0012755596`. The paired bootstrap 95% interval for B40 minus B37 was
 `[-0.0128037347, +0.0096924830]`, with `P(B40 > B37)=0.429`. B40 is therefore
-completed and not promoted. B41 remains a distinct geometry/preprocessing
+completed and not promoted. B41 was a distinct geometry/preprocessing
 candidate rather than a continuation of B40.
 
 ## Frozen B41 procedure
