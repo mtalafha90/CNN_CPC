@@ -24,6 +24,8 @@ from rsna_knee.b50_adapted_hierarchy_eval import (
     decide,
     discordant_pair_fraction,
 )
+from pathlib import Path
+
 from rsna_knee.constants import TARGETS
 
 
@@ -189,3 +191,83 @@ def test_the_primary_surface_is_the_one_a_submission_would_use():
 
     assert B50_PRIMARY_SPLIT == "validation_unseen_scanners"
     assert B50_SURFACES[0] == "combined"
+
+
+# --- the expert audit -----------------------------------------------------
+
+
+def test_the_expert_audit_is_a_third_surface_that_selects_nothing():
+    """It answers whether the gain is against reports or against knees."""
+    import inspect
+
+    from rsna_knee.b50_adapted_hierarchy_eval import (
+        B50_COMPARATOR_SPLIT,
+        B50_EXPERT58_SPLIT,
+        B50_PRIMARY_SPLIT,
+        decide,
+        evaluate_b50_pair,
+    )
+
+    assert B50_EXPERT58_SPLIT == "expert58_audit"
+    assert B50_EXPERT58_SPLIT not in (B50_PRIMARY_SPLIT, B50_COMPARATOR_SPLIT)
+
+    # `decide` takes only the primary and the seen comparator. The expert
+    # surface is reported beside the verdict and cannot enter it.
+    parameters = list(inspect.signature(decide).parameters)
+    assert parameters == ["primary", "seen"]
+
+    source = inspect.getsource(evaluate_b50_pair)
+    verdict_call = source.split("verdict = decide(")[1].split(")")[0]
+    assert B50_EXPERT58_SPLIT not in verdict_call
+
+
+def test_every_gold_cell_is_scored():
+    """Unlike the weak surface, no expert cell is blank."""
+    import pandas as pd
+
+    from rsna_knee.b50_adapted_hierarchy_eval import (
+        B50_EXPERT58_STUDIES,
+        expert58_surface,
+    )
+    import rsna_knee.b50_adapted_hierarchy_eval as module
+
+    frame = pd.DataFrame(
+        {"StudyInstanceUID": [f"gold-{i}" for i in range(B50_EXPERT58_STUDIES)]}
+    )
+    for name in TARGETS:
+        frame[name] = 1.0
+
+    module.__dict__.setdefault("_orig", None)
+    import rsna_knee.data as data_module
+
+    original_load, original_mask = data_module.load_train_csv, data_module.gold_mask
+    data_module.load_train_csv = lambda path: frame
+    data_module.gold_mask = lambda f: pd.Series(True, index=f.index)
+    try:
+        uids, targets, weights = expert58_surface(Path("."), {})
+    finally:
+        data_module.load_train_csv, data_module.gold_mask = original_load, original_mask
+
+    assert len(uids) == B50_EXPERT58_STUDIES
+    assert targets.shape == (B50_EXPERT58_STUDIES, len(TARGETS))
+    assert (weights > 0).all(), "every expert call is a real label"
+
+
+def test_an_incomplete_expert_surface_is_refused():
+    import pandas as pd
+
+    from rsna_knee.b50_adapted_hierarchy_eval import expert58_surface
+    import rsna_knee.data as data_module
+
+    frame = pd.DataFrame({"StudyInstanceUID": ["gold-0", "gold-1"]})
+    for name in TARGETS:
+        frame[name] = 1.0
+
+    original_load, original_mask = data_module.load_train_csv, data_module.gold_mask
+    data_module.load_train_csv = lambda path: frame
+    data_module.gold_mask = lambda f: pd.Series(True, index=f.index)
+    try:
+        with pytest.raises(ValueError, match="complete 58-study expert surface"):
+            expert58_surface(Path("."), {})
+    finally:
+        data_module.load_train_csv, data_module.gold_mask = original_load, original_mask

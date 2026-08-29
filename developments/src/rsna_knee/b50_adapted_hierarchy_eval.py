@@ -78,6 +78,11 @@ B50_EVAL_LOADER_SEED_OFFSET = 59_300_000
 B50_EVAL_BOOTSTRAP_SEED_OFFSET = 59_400_000
 B50_PRIMARY_SPLIT = "validation_unseen_scanners"
 B50_COMPARATOR_SPLIT = "validation_seen_scanners"
+# Reported as a post-training audit only. It never selects anything: the
+# verdict is decided on the report-derived primary surface, exactly as the
+# protocol froze, and this answers a different question -- whether the gain
+# is against reports or against knees.
+B50_EXPERT58_SPLIT = "expert58_audit"
 
 # Predeclared in developments/docs/B50_REDESIGN_UNFREEZE_STUDY_HIERARCHY.md,
 # before any B50 result was seen.
@@ -89,10 +94,38 @@ B50_SEEN_TOLERANCE = -0.005
 B50_SURFACES = ("combined", "base", "local")
 
 
+B50_EXPERT58_STUDIES = 58
+
+
 def _release() -> None:
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+
+def expert58_surface(root: Path, settings: dict) -> tuple[list[str], np.ndarray, np.ndarray]:
+    """The 58 official gold studies, with every cell scored.
+
+    These carry the only expert image labels in the project and were excluded
+    from every B50 gradient, so reading them here is a post-training audit
+    rather than a selection. It is also the closest available proxy for the
+    hidden test's expert reference standard, which matters because B50's own
+    endpoint is report-derived and this project has twice seen a large
+    weak-surface gain fail to transfer to expert truth.
+    """
+    from .data import gold_mask, load_train_csv
+
+    train = load_train_csv(root / settings.get("train_csv", "train.csv"))
+    gold = train.loc[gold_mask(train), ["StudyInstanceUID", *TARGETS]].copy()
+    gold["StudyInstanceUID"] = gold["StudyInstanceUID"].astype(str)
+    if len(gold) != B50_EXPERT58_STUDIES or gold[TARGETS].isna().any().any():
+        raise ValueError("B50 requires the complete 58-study expert surface")
+
+    uids = gold["StudyInstanceUID"].tolist()
+    targets = gold[TARGETS].to_numpy(np.float64)
+    # Every gold cell is a real expert call, so all of them are scored.
+    weights = np.ones_like(targets)
+    return uids, targets, weights
 
 
 def load_b50_checkpoint(path: str | Path, *, base_checkpoint: str | Path, device):
@@ -413,13 +446,34 @@ def evaluate_b50_pair(
                 crop_policy=crop_policy,
                 label=f"{arm}/{split}",
             )
+
+        # The expert audit. Gold studies never entered a B50 gradient, so this
+        # is a post-training read, not a selection surface.
+        gold_uids, gold_targets, gold_weights = expert58_surface(root, settings)
+        from .b12_variable_series import build_variable_series_index
+
+        gold_index = build_variable_series_index(series, gold_uids)
+        if any(not gold_index.get(uid) for uid in gold_uids):
+            raise RuntimeError("B50 expert-58 MRI series surface is incomplete")
+        scores[arm][B50_EXPERT58_SPLIT] = _score_split(
+            model=model,
+            config=settings,
+            root=root,
+            runtime=runtime,
+            uids=gold_uids,
+            targets=gold_targets,
+            weights=gold_weights,
+            series_index=gold_index,
+            crop_policy=crop_policy,
+            label=f"{arm}/{B50_EXPERT58_SPLIT}",
+        )
         del model
         _release()
 
     control_arm, candidate_arm = B50_ARMS
     selected = list(TARGETS)
     results: dict[str, dict] = {}
-    for split in (B50_PRIMARY_SPLIT, B50_COMPARATOR_SPLIT):
+    for split in (B50_PRIMARY_SPLIT, B50_COMPARATOR_SPLIT, B50_EXPERT58_SPLIT):
         results[split] = {}
         for surface in B50_SURFACES:
             entry = _surface_scores(
@@ -519,6 +573,20 @@ def evaluate_b50_pair(
             f"candidate {entry['candidate_macro_auc']:.6f} "
             f"delta {entry['delta']:+.6f}"
         )
+    expert = results[B50_EXPERT58_SPLIT]["combined"]
+    print()
+    print("[B50] expert-58 audit (58 official gold studies, never in any gradient)")
+    print(
+        f"[B50]   control {expert['control_macro_auc']:.6f}   "
+        f"candidate {expert['candidate_macro_auc']:.6f}   "
+        f"delta {expert['delta']:+.6f}   "
+        f"targets improved {expert['targets_improved_count']}/12"
+    )
+    print(
+        f"[B50]   ceiling {expert['discordant_pair_fraction']:.6f}; "
+        "58 studies is a noisy surface and this selects nothing"
+    )
+    print()
     print(f"[B50] VERDICT: {verdict['outcome']}")
     if "reason" in verdict:
         print(f"[B50] {verdict['reason']}")
@@ -554,10 +622,12 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "B50_EXPERT58_SPLIT",
     "B50_PRIMARY_SPLIT",
     "B50_SUPPORT_DELTA",
     "B50_SURFACES",
     "decide",
+    "expert58_surface",
     "discordant_pair_fraction",
     "evaluate_b50_pair",
     "load_b50_checkpoint",
