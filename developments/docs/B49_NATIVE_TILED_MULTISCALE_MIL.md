@@ -2,7 +2,12 @@
 
 ## Status
 
-**PREPARED / NOT RUN.**
+**COMPLETED / EXPLORATORY CANDIDATE-ONLY KAGGLE PATH AVAILABLE.**
+
+For seed 2026, the candidate-minus-control unseen macro-AUC difference was
+`+0.00055`, below B49's predeclared `+0.010` support threshold. The Kaggle
+candidate route is therefore exploratory only and does not promote the new
+global-conditioning mechanism.
 
 B49 is a separate post-B48 experiment. It does not modify B48, reuse a B48
 checkpoint, use a B46 fold checkpoint, use B47 output, or use official gold
@@ -232,18 +237,10 @@ does not promote B49, alter the fixed experiment, or permit a post-hoc blend.
 It uses raw sigmoid probabilities, the frozen `[-1, 0, +1]` TTA, and no
 thresholding or calibration.
 
-```bash
-PAIR="$B49_ROOT/seed_2026"
-python -m rsna_knee.b49_native_tiled_multiscale_submission \
-  --config config/b49_native_tiled_multiscale.yaml \
-  --data-root "$DATA_ROOT" \
-  --labels-root "$LABELS_ROOT" \
-  --base-checkpoint "$BASE_CHECKPOINT" \
-  --domain-split "$DOMAIN_SPLIT_ROOT/domain_split.json" \
-  --candidate-checkpoint "$PAIR/post_cross_attention_candidate/b49_post_cross_attention_candidate_model.pt" \
-  --out "$PAIR/kaggle_submission_b49_candidate.csv"
-```
-
-The command writes a CSV and an adjacent JSON manifest.  Upload only that CSV;
-keep the manifest with the run record.  The hidden score is exploratory and
-does not override B49's predeclared no-support mechanism verdict.
+Use the hidden-safe dual-T4 route in
+[`B49_KAGGLE_DUALGPU_HIDDEN_SAFE_SUBMISSION.md`](B49_KAGGLE_DUALGPU_HIDDEN_SAFE_SUBMISSION.md).
+Kaggle Code Competition reruns a committed notebook that writes
+`/kaggle/working/submission.csv`; it does not accept a locally uploaded CSV as
+a hidden-test submission. The notebook route verifies candidate provenance,
+splits complete studies across two T4s, materializes one TTA context view at a
+time, and preserves the fixed candidate predictions.
