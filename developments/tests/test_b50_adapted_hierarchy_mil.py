@@ -317,3 +317,66 @@ def test_the_config_ships_both_frozen_values():
     b42 = yaml.safe_load(Path("config/b42_constant_area_aspect_sparse.yaml").read_text())
     for key, value in b42.items():
         assert cfg[key] == value, f"B50 changed inherited key {key}"
+
+
+# --- the trainer calls its collaborators correctly -------------------------
+
+
+def _call_keywords(source_path, callee: str) -> set[str]:
+    """Keyword names the module passes to `callee`, read from the AST."""
+    import ast
+
+    tree = ast.parse(source_path.read_text())
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = getattr(func, "id", None) or getattr(func, "attr", None)
+        if name != callee:
+            continue
+        found |= {kw.arg for kw in node.keywords if kw.arg}
+    return found
+
+
+@pytest.mark.parametrize(
+    "callee,target",
+    [
+        ("B42ConstantAreaAspectDataset", "rsna_knee.b42_constant_area_aspect_sparse_mil"),
+        ("B50AdaptedHierarchySparseMILResidual", "rsna_knee.b50_adapted_hierarchy_mil"),
+    ],
+)
+def test_the_trainer_supplies_every_required_keyword(callee, target):
+    """A missing keyword-only argument only surfaces at runtime, on the GPU.
+
+    `crop_focus_policy` was omitted exactly this way and the preflight died
+    after loading the model and the whole supervision surface. Reading the real
+    signature is cheap; discovering it on the training machine is not.
+    """
+    import importlib
+    import inspect
+    from pathlib import Path
+
+    module = importlib.import_module(target)
+    signature = inspect.signature(getattr(module, callee).__init__)
+    required = {
+        name
+        for name, parameter in signature.parameters.items()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        and parameter.default is inspect.Parameter.empty
+    }
+    passed = _call_keywords(
+        Path("developments/src/rsna_knee/b50_adapted_hierarchy_training.py"), callee
+    )
+    missing = required - passed
+    assert not missing, f"B50's trainer never passes {sorted(missing)} to {callee}"
+
+
+def test_the_trainer_passes_the_crop_policy_the_contract_resolved():
+    """Not a freshly derived one: the arms must share the parent's exact policy."""
+    from pathlib import Path
+
+    source = Path(
+        "developments/src/rsna_knee/b50_adapted_hierarchy_training.py"
+    ).read_text()
+    assert 'crop_focus_policy=contract["crop_policy"]' in source

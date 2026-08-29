@@ -233,6 +233,7 @@ def train_b50_domain_arm(
         uids,
         variable_index,
         dataset_config,
+        crop_focus_policy=contract["crop_policy"],
         center_offsets=(0,),
         targets=targets,
         weights=weights,
