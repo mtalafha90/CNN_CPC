@@ -280,8 +280,14 @@ def test_b48_contract_has_two_distinct_matched_arms_and_rejects_drift():
         assert state["arm"] == arm
         assert state["context_dim"] == B48_CONTEXT_DIM
     assert B48_STATIC_PRIOR_CONTROL != B48_POST_CROSS_ATTENTION_CANDIDATE
-    with pytest.raises(ValueError, match="context dimension"):
+    # Matched on the frozen key rather than on prose. The guard is a generic
+    # loop that reports "B48 freezes <key>=<frozen>; got <value>", the same
+    # wording B37 and B42 use, and the original expectation of "context
+    # dimension" never matched it.
+    with pytest.raises(ValueError, match="B48 freezes b48_context_dim"):
         require_b48_contract({**config, "b48_context_dim": 64}, arm=B48_STATIC_PRIOR_CONTROL)
+    with pytest.raises(ValueError, match="B48 freezes b48_fixed_epochs"):
+        require_b48_contract({**config, "b48_fixed_epochs": 3}, arm=B48_STATIC_PRIOR_CONTROL)
     with pytest.raises(ValueError, match="B42 freezes"):
         require_b48_contract({**config, "b42_reference_area": 100_000}, arm=B48_STATIC_PRIOR_CONTROL)
 
