@@ -81,14 +81,38 @@ Full B45 record: [`B45_PLANE_CALIBRATED_SPARSE_MIL.md`](B45_PLANE_CALIBRATED_SPA
 | B48 | candidate − control on unseen scanners | `+0.0000749`; 95% CI `[−0.0000972, +0.0002786]`; `P=0.8010`; 7/12 targets improved | no support for global conditioning |
 | B49 | candidate − control on unseen scanners | `+0.0005468`; 95% CI `[+0.0003146, +0.0008120]`; `P=1.0`; 10/12 targets improved | no support: effect below predeclared `+0.010` threshold |
 
+| B50 | candidate − control on fresh unseen scanners | `+0.011219`; 12/12 targets improved; discordant ceiling `0.030651` | **supported**: adapting the frozen study hierarchy |
+
 B49's native full-FOV tile representation deliberately removed the B42 local
 crop/resize loss, but its matched result remains a non-promotion result. The
 candidate-only `0.707` Kaggle score is independent hidden evidence for that one
 frozen endpoint; it is not a selector for another B49 variant.
 
+**A correction to how B48 and B49 should be read.** Both were recorded as
+`no support: effect below predeclared +0.010 threshold`. Their two arms in fact
+ordered only `0.0015` and `0.0024` of study pairs differently, and since an ROC
+AUC moves only on pairs ordered differently, neither measurement could have
+reached `+0.010` whatever its mechanism did. The cause is structural: every
+B37-descended model freezes the B34 hierarchy and admits the local branch
+through a zero-start gate that the completed runs recorded at `|tanh(g)|` of
+about `0.022`, so roughly 98% of the scored prediction came from weights
+identical in both arms. Those two results are properly read as
+`endpoint_underpowered`, which is a statement about the endpoint rather than
+about global conditioning or native tiling.
+
+B50 is the first experiment in this line to train the part of the model that
+produces the prediction. Its measurement had 2.7x the headroom it needed, the
+effect is larger on the base path (`+0.011676`) than on the combined one, and
+all twelve targets improved. It is the first powered positive since B37.
+
+It does **not** authorise a submission. Its labels are report-derived, it trained
+on 1,447 studies rather than 4,349, and its `0.774` is not comparable to the
+`0.714` hidden score.
+
 Full records: [`B46_GOLD_ANCHORED_CROSSFIT.md`](B46_GOLD_ANCHORED_CROSSFIT.md),
 [`B48_GLOBAL_CONDITIONED_SPARSE_MIL.md`](B48_GLOBAL_CONDITIONED_SPARSE_MIL.md),
-and [`B49_NATIVE_TILED_MULTISCALE_MIL.md`](B49_NATIVE_TILED_MULTISCALE_MIL.md).
+[`B49_NATIVE_TILED_MULTISCALE_MIL.md`](B49_NATIVE_TILED_MULTISCALE_MIL.md),
+and [`B50_ADAPTED_HIERARCHY_RESULT.md`](B50_ADAPTED_HIERARCHY_RESULT.md).
 
 ## What the B37–B49 sequence now says
 
