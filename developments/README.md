@@ -1,6 +1,9 @@
-# Developments archive
+# Developments lineage and active B42 implementation
 
-This directory preserves the complete research/development history that previously occupied the repository root.
+This directory preserves the complete research/development history that
+previously occupied the repository root. It also currently contains the
+maintained B42--B49 implementation because those experiments were developed
+after the repository was reorganized.
 
 It contains the B0--B34 experiment lineage, the prospective weak-validation splits, the nine-phase dataset contract audit, historical configurations, documentation, scripts, source modules, tests, Kaggle methodology notes, fixtures, manuscript material and the previous GitHub workflows.
 
@@ -24,23 +27,24 @@ developments/
   requirements_legacy.txt   previous requirements snapshot
 ```
 
-The files are preserved for reproducibility. New work on the active model should use the clean top-level `model/`, `training/`, `validation/`, `testing/`, `data/`, `config/` and `docs/` interface unless the experiment is explicitly kept in this development archive.
+The top-level B34 interface is retained for compatibility. The maintained
+operational B42 endpoint instead uses `src/rsna_knee/` with
+`config/b42_constant_area_aspect_sparse.yaml`. See
+[`../docs/ACTIVE_ENDPOINTS.md`](../docs/ACTIVE_ENDPOINTS.md) before training or
+submitting anything.
 
 ## Current development status
 
 `docs/CURRENT_STATUS.md` is the authoritative snapshot. In brief:
 
-**Nothing has been promoted since B20.** B26 through B34 were all valid
-experiments and none cleared a promotion path. The B26 supervision-repair,
-B27 routing, B28 residual, B30 projected-attention and B32 dispersion
-formulations are closed. B29, B31, B33 and B34 are frozen candidates.
+**B42 is the maintained operational reference, not a scientific promotion.**
+B37, B41, and B42 each obtained a displayed hidden Kaggle macro AUC of `0.714`.
+B46, B48, and B49 completed without support for their proposed mechanisms;
+B49's exploratory candidate-only hidden endpoint scored `0.707`.
 
-**The architecture ladder is essentially flat.** Eight experiments moved the
-reused-expert point estimate by roughly `+0.015`, with every interval crossing
-zero. B31 is numerically highest at `0.682280`; B34 is statistically
-indistinguishable from it on PV2 and bypasses its local context exactly at
-inference, so the top-level interface targets B34. That is an interface
-decision, not a promotion.
+**The B37--B49 architecture ladder is flat around the established baseline.**
+Do not use B46/B48/B49 results to tune gold weight, cross-series query details,
+tile geometry, crop, resolution, calibration, blend, or seeds.
 
 **The 58-study expert surface is retired as a design surface.** It was reused
 throughout development, and a paired difference below roughly 0.03 macro AUC
@@ -62,8 +66,9 @@ proper holdout and came back inconclusive in aggregate, with only Contusion
 surviving correction for 12 comparisons and removing Contusion flipping the
 macro sign.
 
-No competition submission has been made, so no independent measurement of any
-of this exists yet.
+Independent hidden evidence exists and is recorded in
+[`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md). It is not a reason for
+leaderboard-driven tuning.
 
 Canonical result/design records include:
 

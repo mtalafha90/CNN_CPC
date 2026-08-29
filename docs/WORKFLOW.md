@@ -1,17 +1,23 @@
-# Training, validation and testing workflow
+# Legacy B34 compatibility workflow
 
-Three ordinary stages, one model. Run everything from the repository root —
-the entry points locate `developments/src` themselves, so no `PYTHONPATH`
-prefix is needed.
+This document preserves the generic top-level B34 workflow. It is useful for
+historical reproduction, but it is **not** the maintained B42 endpoint and it
+must not be used to make a new Kaggle submission.
 
-## 1. Environment
+For the maintained B42 reference, exact artefact identities, and the
+hidden-safe dual-GPU inference path, start with
+[`ACTIVE_ENDPOINTS.md`](ACTIVE_ENDPOINTS.md) and
+[`ENVIRONMENT.md`](ENVIRONMENT.md).
+
+## 1. Legacy environment
 
 ```bash
 conda activate rsna-knee
 pip install -e .
 ```
 
-The dataset and run artefacts are not stored in Git. Set the paths explicitly.
+The dataset and run artefacts are not stored in Git. Set the paths explicitly
+only when reproducing this legacy workflow.
 
 ```bash
 cd /media/talafha/Disk_1/CNN_CPC
@@ -47,7 +53,7 @@ done
 python -m model.architecture
 ```
 
-## 2. Training
+## 2. Legacy training
 
 The reports are multilingual, and `--supervision` chooses which of them the
 gradient can actually learn from:
@@ -137,7 +143,7 @@ python -c "import timm; m=timm.create_model('convnext_tiny.dinov3_lvd1689m', pre
 See [`DINOV3_ENCODER.md`](DINOV3_ENCODER.md) for the rationale and what the
 comparison does and does not establish.
 
-## 3. Validation
+## 3. Legacy diagnostic validation
 
 ```bash
 python -m validation.validate --data-root "$DATA_ROOT" \
@@ -156,7 +162,7 @@ consumes the held-out weak-label studies, so these checkpoints have no powered
 local validation surface left. Treat the number as a plausibility check — is
 the model behaving sensibly — not as a comparison between the two arms.
 
-## 4. Test-set prediction
+## 4. Legacy test-set prediction
 
 ```bash
 python -m testing.test --data-root "$DATA_ROOT" \
@@ -177,12 +183,17 @@ apart afterwards.
 
 ## 5. Submission
 
-Submit both files. The architecture, study population, series exposure,
-optimiser and seeds are identical across the two arms, so the difference
-between their scores isolates the effect of the translated Greek and Cyrillic
-reports on the only surface that is not reused development data.
+Do **not** submit files created by this generic workflow as a new operational
+endpoint. Its old two-arm submission language predates the completed B37--B49
+line and is retained only to explain historical artefacts.
 
-## 6. Model information
+The maintained submission reference is B42. It requires the exact fixed-E2 B42
+checkpoint, its verified B34 base checkpoint, the frozen preprocessing/TTA
+contract, the hidden-safe dual-GPU launcher, and an offline DICOM decoder
+preflight. Those requirements are recorded in
+[`ACTIVE_ENDPOINTS.md`](ACTIVE_ENDPOINTS.md).
+
+## 6. Legacy model information
 
 ```bash
 python -m model.architecture

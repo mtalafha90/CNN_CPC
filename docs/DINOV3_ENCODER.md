@@ -1,8 +1,13 @@
-# Replacing the encoder with DINOv3
+# Historical DINOv3 encoder proposal
 
-The working model is frozen. This document covers the one experiment allowed to
-change it: swapping the frozen report-aligned encoder for DINOv3's
-self-supervised ConvNeXt, and nothing else.
+This is a preserved pre-B37 proposal, not an active next experiment. The
+registry records the DINOv3 variants as local-artifact results not present in
+the repository. Later B37--B49 evidence does not authorize a DINOv3 rerun,
+capacity sweep, or Kaggle submission from this document.
+
+The maintained operational endpoint is B42; see
+[`ACTIVE_ENDPOINTS.md`](ACTIVE_ENDPOINTS.md). This document remains as
+provenance for the original encoder-swap rationale.
 
 ## Why this is the experiment worth running
 

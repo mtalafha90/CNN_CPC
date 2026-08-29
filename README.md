@@ -2,52 +2,46 @@
 
 Twelve binary findings per knee MRI study, scored as macro ROC AUC.
 
-The top level of this repository is one model and the three ordinary stages
-that surround it. The complete research lineage that produced the model is
-preserved under [`developments/`](developments/README.md) and is not part of
-the working interface.
+## Current operational endpoint
 
-## The model
+**B42 constant-area native-aspect sparse MIL** is the maintained operational
+baseline. It preserves in-plane aspect ratio, uses ragged rectangular series
+tensors, and has a successful hidden Kaggle result of **0.714**—tied with B37
+and B41. This is an operational reference decision, not a claim that B42 is
+scientifically superior to the tied endpoints.
 
-```text
-MRI study
-  -> every eligible real MRI series
-  -> 16 sampled slice positions per series
-  -> adjacent-slice 2.5D triplets
-  -> 224 x 224 tensors
-  -> deterministic centred 90% crop, resized back to 224
-  -> frozen ConvNeXt-Tiny encoder
-  -> attention pooling to one token per series, plus a complementary summary
-  -> Transformer over the study's series
-  -> 12 pathology queries
-  -> 12 probabilities
-```
+Start with [`docs/ACTIVE_ENDPOINTS.md`](docs/ACTIVE_ENDPOINTS.md). It records
+the exact B42 config, checkpoint fingerprint, inference path, required
+external artefacts, and the status of closed B46--B49 experiments.
 
-See [`docs/WORKING_MODEL.md`](docs/WORKING_MODEL.md) for the design decisions
-and their reasons, and [`docs/WORKFLOW.md`](docs/WORKFLOW.md) for the commands.
+The generic top-level B34/224-pixel commands remain for backward compatibility
+and historical reproduction. They are **not** the current Kaggle baseline and
+must not be used accidentally for a new submission.
+
+The B42 implementation lives in `developments/src/rsna_knee/` because it was
+created after the earlier repository restructuring. It is now included in the
+editable package, alongside the compatibility interface.
 
 ## Structure
 
 ```text
 CNN_CPC/
-├── config/          model configuration
-├── model/           architecture, preprocessing, implementation bridge
-├── data/            studies, series and batching
-├── training/        training entry point
-├── validation/      scoring against the expert-annotated studies
-├── testing/         competition test-set prediction
-├── tests/           contract tests for the interface above
-├── runs/            one directory per experiment: train/, validate/, test/
-├── docs/            model and workflow documentation
-├── developments/    the complete research archive
+├── config/                         frozen endpoint configurations
+├── developments/src/rsna_knee/     B42--B49 research and submission code
+├── developments/docs/              governed experiment records
+├── model/, data/, training/, ...   legacy B34 compatibility interface
+├── docs/ACTIVE_ENDPOINTS.md        maintained endpoint registry
+├── docs/ENVIRONMENT.md             local and offline-Kaggle runtime contract
+├── tests/                          compatibility-interface tests
+├── runs/                           external, immutable run artefacts
 ├── requirements.txt
 └── pyproject.toml
 ```
 
-Historical experiment names appear in exactly one file,
-`model/_implementation.py`, which binds each preserved component to a plain
-name. A test enforces that boundary, so the public interface cannot drift back
-into experiment vocabulary.
+`developments/` is a preserved lineage, but B42's maintained endpoint code is
+currently located there. Treat its experiment documents as the scientific
+source of truth; [`developments/docs/CURRENT_STATUS.md`](developments/docs/CURRENT_STATUS.md)
+is the living status record.
 
 ## Installation
 
@@ -56,46 +50,38 @@ conda activate rsna-knee
 pip install -e .
 ```
 
-The dataset and run artefacts are deliberately not stored in Git.
+This installs both the compatibility packages and `rsna_knee`, so the B42
+loader and frozen Kaggle inference modules are importable. The dataset,
+checkpoints, label artefacts, and run outputs are deliberately not stored in
+Git.
 
-## Usage
+## B42 reference material
 
-```bash
-# train on a chosen report-label surface
-python -m training.train --supervision all-script --data-root ... --experiment experiment_1
+The B42 model, fixed-E2 training contract, and geometry are documented in
+[`developments/docs/B42_CONSTANT_AREA_ASPECT_SPARSE_MIL.md`](developments/docs/B42_CONSTANT_AREA_ASPECT_SPARSE_MIL.md).
+Its hidden-safe dual-T4 submission implementation is
+`rsna_knee.b42_constant_area_aspect_sparse_submission_dualgpu_fast`.
 
-# score the expert-annotated studies (a diagnostic, not a test)
-python -m validation.validate --data-root ... --experiment experiment_1 \
-  --checkpoint runs/experiment_1/train/all-script/model.pt
-
-# predict the competition test set
-python -m testing.test --data-root ... --experiment experiment_1 \
-  --checkpoint runs/experiment_1/train/all-script/model.pt
-
-# print the architecture and training contract
-python -m model.architecture
-```
-
-Full argument lists are in [`docs/WORKFLOW.md`](docs/WORKFLOW.md).
+Do not use a generic training or submission command as a substitute for that
+frozen contract. The endpoint must verify its exact checkpoint and base-model
+fingerprints before prediction.
 
 ## Two things to keep in mind
 
-**The expert-annotated studies are not a test set.** All 58 were reused
-throughout development. At that sample size a paired difference below roughly
-0.03 macro AUC cannot be resolved, so `validation` answers "is this model
-behaving sensibly", not "is this model better".
+**The 58 expert-annotated studies are not a model-selection test set.** They
+remain useful as a diagnostic only. Future experiments must lock an independent
+grouped validation surface before implementation.
 
-**Labels come from the reports, and the reports are multilingual.** The rule
-parser reads Latin-script vocabulary, so a large share of studies yielded no
-usable labels — the parser could not read them, rather than the reports being
-silent. Translating before parsing recovers most of that population, which is
-what `--supervision all-script` selects. Whether it produces a better model is
-still open; the audit records are under `developments/docs/`.
+**B46, B48, and B49 are closed.** Their results do not authorize a new gold
+weight, tile geometry, crop, query, calibration, blend, or seed search. See
+[`developments/docs/CURRENT_STATUS.md`](developments/docs/CURRENT_STATUS.md).
 
 ## Tests
 
 ```bash
+pip install -e ".[test]"
 python -m pytest
 ```
 
-Covers both the working interface and the preserved research implementation.
+Covers the compatibility interface and the selected active B42 regression
+surface in CI.

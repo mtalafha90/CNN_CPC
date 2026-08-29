@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rsna-knee-cnn-cpc"
-version = "0.30.0"
-description = "Clean training, validation and test interface for the current CNN-based RSNA knee MRI model"
+version = "0.31.0"
+description = "Reproducible B42 knee-MRI benchmark and preserved research lineage"
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.26",
@@ -20,6 +20,9 @@ dependencies = [
   "timm>=1.0.20",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
 [project.scripts]
 cnn-train = "training.train:main"
 cnn-validate = "validation.validate:main"
@@ -27,8 +30,8 @@ cnn-test = "testing.test:main"
 cnn-model-info = "model.architecture:main"
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["model*", "data*", "training*", "validation*", "testing*"]
+where = [".", "developments/src"]
+include = ["model*", "data*", "training*", "validation*", "testing*", "rsna_knee*"]
 namespaces = false
 
 [tool.pytest.ini_options]

@@ -1,4 +1,4 @@
-name: current-model-tests
+name: active-endpoint-tests
 
 on:
   push:
@@ -16,11 +16,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest
+          pip install -e ".[test]"
+      - name: Verify packaged B42 endpoint
+        run: |
+          python -c "import rsna_knee; from rsna_knee import b42_constant_area_aspect_sparse_mil as b42; print(rsna_knee.__version__, b42.B42_VERSION)"
       - name: Compile clean interface and archived implementation
         run: |
           python -m compileall -q model data training validation testing developments/src
-      - name: Run current-model safety tests
+      - name: Run active-endpoint and compatibility safety tests
         env:
           PYTHONPATH: developments/src
         run: |
@@ -42,6 +45,14 @@ jobs:
             developments/tests/test_b37_highres.py \
             developments/tests/test_b37_highres_sparse_mil.py \
             developments/tests/test_b37_highres_sparse_submission.py \
+            developments/tests/test_b42_constant_area_aspect_sparse.py \
+            developments/tests/test_b42_train_versus_submission_preprocessing.py \
+            developments/tests/test_domain_shift_split.py \
+            developments/tests/test_b48_global_conditioned_sparse_mil.py \
+            developments/tests/test_b48_runner_resume.py \
+            developments/tests/test_b49_native_tiled_multiscale_mil.py \
+            developments/tests/test_b49_native_tiled_multiscale_submission.py \
+            developments/tests/test_b49_native_tiled_multiscale_submission_dualgpu_streaming.py \
             developments/tests/test_prospective_weak_v1.py \
             developments/tests/test_pv1_b31_context_counterfactual.py \
             developments/tests/test_prospective_weak_v2.py \
