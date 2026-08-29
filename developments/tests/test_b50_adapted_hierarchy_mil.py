@@ -247,3 +247,73 @@ def test_the_recorded_state_names_both_arms_and_the_eval_mode_rule():
         assert "eval" in state["base_module_mode"]
     assert b50_state("adapted_hierarchy_candidate")["adapt_hierarchy"]
     assert not b50_state("frozen_hierarchy_control")["adapt_hierarchy"]
+
+
+# --- the trainer's wiring guard -------------------------------------------
+
+
+def test_the_trainer_refuses_a_candidate_that_never_unfroze():
+    """The failure that would look exactly like B48's and B49's nulls."""
+    from rsna_knee.b50_adapted_hierarchy_training import _check_arm_wiring
+
+    model = _Model(adapt=True)
+    with pytest.raises(RuntimeError, match="without a single hierarchy gradient"):
+        _check_arm_wiring(model, adapt_hierarchy=True, hierarchy_saw_gradient=False)
+
+    # With a gradient it passes.
+    _check_arm_wiring(model, adapt_hierarchy=True, hierarchy_saw_gradient=True)
+
+
+def test_the_trainer_refuses_a_control_that_leaked_gradients():
+    """Otherwise the control is not a reproduction of B42."""
+    from rsna_knee.b50_adapted_hierarchy_training import _check_arm_wiring
+
+    model = _Model(adapt=False)
+    _check_arm_wiring(model, adapt_hierarchy=False, hierarchy_saw_gradient=False)
+
+    model.base.context.weight.grad = torch.ones_like(model.base.context.weight)
+    with pytest.raises(RuntimeError, match="not a reproduction of B42"):
+        _check_arm_wiring(model, adapt_hierarchy=False, hierarchy_saw_gradient=False)
+
+
+def test_a_zero_gradient_does_not_count_as_a_gradient():
+    """An all-zero grad tensor means the path is wired but carrying nothing."""
+    from rsna_knee.b50_adapted_hierarchy_training import _hierarchy_gradient_present
+
+    model = _Model(adapt=True)
+    for parameter in model.hierarchy_parameters():
+        parameter.grad = torch.zeros_like(parameter)
+    assert not _hierarchy_gradient_present(model)
+
+    model.base.context.weight.grad = torch.ones_like(model.base.context.weight)
+    assert _hierarchy_gradient_present(model)
+
+
+def test_the_frozen_seed_is_enforced():
+    from rsna_knee.b50_adapted_hierarchy_training import B50_SEED, train_b50_domain_arm
+
+    assert B50_SEED == 2026
+    with pytest.raises(ValueError, match="freezes seed"):
+        train_b50_domain_arm(
+            {},
+            data_root=".",
+            labels_root=".",
+            series_policy_path=".",
+            base_checkpoint=".",
+            domain_split=".",
+            arm="adapted_hierarchy_candidate",
+            seed=7,
+        )
+
+
+def test_the_config_ships_both_frozen_values():
+    import yaml
+    from pathlib import Path
+
+    cfg = yaml.safe_load(Path("config/b50_adapted_hierarchy.yaml").read_text())
+    assert cfg["b50_hierarchy_lr_scale"] == B50_HIERARCHY_LR_SCALE
+    assert cfg["b50_arm"] in B50_ARMS
+    # Every B42 geometry key must be carried through unchanged.
+    b42 = yaml.safe_load(Path("config/b42_constant_area_aspect_sparse.yaml").read_text())
+    for key, value in b42.items():
+        assert cfg[key] == value, f"B50 changed inherited key {key}"
