@@ -50,11 +50,15 @@ were training data in the completed B48/B49 experiments.
 
 The builder is deterministic and write-once. The launcher also verifies that
 both B49 arms completed, that the parent split hash matches, and that it is not
-about to overwrite a B50 gate:
+about to overwrite a B50 gate. In a clean B50 worktree, point `HEADER_CSV` at
+the completed B49 header audit rather than recreating that audit:
 
 ```bash
-B50_SELECTION_ROOT="$PWD/runs/083_Experiment_B50_ordered_slice_sequence_mil/b50_ordered_slice_selection_split" \
-  bash developments/scripts/prepare_b50_ordered_slice_gate.sh
+export HEADER_CSV="/media/talafha/Disk_1/CNN_CPC_b49_run/runs/dataset_header_audit/header_by_series.csv"
+export B49_ROOT="/media/talafha/Disk_1/CNN_CPC_b49_run/runs/082_Experiment_B49_native_tiled_multiscale_mil/b49_native_tiled_multiscale_mil"
+export B50_SELECTION_ROOT="$PWD/runs/083_Experiment_B50_ordered_slice_sequence_mil/b50_ordered_slice_selection_split"
+
+bash developments/scripts/prepare_b50_ordered_slice_gate.sh
 ```
 
 It uses a new frozen salt, a 20% whole-scanner-profile unseen holdout from the

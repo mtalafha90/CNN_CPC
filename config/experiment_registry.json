@@ -932,7 +932,7 @@
       "slug": "b37_e2_optimizer_reset_continuation",
       "title": "B37 epoch-2 optimizer-reset one-epoch continuation",
       "category": "duration",
-      "status": "implemented_not_run",
+      "status": "completed_not_promoted",
       "introduced_commit": "9ad347f",
       "run_patterns": [
         "b40_b37_e2_continuation"
@@ -944,10 +944,95 @@
       "slug": "native_aspect_90crop_sparse_mil",
       "title": "Native-aspect-preserving 90% crop sparse-MIL ablation",
       "category": "preprocessing",
-      "status": "implemented_not_run",
+      "status": "completed_kaggle_0.714",
       "introduced_commit": "41a3b6a",
       "run_patterns": [
         "b41_highres_aspect_sparse_mil"
+      ]
+    },
+    {
+      "number": 77,
+      "code": "B42",
+      "slug": "constant_area_aspect_sparse_mil",
+      "title": "Constant-area native-aspect ragged sparse MIL",
+      "category": "preprocessing",
+      "status": "completed_kaggle_0.714",
+      "introduced_commit": "ff8d32f",
+      "run_patterns": [
+        "b42_constant_area_aspect_sparse_mil"
+      ]
+    },
+    {
+      "number": 78,
+      "code": "B45",
+      "slug": "plane_calibrated_sparse_mil",
+      "title": "Plane-calibrated target-conditioned sparse MIL",
+      "category": "model",
+      "status": "completed_not_promoted",
+      "introduced_commit": "47bfaf9",
+      "run_patterns": [
+        "b45_plane_calibrated_sparse_mil"
+      ]
+    },
+    {
+      "number": 79,
+      "code": "B46",
+      "slug": "gold_anchored_crossfit",
+      "title": "Gold-anchored five-fold cross-fitted supervision",
+      "category": "supervision",
+      "status": "completed_not_promoted",
+      "introduced_commit": "61dc824",
+      "run_patterns": [
+        "b46_gold_anchored_crossfit"
+      ]
+    },
+    {
+      "number": 80,
+      "code": "B47",
+      "slug": "native_grid_sparse_mil",
+      "title": "Native encoder-grid sparse MIL",
+      "category": "model",
+      "status": "implemented_not_run",
+      "introduced_commit": "cb07b89",
+      "run_patterns": [
+        "b47_native_grid_sparse_mil"
+      ]
+    },
+    {
+      "number": 81,
+      "code": "B48",
+      "slug": "global_conditioned_spatial_mil",
+      "title": "Global-query-conditioned cross-series sparse MIL",
+      "category": "model",
+      "status": "completed_not_promoted",
+      "introduced_commit": "89ca1c7",
+      "run_patterns": [
+        "b48_global_conditioned_spatial_mil"
+      ]
+    },
+    {
+      "number": 82,
+      "code": "B49",
+      "slug": "native_tiled_multiscale_mil",
+      "title": "Full-FOV native tiled multi-resolution sparse MIL",
+      "category": "model",
+      "status": "completed_not_promoted_kaggle_0.707",
+      "introduced_commit": "0e36eb9",
+      "run_patterns": [
+        "b49_native_tiled_multiscale_mil"
+      ]
+    },
+    {
+      "number": 83,
+      "code": "B50",
+      "slug": "ordered_slice_sequence_mil",
+      "title": "Ordered slice-sequence sparse MIL",
+      "category": "model",
+      "status": "protocol_prepared_not_run",
+      "introduced_commit": "ce9713f",
+      "run_patterns": [
+        "b50_ordered_slice_sequence_mil",
+        "b50_ordered_slice_selection_split"
       ]
     }
   ],

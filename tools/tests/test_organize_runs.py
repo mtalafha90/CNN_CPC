@@ -27,9 +27,9 @@ def registry():
 
 def test_history_registry_is_permanent_contiguous_and_unique(registry):
     experiments = registry["experiments"]
-    assert len(experiments) == 76
-    assert [entry["number"] for entry in experiments] == list(range(1, 77))
-    assert len({entry["code"] for entry in experiments}) == 76
+    assert len(experiments) == 83
+    assert [entry["number"] for entry in experiments] == list(range(1, 84))
+    assert len({entry["code"] for entry in experiments}) == 83
     assert registry["history_basis"]["commit_count_reviewed"] == 1143
 
 
@@ -55,6 +55,13 @@ def test_history_registry_is_permanent_contiguous_and_unique(registry):
         ("b37_highres_sparse_mil", "B37", 71),
         ("b38_highres_global_tail", "B38", 73),
         ("b41_highres_aspect_sparse_mil", "B41", 76),
+        ("b42_constant_area_aspect_sparse_mil", "B42", 77),
+        ("b45_plane_calibrated_sparse_mil", "B45", 78),
+        ("b46_gold_anchored_crossfit", "B46", 79),
+        ("b47_native_grid_sparse_mil", "B47", 80),
+        ("b48_global_conditioned_spatial_mil", "B48", 81),
+        ("b49_native_tiled_multiscale_mil", "B49", 82),
+        ("b50_ordered_slice_selection_split", "B50", 83),
     ],
 )
 def test_names_visible_in_the_local_archive_map_to_their_lineage(
@@ -129,7 +136,7 @@ def test_every_numbered_experiment_directory_exists_even_without_a_run(
         for path in output.iterdir()
         if path.is_dir() and path.name[0].isdigit()
     ]
-    assert len(experiment_directories) == 76
+    assert len(experiment_directories) == 83
     first = canonical_directory(
         registry["experiments"][0], registry["directory_template"]
     )

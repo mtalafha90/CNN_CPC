@@ -117,6 +117,7 @@ experiments must be appended to it; existing numbers must not be reordered.
 | 080 | `B47` | Native encoder-grid sparse MIL | `implemented_not_run` | `cb07b89` |
 | 081 | `B48` | Global-query-conditioned cross-series sparse MIL | `completed_not_promoted` | `89ca1c7` |
 | 082 | `B49` | Full-FOV native tiled multi-resolution sparse MIL | `completed_not_promoted_kaggle_0.707` | `0e36eb9` |
+| 083 | `B50` | Ordered slice-sequence sparse MIL | `protocol_prepared_not_run` | `ce9713f` |
 
 ## Organize the local archive safely
 
@@ -158,6 +159,7 @@ runs/by_experiment/
 ├── 080_Experiment_B47_native_grid_sparse_mil/
 ├── 081_Experiment_B48_global_conditioned_spatial_mil/
 ├── 082_Experiment_B49_native_tiled_multiscale_mil/
+├── 083_Experiment_B50_ordered_slice_sequence_mil/
 ├── _Shared/
 │   ├── Comparisons/
 │   ├── Legacy_pipeline/
@@ -198,6 +200,11 @@ as non-promoted frozen experiments; B47 remains implemented but unrun. B49's
 one exploratory candidate-only hidden endpoint scored `0.707`. The current
 interpretation and all result provenance are maintained in
 [`developments/docs/CURRENT_STATUS.md`](../developments/docs/CURRENT_STATUS.md).
+
+B50 is reserved for a prospective ordered slice-sequence experiment. Only its
+write-once selection-gate builder exists; no B50 architecture has been trained
+or scored. The builder excludes all B48/B49 validation rows and must create a
+fresh hashed gate before B50 model implementation begins.
 
 ## Physically migrate run directories
 
