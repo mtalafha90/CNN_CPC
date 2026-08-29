@@ -223,3 +223,27 @@ python -m rsna_knee.b49_native_tiled_multiscale_eval \
 The evaluator refuses an unmatched pair, changed source/config fingerprints,
 changed base checkpoint, changed label artefacts, changed domain split, or a
 checkpoint that used gold labels.
+
+## Candidate-only exploratory Kaggle inference
+
+After the fixed matched evaluation is complete, the post-cross-attention
+candidate can be materialised as one **exploratory** Kaggle submission.  This
+does not promote B49, alter the fixed experiment, or permit a post-hoc blend.
+It uses raw sigmoid probabilities, the frozen `[-1, 0, +1]` TTA, and no
+thresholding or calibration.
+
+```bash
+PAIR="$B49_ROOT/seed_2026"
+python -m rsna_knee.b49_native_tiled_multiscale_submission \
+  --config config/b49_native_tiled_multiscale.yaml \
+  --data-root "$DATA_ROOT" \
+  --labels-root "$LABELS_ROOT" \
+  --base-checkpoint "$BASE_CHECKPOINT" \
+  --domain-split "$DOMAIN_SPLIT_ROOT/domain_split.json" \
+  --candidate-checkpoint "$PAIR/post_cross_attention_candidate/b49_post_cross_attention_candidate_model.pt" \
+  --out "$PAIR/kaggle_submission_b49_candidate.csv"
+```
+
+The command writes a CSV and an adjacent JSON manifest.  Upload only that CSV;
+keep the manifest with the run record.  The hidden score is exploratory and
+does not override B49's predeclared no-support mechanism verdict.
