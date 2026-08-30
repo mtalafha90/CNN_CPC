@@ -35,6 +35,47 @@ B42_REQUIRED_KEYS = ("experiment", "version", "base_state", "head_state", "model
 
 WEIGHT_KEYS = ("base_state", "head_state")
 
+# `load_b42_checkpoint` reads the head geometry from a top-level `sparse_mil`
+# block and the encoder policy from `encoder_finetune`, silently falling back to
+# B42's own defaults when they are absent. B51 records the same numbers, but only
+# inside `model_state`. Two of them -- `top_k` and `temperature` -- are not
+# parameters, so a wrong value survives `load_state_dict(strict=True)` untouched
+# and quietly changes every prediction. They are copied across explicitly rather
+# than left to a default that merely happens to agree.
+SPARSE_MIL_KEYS = ("grid_size", "top_k", "temperature")
+ENCODER_FINETUNE_KEYS = ("encoder_trainable_stages",)
+
+
+def _carry_geometry(payload: dict, model_state: dict) -> tuple[dict, dict]:
+    """Lift the reconstruction settings out of model_state, refusing to guess."""
+    blocks = {}
+    for name, keys in (
+        ("sparse_mil", SPARSE_MIL_KEYS),
+        ("encoder_finetune", ENCODER_FINETUNE_KEYS),
+    ):
+        missing = [key for key in keys if key not in model_state]
+        if missing:
+            raise ValueError(
+                f"B51 model_state is missing {missing}, so the B42 loader would "
+                f"fall back to defaults for {name}; refusing to convert"
+            )
+        block = {key: model_state[key] for key in keys}
+
+        # If the run already recorded the block, the two must agree. A conflict
+        # means one of them is wrong and neither can be trusted.
+        existing = payload.get(name)
+        if isinstance(existing, dict):
+            clashes = {
+                key: (existing[key], block[key])
+                for key in keys
+                if key in existing and existing[key] != block[key]
+            }
+            if clashes:
+                raise ValueError(f"{name} disagrees with model_state: {clashes}")
+            block = {**existing, **block}
+        blocks[name] = block
+    return blocks["sparse_mil"], blocks["encoder_finetune"]
+
 
 def convert(payload: dict) -> dict:
     """Return a B42-shaped payload sharing the original weight tensors."""
@@ -54,6 +95,10 @@ def convert(payload: dict) -> dict:
     model_state["version"] = B42_VERSION
     model_state["experiment"] = B42_EXPERIMENT
     converted["model_state"] = model_state
+
+    sparse_mil, encoder_finetune = _carry_geometry(payload, model_state)
+    converted["sparse_mil"] = sparse_mil
+    converted["encoder_finetune"] = encoder_finetune
 
     # Provenance, so a converted file can never be mistaken for a real B42 run.
     converted["converted_from"] = {

@@ -59,12 +59,21 @@ B42_TIMING_SAFETY_FACTOR = 1.35
 B42_SUBMISSION_TTA_OFFSETS = B42_FAST_TTA_OFFSETS
 
 
-def _verify_checkpoint_identity(checkpoint_path: Path) -> str:
+def _verify_checkpoint_identity(
+    checkpoint_path: Path, expected_sha256: str = B42_FROZEN_CHECKPOINT_SHA256
+) -> str:
+    """Refuse any checkpoint but the one this run is declared to be using.
+
+    The default pins B42's own frozen endpoint and is what every B42 submission
+    uses. A sibling launcher may pin a different, deliberately chosen artefact
+    (B51 does), which keeps the guarantee -- a hidden run cannot silently use a
+    file nobody named -- while allowing a different endpoint to be submitted.
+    """
     observed = sha256_file(checkpoint_path)
-    if observed != B42_FROZEN_CHECKPOINT_SHA256:
+    if observed != expected_sha256:
         raise ValueError(
-            "B42 hidden submission requires the frozen fixed-E2 checkpoint: "
-            f"expected {B42_FROZEN_CHECKPOINT_SHA256}, got {observed}"
+            "B42 hidden submission requires the declared checkpoint: "
+            f"expected {expected_sha256}, got {observed}"
         )
     return observed
 
@@ -209,6 +218,7 @@ def generate_b42_submission_dual_gpu_fast(
     checkpoint: str | Path,
     base_checkpoint: str | Path,
     out_path: str | Path = "submission.csv",
+    expected_checkpoint_sha256: str = B42_FROZEN_CHECKPOINT_SHA256,
 ) -> Path:
     """Generate the exact frozen B42 hidden-test submission on two Kaggle T4s."""
     settings = dict(config)
@@ -237,7 +247,9 @@ def generate_b42_submission_dual_gpu_fast(
         raise FileNotFoundError(f"B42 checkpoint is missing: {checkpoint_path}")
     if not base_path.is_file():
         raise FileNotFoundError(f"B42 base checkpoint is missing: {base_path}")
-    checkpoint_sha256 = _verify_checkpoint_identity(checkpoint_path)
+    checkpoint_sha256 = _verify_checkpoint_identity(
+        checkpoint_path, expected_checkpoint_sha256
+    )
 
     # Load replicas sequentially so checkpoint deserialization does not compete
     # for host RAM. Both replicas are reconstructed and fingerprint-verified.

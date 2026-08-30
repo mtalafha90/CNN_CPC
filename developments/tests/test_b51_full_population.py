@@ -105,7 +105,17 @@ def _b51_payload(seed: int = 0) -> dict:
             "encoder.0.weight": torch.randn(2, 3),
         },
         "head_state": {"gate": torch.randn(12), "evidence_weight": torch.randn(12, 8)},
-        "model_state": {"version": "b50", "grid_size": 6, "top_k": 8},
+        # Mirrors what the real model's state() emits. The converter needs the
+        # geometry keys because the B42 loader would otherwise silently use its
+        # own defaults for top_k and temperature, which are not weights.
+        "model_state": {
+            "version": "b50",
+            "grid_size": 6,
+            "top_k": 8,
+            "temperature": 1.0,
+            "encoder_chunk_size": 4,
+            "encoder_trainable_stages": 1,
+        },
         "history": [{"epoch": 2}],
     }
 
