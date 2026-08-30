@@ -1,198 +1,157 @@
 # Where to go after B51 — a decision built from the whole archive
 
-**Written:** 2026-08-30, after reading the 137 experiment documents, the audit
-chain, and the measurements taken today. Nothing here is a new result. It is a
-reading of existing evidence and a ranked decision.
+**Written:** 2026-08-30. Revised the same day after the public leaderboard was
+checked. Nothing here is a new result; it is a reading of existing evidence.
 
-## The one number that reframes the project
+## The correction that reframes this document
 
-`POST_B45_PLATEAU_RETROSPECTIVE.md` records the closest published comparator:
+An earlier draft argued that `0.714` was close to the practical ceiling. Its
+reasoning was that the nearest published comparator — CoPAS 2024, *Nature
+Communications*, the same twelve knee findings — scores `0.812` in-domain but
+falls to `0.721-0.726` on external datasets, and that a 19-site, twelve-language
+hidden test is an external-generalisation setting.
 
-> Qiu et al. 2024, *Learning co-plane attention across MRI sequences for
-> diagnosing twelve types of knee abnormalities*, Nature Communications 15,
-> 7637. Overall AUC **0.812** on 1,748 subjects. **Its AUC falls to roughly
-> `0.721-0.726` on external datasets with different sequence settings.**
+**The public leaderboard top is `0.952`.**
 
-Same twelve findings. Same modality. A purpose-built co-plane attention
-architecture. And it loses about **0.09** when the acquisition changes.
+That reading was wrong. There is roughly `0.24` of headroom, not `0.01`. Someone
+is scoring far above published clinical work on this task using the same data,
+so the constraint is not the task and it is not domain shift.
 
-This project's hidden score is **0.714**.
+Everything that followed from the ceiling argument is withdrawn.
 
-`RAISING_AUC_TO_080.md` set its target from "published work ... roughly
-0.73-0.81", flagging that the range "carries no citation and should be treated
-as a working impression". The citation was found later, and it splits: `0.812`
-is the *in-domain* figure, `0.721-0.726` the *external* one. The 0.80 target was
-therefore set against a number measured under conditions this competition may
-not offer.
+## What the constraint actually is
 
-If the hidden test is genuinely cross-site — the challenge is built from 19
-sites and about a dozen languages — then **0.714 is already at the published
-external-generalisation level for this task**, and the remaining headroom is
-around `+0.01`, not `+0.09`.
-
-That single fact changes what counts as a good decision.
-
-## Step 0 — the cheapest and most decision-relevant action, and it is not mine
-
-**Look at the public leaderboard.** Two minutes, and it settles the strategy.
+The answer is in `config/b42_constant_area_aspect_sparse.yaml` and in one line
+of the training code. **The model is barely trained.**
 
 ```text
-top scores near 0.75-0.80   the external reading holds; 0.714 is close to the
-                            practical ceiling; pursue +0.01 consolidations and
-                            stop funding large architecture bets
-
-top scores near 0.90+       the external reading is wrong, the hidden test is
-                            closer to in-domain, and something structural is
-                            missing that incremental work will never reach
+b17_encoder_frozen: true          the ConvNeXt that reads pixels is frozen
+b7_encoder_lr: 0.0                its learning rate is exactly zero
+b37_encoder_trainable_stages: 1   one stage thaws, at 0.05x = 5e-6
+b7_n_slices: 16                   16 slices per series, from series up to 320
+b7_batch_size: 2                  two studies per step
+b7_max_batches_per_epoch: 1560    3,120 studies per epoch, of 4,349
+epochs                            2, fixed, no checkpoint selection
 ```
 
-`EXPERIMENT_STATUS` carries an unverified `0.924` claim. It has never been
-checked, and it is the difference between "nearly done" and "wrong approach".
-Everything below assumes the first branch; if the leaderboard says otherwise,
-this document should be rewritten rather than followed.
+That is **3,120 optimiser steps in total**, at batch size 2, with the pixel
+encoder essentially fixed at its pretrained weights.
 
-## What the archive has already closed
+And the augmentation is off. The config lists nine augmentation settings —
+noise, slice dropout, centre jitter, rotation, translation, scale, gamma, bias
+field — then notes that B42 "is constructed with `train=false` and therefore
+remains deterministic". Both `b42_constant_area_aspect_sparse_training.py:431`
+and `b51_full_population_training.py:202` call
+`make_b7_dataset_config(..., train=False)`, and that flag zeroes **every one**
+of them:
 
-Eight consecutive architecture experiments returned no support:
-
-| | Mechanism | Result |
-|---|---|---|
-| B38 | global-only 448 tail | `0.66441` vs base `0.66875` |
-| B40 | one more epoch | loss fell, expert AUC fell |
-| B41/B42 | in-plane geometry | no visible hidden separation |
-| B44 | 32 → 64 centres | weak targets unmoved |
-| B45 | plane router | `−0.003944` vs B42 |
-| B46 | gold anchoring | `−0.004946`, `P=0.13` |
-| B48 | global conditioning | ceiling `0.0015`, underpowered |
-| B49 | native tiling | ceiling `0.0024`, hidden `0.707` |
-
-B50 was the first powered positive since B37 (`+0.011221`, 12/12 targets). B51
-carried it to the full population and lost `−0.011785` against B42 on expert
-truth with 3/12 targets improved. **B50's gain was measured against
-report-derived labels; B51's loss against expert truth.** That is the third
-instance of the pattern B40 first recorded.
-
-## What today's measurements closed
-
-Four cheap measurements, no GPU, all negative — which is progress by
-elimination:
-
-| Question | Answer |
-|---|---|
-| Did the LLM fix label quality? | **No.** precision `0.6647` vs B6's `0.6736` |
-| Is the merged teacher better? | **No.** precision `0.6527`, coverage `0.6580` |
-| Do bad per-target labels explain ACL/MCL? | **No.** ACL is among the best labelled (precision `0.774`) |
-| Can LLM self-confidence filter errors? | **No.** AUC `0.576`; costs 40% coverage for `+0.038` |
-
-What survives is one aggregate fact: the teacher has sensitivity `0.977` against
-specificity `0.499`. It over-calls positives systematically, and about a third of
-its positives disagree with the expert.
-
-But note what this does **not** license. `RAISING_AUC_TO_080.md` Tier 1 —
-"train on LLM labels and evaluate honestly" — **was already executed**. B42
-trains through `load_fill_merged_export` on the `llm_fill` arm, and it scored
-`0.714`. The teacher upgrade has happened. It did not produce `0.80`.
-
-**Stop spending effort on the teacher.** Four measurements and one completed
-hidden submission now point the same way.
-
-## What is genuinely untested
-
-Three items from `RAISING_AUC_TO_080.md` Tier 0 were never done, and they are the
-cheapest unexplored surface in the repository.
-
-### 1. Slice coverage on the long-series tail — CPU, minutes
-
-`tools/slice_coverage.py` exists and has never been run. Phases 2 and 3 both
-recorded `Investigate >78-slice series structurally: GO` and it was never
-actioned.
-
-The stake, in the tool's own words: *"a structure four slices thick can fall
-entirely between two samples."* ACL and MCL are exactly such structures, and they
-are exactly the two weakest targets — **both below chance on expert truth for
-essentially the whole lineage**. Today's audit removed the label explanation for
-ACL, which makes the sampling explanation more, not less, likely.
-
-If a cruciate ligament is not in the sampled slices, no architecture and no
-teacher can fix it. This measures whether the model is being asked about
-something it was never shown.
-
-### 2. The cosine that never anneals — one run, same compute
-
-```text
-scheduler   CosineAnnealingLR(T_max=5)
-epochs run  2
-epoch 1     1.000e-04   100.0% of peak
-epoch 2     9.055e-05    90.5% of peak
-STOP
+```python
+noise_std   = ... if train else 0.0
+slice_dropout = ... if train else 0.0
+center_jitter = ... if train else 0
+rotation_deg  = ... if train else 0.0
+translate_frac = ... if train else 0.0
+scale_jitter  = ... if train else 0.0
+gamma_jitter  = ... if train else 0.0
+bias_field_strength = ... if train else 0.0
 ```
 
-Training halts having never once trained at a meaningfully reduced learning
-rate. `T_max=2` costs the identical 90 minutes and anneals properly. B22 tested
-epoch *counts* and found E2 best; it never tested whether E2 with a completed
-schedule differs from E2 without one.
+A frozen encoder, no augmentation, 3,120 steps, and 16 slices out of as many as
+320. Against that, an architecture ablation moving `0.003` is not a finding
+about architecture.
 
-This is the rarest thing in the archive: an untested change that costs nothing.
+## Why a careful project ended up here
 
-### 3. Real test-time augmentation — no training at all
+The governance is genuinely good science. Prospective hypotheses, frozen
+endpoints, fixed seeds, no checkpoint selection, no tuning from results — these
+are why the archive can state what it knows. `B40` proving that lower training
+loss did not raise expert AUC is a real result that many projects never obtain.
 
-Current TTA is three views offset by `±1` slice on a comb of median stride
-`1.9`. The three views are nearly the same slices; it is close to a no-op. B39's
-five offsets `[-2,-1,0,1,2]` broaden it slightly and were never scored.
+But those same rules also **froze a deliberately minimal training regime in
+place**, and then required every later experiment to keep it fixed. Determinism
+was chosen so runs would be comparable. Two epochs was chosen so nothing could
+be selected post hoc. The encoder was frozen so supervision could be isolated.
 
-**One warning the archive does not state.** `RAISING_AUC_TO_080.md` suggests
-horizontal flip. **Do not use it.** Four of the twelve targets are laterality-
-specific — Medial Meniscus, Lateral Meniscus, Medial OA, Lateral OA — and a
-horizontal flip of a coronal knee exchanges medial with lateral. On sagittal
-series it exchanges anterior with posterior, which bears directly on the
-cruciates. Flip TTA would corrupt exactly the targets that are already weakest.
+Each choice was defensible for causal inference. Together they describe a model
+that has not been trained, and eight consecutive architecture experiments have
+been small perturbations of it.
 
-Multi-scale and multi-crop are safe. Flip is not.
+**Competition ranking and causal inference want opposite things.** "Do not tune
+from this result" is correct for the first and fatal for the second.
 
 ## The decision
 
-```text
-0. Read the leaderboard.                      2 minutes. Gates everything.
-1. Run slice_coverage.py.                     CPU, minutes. Tests the ACL/MCL
-                                              hypothesis before any GPU.
-2. Do not submit B51.                         −0.012 on the only expert surface.
-3. T_max=2 rerun of the B42 endpoint.         One run, same compute as before.
-4. Only if 1 and 3 justify it: B47.           Scores evidence on the 14x14 the
-                                              encoder produced instead of the
-                                              6x6 it is pooled to, recovering
-                                              5.44x of discarded localisation.
-5. Stop: teacher work, gold anchoring,        All closed by direct measurement.
-   plane routing, centre counts, crop
-   fractions, top-k, extra epochs.
-```
+Fork the work. Keep the scientific line if it is valuable in its own right, but
+start a competition line that does ordinary competition practice. Ranked by
+expected gain per hour:
 
-### On B51 specifically
+### 1. Unfreeze the encoder
 
-Do not submit it. B50's supporting evidence was measured against report labels;
-against expert truth B51 is `−0.011785` with 3/12 targets improved and
-`P(better) = 0.081`. Expert-58 is too blunt to resolve `±0.011` and has never
-predicted a hidden difference — but a submission needs a positive reason, and
-after today there is not one. B42 remains the endpoint.
+`b7_encoder_lr: 0.0` and `b17_encoder_frozen: true` mean the part of the network
+that actually reads pixels is fixed. One stage thaws at `5e-6`. On 4,349 studies
+there is no reason not to fine-tune the whole backbone at a real learning rate.
 
-### What would change this decision
+This is almost certainly the single largest lever in the repository.
 
-- **The leaderboard top is near 0.90.** Then the external-generalisation reading
-  is wrong, incremental consolidation is futile, and the project needs a
-  different capability rather than a better version of this one.
-- **`slice_coverage` shows good coverage of short structures.** Then Ceiling 4
-  is a story rather than a mechanism, ACL/MCL weakness is unexplained, and the
-  next question is why the images do not support those two findings.
-- **`T_max=2` moves the endpoint materially.** Then the fixed-E2 policy,
-  inherited unquestioned from B26 through Phase 9, was a real constraint and
-  every prior architecture comparison ran on an under-annealed model.
+### 2. Turn augmentation on
 
-## The honest summary
+`train=False` disables all nine augmentations. The machinery exists, is
+configured, and is switched off. Turning it on costs one flag.
 
-The project's controls are unusually strict and its bookkeeping is sound. The
-plateau is not carelessness. It is that `0.714` may simply be close to what this
-task allows across sites, and the archive set its target from an in-domain
-number measured elsewhere.
+### 3. Train properly, and select on validation
 
-The remaining work worth doing is small, cheap and diagnostic. The expensive
-work — another architecture, another teacher — has been tried eight times and
-has not moved the hidden score once since B37.
+Two epochs at 100% and 90.5% of peak learning rate is not a training run. Use a
+real schedule to convergence, and **select the checkpoint on a validation
+split** — the thing the governance forbids and the thing competitions require.
+
+The scanner-grouped split from B50 already exists and is a reasonable surface.
+
+### 4. Use more of the volume
+
+16 slices from a 320-slice series discards most of the acquisition. `slice_coverage.py`
+exists, has never been run, and was marked `GO` twice; it will say how much of a
+cruciate ligament the current sampling can even see.
+
+### 5. Ensemble
+
+Seeds and folds, rank-averaged. The metric is macro AUC, so only ranking matters
+and calibration does not. This is reliable and needs no new ideas.
+
+## What to stop
+
+- **Do not submit B51.** Not because it will score badly, but because `+0.011`
+  is noise against a `0.24` gap, and the submission would teach nothing about
+  the real problem.
+- **Stop the teacher work.** Four measurements today closed it, and
+  `RAISING_AUC_TO_080`'s Tier 1 was already executed: B42 trains on the
+  LLM-filled merge and scored `0.714`.
+- **Stop architecture ablations on the frozen baseline.** Any mechanism measured
+  on an untrained model is measured through a floor.
+
+## One thing worth knowing about the labels
+
+`0.952` is far above published clinical AI for these twelve findings. One
+plausible explanation is that the hidden labels are report-derived rather than
+expert-adjudicated, which would make them more self-consistent and more
+predictable than the 58 expert studies.
+
+The archive contains a hint. Hidden scores have run consistently **above** the
+Expert-58 surface — `0.694` hidden against roughly `0.66` local, `0.714` against
+`0.683` — an offset the retrospective records as about `+0.033`.
+
+If that is right, then the report-derived validation surfaces are the better
+proxy for the hidden test and Expert-58 is the misleading one, which would
+partly reverse today's earlier conclusion about B51. It does not change the
+ranked plan: a `0.011` question is not worth answering before the training
+regime is fixed. But it does mean **model selection should be done on a
+report-labelled held-out split, not on the 58 expert studies.**
+
+## What would make this analysis wrong
+
+- **Unfreezing and training properly does not move the hidden score.** Then the
+  limitation is representational after all, and B47 becomes the next question.
+- **The leaderboard top used external data or pretrained medical weights not
+  available here.** Then part of the `0.24` is not reachable, though the training
+  regime still is.
+- **The hidden labels are expert-adjudicated after all.** Then `0.952` is
+  extraordinary and deserves understanding before imitation.
