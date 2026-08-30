@@ -110,6 +110,16 @@ def test_a_geometry_that_contradicts_itself_is_refused():
 # --- the B51 launcher ------------------------------------------------------
 
 
+def test_the_record_shows_the_geometry_it_carried(tmp_path):
+    """An operator cannot check a value the conversion never prints."""
+    source, destination = tmp_path / "b51.pt", tmp_path / "as_b42.pt"
+    torch.save(_b51_payload(), source)
+    record = convert_file(source, destination)
+
+    assert record["sparse_mil"] == {"grid_size": 6, "top_k": 8, "temperature": 1.0}
+    assert record["encoder_finetune"] == {"encoder_trainable_stages": 1}
+
+
 def test_a_converted_b51_checkpoint_is_accepted(tmp_path):
     destination, sha = _converted_file(tmp_path)
     identity = require_converted_b51(destination)

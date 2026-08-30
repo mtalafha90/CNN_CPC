@@ -161,6 +161,11 @@ def convert_file(source: str | Path, destination: str | Path) -> dict:
         "experiment_out": B42_EXPERIMENT,
         "weights_verified_identical": True,
         "tensors_checked": sum(len(payload[key]) for key in WEIGHT_KEYS),
+        # Printed rather than implied: these are the settings the B42 loader
+        # would otherwise have defaulted, and two of them are invisible to a
+        # strict state-dict load. Seeing them is how the operator checks them.
+        "sparse_mil": converted["sparse_mil"],
+        "encoder_finetune": converted["encoder_finetune"],
     }
     destination_path.with_suffix(".conversion.json").write_text(
         json.dumps(record, indent=2), encoding="utf-8"
