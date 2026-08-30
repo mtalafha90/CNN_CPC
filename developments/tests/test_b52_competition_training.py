@@ -203,3 +203,48 @@ def test_reversing_the_ranking_scores_zero():
         (1, len(TARGETS)),
     )
     assert macro_auc(target, weight, prediction)["macro_auc"] == pytest.approx(0.0)
+
+
+# --- the split selection ----------------------------------------------------
+
+
+def _rows(assignments):
+    import pandas as pd  # noqa: PLC0415
+
+    return pd.DataFrame(
+        [{"StudyInstanceUID": uid, "split": split} for uid, split in assignments]
+    )
+
+
+def test_the_split_returns_arrays_not_lists():
+    """`_indices_for_split` returns ndarray; truthiness on one raises."""
+    from rsna_knee.b52_competition_training import select_train_and_validation
+
+    uids = ["a", "b", "c", "d"]
+    rows = _rows(
+        [("a", "train"), ("b", "train"), ("c", "validation_unseen_scanners"),
+         ("d", "validation_seen_scanners")]
+    )
+    train_idx, valid_idx, train_uids, valid_uids = select_train_and_validation(uids, rows)
+
+    assert isinstance(train_idx, np.ndarray) and isinstance(valid_idx, np.ndarray)
+    assert train_uids == ["a", "b"]
+    assert valid_uids == ["c"], "only the unseen-scanner split validates"
+
+
+def test_a_study_on_both_sides_is_refused():
+    """A leak here would raise the score and corrupt every checkpoint choice."""
+    from rsna_knee.b52_competition_training import select_train_and_validation
+
+    uids = ["a", "b"]
+    rows = _rows([("a", "train"), ("a", "validation_unseen_scanners"), ("b", "train")])
+    with pytest.raises(RuntimeError, match="share 1 studies"):
+        select_train_and_validation(uids, rows)
+
+
+def test_an_empty_split_is_refused_upstream():
+    from rsna_knee.b52_competition_training import select_train_and_validation
+
+    rows = _rows([("a", "train"), ("b", "train")])
+    with pytest.raises(RuntimeError, match="missing or zero report-only UIDs"):
+        select_train_and_validation(["a", "b"], rows)

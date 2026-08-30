@@ -182,6 +182,29 @@ def b52_parameter_groups(
     return groups
 
 
+def select_train_and_validation(all_uids: list, domain_rows) -> tuple:
+    """Split the report-only surface into training and unseen-scanner validation.
+
+    `_indices_for_split` returns a NumPy array and already refuses an empty
+    split, so the only check worth adding here is the one it cannot make: that
+    no study appears on both sides. A leak there would raise the validation
+    score and silently corrupt every checkpoint choice made from it.
+    """
+    train_indices = _indices_for_split(all_uids, domain_rows, B52_TRAIN_SPLIT)
+    valid_indices = _indices_for_split(all_uids, domain_rows, B52_PRIMARY_SPLIT)
+
+    train_uids = [all_uids[int(index)] for index in train_indices]
+    valid_uids = [all_uids[int(index)] for index in valid_indices]
+
+    overlap = sorted(set(train_uids) & set(valid_uids))
+    if overlap:
+        raise RuntimeError(
+            f"B52 train and validation splits share {len(overlap)} studies "
+            f"(for example {overlap[0]}); selection would be measured on training data"
+        )
+    return train_indices, valid_indices, train_uids, valid_uids
+
+
 def masked_binary_targets(target: np.ndarray, weight: np.ndarray) -> np.ndarray:
     """Report states as binary, NaN where nothing supervises the cell.
 
@@ -329,15 +352,9 @@ def train_b52(
         base_payload=base_payload,
     )
 
-    train_indices = _indices_for_split(all_uids, domain_rows, B52_TRAIN_SPLIT)
-    valid_indices = _indices_for_split(all_uids, domain_rows, B52_PRIMARY_SPLIT)
-    if not train_indices or not valid_indices:
-        raise RuntimeError("B52 needs both a train and an unseen-scanner split")
-
-    train_uids = [all_uids[i] for i in train_indices]
-    valid_uids = [all_uids[i] for i in valid_indices]
-    if set(train_uids) & set(valid_uids):
-        raise RuntimeError("B52 train and validation splits overlap")
+    train_indices, valid_indices, train_uids, valid_uids = select_train_and_validation(
+        all_uids, domain_rows
+    )
 
     train_targets, train_weights = all_targets[train_indices], all_weights[train_indices]
     valid_targets, valid_weights = all_targets[valid_indices], all_weights[valid_indices]
@@ -634,6 +651,7 @@ __all__ = [
     "B52_RUN_ROOT",
     "B52_VERSION",
     "b52_parameter_groups",
+    "select_train_and_validation",
     "evaluate_split",
     "macro_auc",
     "masked_binary_targets",
