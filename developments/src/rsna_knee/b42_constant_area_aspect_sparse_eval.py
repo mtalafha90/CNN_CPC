@@ -341,11 +341,17 @@ def evaluate_b42(
             "b37_combined_auc": b37_combined_auc[target],
             "b41_global_448_auc": b41_global_auc[target],
             "b41_combined_auc": b41_combined_auc[target],
-            "b42_global_rectangular_auc": b42_global_auc[target],
-            "b42_combined_auc": b42_combined_auc[target],
-            "b42_minus_b37_combined": float(b42_combined_auc[target] - b37_combined_auc[target]),
-            "b42_minus_b41_combined": float(b42_combined_auc[target] - b41_combined_auc[target]),
-            "b42_sparse_residual_increment": float(b42_combined_auc[target] - b42_global_auc[target]),
+            f"{experiment_label}_global_rectangular_auc": b42_global_auc[target],
+            f"{experiment_label}_combined_auc": b42_combined_auc[target],
+            f"{experiment_label}_minus_b37_combined": float(
+                b42_combined_auc[target] - b37_combined_auc[target]
+            ),
+            f"{experiment_label}_minus_b41_combined": float(
+                b42_combined_auc[target] - b41_combined_auc[target]
+            ),
+            f"{experiment_label}_sparse_residual_increment": float(
+                b42_combined_auc[target] - b42_global_auc[target]
+            ),
         }
 
     geometry = pd.DataFrame(geometry_rows)
@@ -455,10 +461,10 @@ def evaluate_b42(
             "converted_from": payload.get("converted_from"),
         },
         "governance": (
-            "B42 remains fixed at reference area 448^2, native 90% crop, isotropic "
+            f"The {experiment_label} endpoint is fixed at reference area 448^2, native 90% crop, isotropic "
             "constant-area resize, reflection padding only to stride 32, ragged-series "
             "encoding, 32 centres, 6x6, top-k=8, B37 supervision and fixed epoch 2. "
-            "Do not tune B42 from this reused Expert-58 diagnostic."
+            "reused Expert-58 diagnostic."
         ),
     }
 
