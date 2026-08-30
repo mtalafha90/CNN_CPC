@@ -86,6 +86,7 @@ from .b37_highres_sparse_training import (
 from .b42_constant_area_aspect_sparse_mil import (
     B42ConstantAreaAspectDataset,
     collate_b42,
+    require_b42_contract,
 )
 from .b42_constant_area_aspect_sparse_training import (
     _batch_scales,
@@ -353,7 +354,11 @@ def train_b52(
     _train_summary, train_index = audit_variable_series_surface(series, train_uids)
     _valid_summary, valid_index = audit_variable_series_surface(series, valid_uids)
 
-    crop_policy = settings.get("b20_crop_focus_version")
+    # B52 keeps B42's geometry exactly, so it asserts that contract rather than
+    # reading the crop policy out of the config by hand. This is also what
+    # returns the policy object the dataset expects.
+    crop_policy = require_b42_contract(settings)
+
     # The one line that turns nine disabled augmentations back on.
     train_config = make_b7_dataset_config(settings, root, train=bool(augment))
     train_config.tta_center_offsets = ()
