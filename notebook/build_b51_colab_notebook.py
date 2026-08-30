@@ -165,28 +165,35 @@ define(
     """
 ## 11. Read the report labels
 
-The export gives four states per target, and each state has a fixed probability
-and a fixed confidence:
+The export gives one state per target, and each state carries a fixed
+probability and a fixed confidence. The two exporters differ on one row:
 
 ```text
-state          probability   confidence
-positive           0.97         0.90
-negated            0.03         0.90
-uncertain          0.50         0.25
-conflict           0.50         0.20
-unmentioned        0.50         0.00
+state          probability   confidence (B23)   confidence (B6)
+positive           0.97           0.90               0.90
+negated            0.03           0.90               0.90
+uncertain          0.50           0.00               0.25
+conflict           0.50            --                0.20
+unmentioned        0.50           0.00               0.00
 ```
 
-The last row is the important one. When a report does not mention a finding, that
-is **not** evidence the finding is absent — the radiologist simply did not write
-about it. So an unmentioned cell is given confidence `0.00`, which means "ignore
-this cell entirely".
+**Confidence `0.00` means "ignore this cell entirely".** B23 pins both uncertain
+and unmentioned to zero, so a hedged reading can never be promoted to a training
+label. B6 lets an uncertain cell count a little. Either is fine here: this
+notebook reads whatever the file says rather than assuming a policy.
+
+The unmentioned row is the one that matters most. When a report does not mention
+a finding, that is **not** evidence the finding is absent — the radiologist
+simply did not write about it.
 
 This is easy to get wrong in a way that quietly ruins training. An unmentioned
 cell is stored as probability `0.50`, not as a blank. If it were fed to an
 ordinary loss it would look like a real label, and the model would be pushed
 towards 0.50 on the majority of cells. The confidence column is what stops that,
 so this notebook never reads a probability without its confidence.
+
+A study whose report mentions none of the twelve findings supervises nothing at
+all, and section 14 drops it rather than decoding its images every epoch.
 """,
 )
 

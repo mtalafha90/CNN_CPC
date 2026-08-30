@@ -320,7 +320,12 @@ def test_an_unmentioned_finding_becomes_a_blank(namespace):
     assert confidence[0, 1] == pytest.approx(0.90)
 
 
-def test_the_four_states_keep_their_fixed_values(namespace):
+def test_the_file_decides_the_values_not_the_notebook(namespace):
+    """B6 and B23 disagree about `uncertain`, so no policy may be hard-coded.
+
+    B6 gives an uncertain cell confidence 0.25; B23 pins it to 0.00 so a hedged
+    reading can never become a training label. Both must load correctly.
+    """
     states = {
         ("weak-a", FAKE_TARGETS[0]): "positive",
         ("weak-a", FAKE_TARGETS[1]): "negated",
@@ -332,6 +337,18 @@ def test_the_four_states_keep_their_fixed_values(namespace):
     assert (targets[0, 1], confidence[0, 1]) == pytest.approx((0.03, 0.90))
     assert (targets[0, 2], confidence[0, 2]) == pytest.approx((0.50, 0.25))
     assert (targets[0, 3], confidence[0, 3]) == pytest.approx((0.50, 0.20))
+
+
+def test_a_b23_export_ignores_its_uncertain_cells(namespace):
+    """B23 pins uncertain to confidence 0.00, which must blank the cell."""
+    import numpy as np  # noqa: PLC0415
+
+    frame = _export_frame({("weak-a", FAKE_TARGETS[2]): "uncertain"})
+    frame.loc[0, f"{FAKE_TARGETS[2]}__confidence"] = 0.00  # the B23 policy
+    targets, confidence = namespace["weak_targets_and_confidence"](frame)
+
+    assert np.isnan(targets[0, 2]), "a B23 uncertain cell must not train the model"
+    assert confidence[0, 2] == 0.0
 
 
 # --- the assembly the tests cannot execute ---------------------------------
