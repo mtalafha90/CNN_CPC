@@ -165,3 +165,38 @@ def test_a_stripped_geometry_block_is_refused(tmp_path):
 def test_a_missing_file_says_so(tmp_path):
     with pytest.raises(FileNotFoundError):
         require_converted_b51(tmp_path / "nothing.pt")
+
+
+# --- the evaluation is labelled B51, not B42 -------------------------------
+
+
+def test_the_b51_eval_writes_into_its_own_folder():
+    from rsna_knee.b42_constant_area_aspect_sparse_mil import B42_EXPERT58_ROOT
+    from rsna_knee.b51_expert58_eval import B51_EXPERT58_ROOT
+
+    assert B51_EXPERT58_ROOT != B42_EXPERT58_ROOT
+    assert "085" in B51_EXPERT58_ROOT, "B51 results belong in B51's run directory"
+
+
+def test_the_eval_label_reaches_filenames_and_keys():
+    """A B51 run must not leave a folder of files named b42_*."""
+    import inspect  # noqa: PLC0415
+
+    from rsna_knee.b42_constant_area_aspect_sparse_eval import evaluate_b42
+
+    source = inspect.getsource(evaluate_b42)
+    assert 'experiment_label: str = "b42"' in source, "the B42 default must not change"
+
+    # Nothing inside the result dict or the written filenames may hardcode b42.
+    body = source.partition("    result = {")[2]
+    for hardcoded in ('"b42_combined"', '"b42_global_rectangular"'):
+        assert hardcoded not in body, f"{hardcoded} is still hardcoded in the result"
+
+
+def test_the_b51_eval_refuses_an_unconverted_checkpoint(tmp_path):
+    from rsna_knee.b51_expert58_eval import evaluate_b51
+
+    path = tmp_path / "raw_b51.pt"
+    torch.save(_b51_payload(), path)
+    with pytest.raises(ValueError, match="not produced by b51_checkpoint_to_b42_format"):
+        evaluate_b51({}, data_root=tmp_path, checkpoint=path, base_checkpoint=path)

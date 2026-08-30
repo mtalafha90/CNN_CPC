@@ -151,8 +151,16 @@ def evaluate_b42(
     b41_expert58_root: str | Path = B41_EXPERT58_ROOT,
     out_root: str | Path = B42_EXPERT58_ROOT,
     n_bootstrap: int = 5000,
+    experiment_label: str = "b42",
 ) -> dict:
-    """Score fixed B42 and compare it to recorded B37/B41 Expert-58 outputs."""
+    """Score a B42-shaped endpoint against recorded B37/B41 Expert-58 outputs.
+
+    `experiment_label` names what is being scored, in the written filenames and
+    in the result keys. It defaults to "b42" so every existing B42 evaluation is
+    unchanged. A sibling endpoint that reuses this exact inference recipe -- B51
+    does, since B50's class alters only requires_grad -- passes its own label, so
+    its results cannot be mistaken for B42's months later.
+    """
     settings = dict(config)
     settings["data_root"] = str(Path(data_root).resolve())
     crop_policy = require_b42_contract(settings)
@@ -321,8 +329,8 @@ def evaluate_b42(
         "b37_combined": _focal(b37_combined_auc),
         "b41_global_448": _focal(b41_global_auc),
         "b41_combined": _focal(b41_combined_auc),
-        "b42_global_rectangular": _focal(b42_global_auc),
-        "b42_combined": _focal(b42_combined_auc),
+        f"{experiment_label}_global_rectangular": _focal(b42_global_auc),
+        f"{experiment_label}_combined": _focal(b42_combined_auc),
     }
 
     per_target = {}
@@ -365,8 +373,8 @@ def evaluate_b42(
 
     result = {
         "evaluation_role": (
-            "reused Expert-58 development diagnostic for the fixed B42 endpoint; "
-            "not independent test evidence and not a B42 tuning or promotion criterion"
+            f"reused Expert-58 development diagnostic for the {experiment_label} endpoint; "
+            f"not independent test evidence and not a {experiment_label} tuning or promotion criterion"
         ),
         "checkpoint": str(Path(checkpoint).resolve()),
         "checkpoint_sha256": sha256_file(Path(checkpoint).resolve()),
@@ -380,32 +388,32 @@ def evaluate_b42(
             "b37_combined": b37_combined_macro,
             "b41_global_448": b41_global_macro,
             "b41_combined": b41_combined_macro,
-            "b42_global_rectangular": b42_global_macro,
-            "b42_combined": b42_combined_macro,
+            f"{experiment_label}_global_rectangular": b42_global_macro,
+            f"{experiment_label}_combined": b42_combined_macro,
         },
-        "b42_sparse_residual_macro_increment": float(b42_combined_macro - b42_global_macro),
-        "b42_minus_b37_combined_macro": float(b42_combined_macro - b37_combined_macro),
-        "b42_minus_b41_combined_macro": float(b42_combined_macro - b41_combined_macro),
+        f"{experiment_label}_sparse_residual_macro_increment": float(b42_combined_macro - b42_global_macro),
+        f"{experiment_label}_minus_b37_combined_macro": float(b42_combined_macro - b37_combined_macro),
+        f"{experiment_label}_minus_b41_combined_macro": float(b42_combined_macro - b41_combined_macro),
         "focal_six": list(FOCAL_SIX),
         "focal_six_auc": focal,
-        "b42_minus_b37_focal_six": float(focal["b42_combined"] - focal["b37_combined"]),
-        "b42_minus_b41_focal_six": float(focal["b42_combined"] - focal["b41_combined"]),
+        f"{experiment_label}_minus_b37_focal_six": float(focal[f"{experiment_label}_combined"] - focal["b37_combined"]),
+        f"{experiment_label}_minus_b41_focal_six": float(focal[f"{experiment_label}_combined"] - focal["b41_combined"]),
         "per_target": per_target,
-        "paired_b42_minus_b37_bootstrap": compare_runs(
+        f"paired_{experiment_label}_minus_b37_bootstrap": compare_runs(
             truth,
             b37_combined,
             combined_prediction,
             n_bootstrap=int(n_bootstrap),
             seed=int(settings.get("seed", 2026)) + B42_EVAL_BOOTSTRAP_B37_SEED_OFFSET,
         ),
-        "paired_b42_minus_b41_bootstrap": compare_runs(
+        f"paired_{experiment_label}_minus_b41_bootstrap": compare_runs(
             truth,
             b41_combined,
             combined_prediction,
             n_bootstrap=int(n_bootstrap),
             seed=int(settings.get("seed", 2026)) + B42_EVAL_BOOTSTRAP_B41_SEED_OFFSET,
         ),
-        "paired_b42_minus_base_bootstrap": compare_runs(
+        f"paired_{experiment_label}_minus_base_bootstrap": compare_runs(
             truth,
             base_prediction,
             combined_prediction,
@@ -438,6 +446,14 @@ def evaluate_b42(
             "encoder_sha256_final": payload.get("encoder_sha256_final"),
         },
         "metadata_repair": metadata_stats,
+        # Which weights produced these numbers. Without this the folder is just
+        # a set of Expert-58 scores with nothing saying what was scored.
+        "evaluated_endpoint": {
+            "label": experiment_label,
+            "experiment": payload.get("experiment"),
+            "version": payload.get("version"),
+            "converted_from": payload.get("converted_from"),
+        },
         "governance": (
             "B42 remains fixed at reference area 448^2, native 90% crop, isotropic "
             "constant-area resize, reflection padding only to stride 32, ragged-series "
@@ -449,8 +465,8 @@ def evaluate_b42(
     output_root = Path(out_root)
     output_root.mkdir(parents=True, exist_ok=True)
     for name, prediction in (
-        ("b42_global_rectangular", global_prediction),
-        ("b42_combined", combined_prediction),
+        (f"{experiment_label}_global_rectangular", global_prediction),
+        (f"{experiment_label}_combined", combined_prediction),
     ):
         frame = pd.DataFrame(prediction, columns=TARGETS)
         frame.insert(0, "StudyInstanceUID", uids)
