@@ -114,6 +114,37 @@ Full records: [`B46_GOLD_ANCHORED_CROSSFIT.md`](B46_GOLD_ANCHORED_CROSSFIT.md),
 [`B49_NATIVE_TILED_MULTISCALE_MIL.md`](B49_NATIVE_TILED_MULTISCALE_MIL.md),
 and [`B50_ADAPTED_HIERARCHY_RESULT.md`](B50_ADAPTED_HIERARCHY_RESULT.md).
 
+## B52: the model was never trained
+
+B52 changed the training regime and nothing else -- five encoder stages instead
+of one, augmentation on, six epochs with a completing cosine, and checkpoint
+selection on the held-out split. Geometry, the sparse-MIL head, the supervision
+policy, the label export and the Phase-9 base are all unchanged.
+
+On B50's gate, the identical 548 unseen-scanner studies:
+
+```text
+B50 frozen control          0.763117
+B50 adapted hierarchy       0.774336
+B52 best (epoch 5 of 6)     0.802666
+
+B52 - B50 frozen control   +0.039549
+```
+
+B50's adapted hierarchy was worth `+0.011219` and required a matched-arm
+experiment to establish. Training the model is worth 3.5 times that.
+
+The frozen contract every experiment since B37 inherited gave the encoder a
+learning rate of exactly zero, disabled all nine augmentations, and stopped
+after 3,120 optimiser steps at batch size 2. **Eight architecture experiments
+were measured through that floor.** Their negative results say less about their
+mechanisms than was recorded at the time.
+
+B52's number is a selection statistic on report-derived labels and is not
+comparable to `0.714`. It is not a submission candidate: 1,447 training studies,
+where the submission loader requires 4,349. Full record:
+[`B52_COMPETITION_FULL_FINETUNE_RESULT.md`](B52_COMPETITION_FULL_FINETUNE_RESULT.md).
+
 ## What the B37–B49 sequence now says
 
 The B37-B45 line has reached a plateau rather than a missing-small-hyperparameter problem.
