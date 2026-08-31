@@ -100,13 +100,16 @@ cat > "$OUT/run.sh" <<'RUN'
 #
 #   DATA_ROOT=/path/to/rsna-knee-abnormality-detection ./run.sh [epochs] [extra flags]
 #
-# The full-data 8-epoch run this bundle is meant for:
-#   DATA_ROOT=... ./run.sh 8 --all-data --no-gradient-checkpointing
+# The full-data run this bundle is meant for:
+#   DATA_ROOT=... ./run.sh 6 --all-data
+#
+# --no-gradient-checkpointing is faster but needs about 15 GiB. It OOMs on a
+# 16 GiB card at this geometry. Try it only on a larger GPU, and preflight it.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 : "${DATA_ROOT:?set DATA_ROOT to the folder holding train.csv and train_series.csv}"
-EPOCHS="${1:-8}"
+EPOCHS="${1:-6}"
 
 test -f "$DATA_ROOT/train.csv" || { echo "no train.csv under $DATA_ROOT"; exit 1; }
 test -f "$DATA_ROOT/train_series.csv" || { echo "no train_series.csv under $DATA_ROOT"; exit 1; }
@@ -137,14 +140,19 @@ pip install "numpy>=1.26" "pandas>=2.0" "scikit-learn>=1.3" "pydicom>=2.4" \
 
 ./verify.sh                      # checksums, then a real import and load
 
-DATA_ROOT=/path/to/rsna-knee-abnormality-detection \
-  ./run.sh 8 --all-data --no-gradient-checkpointing
+DATA_ROOT=/path/to/rsna-knee-abnormality-detection ./run.sh 6 --all-data
 ```
 
 `--all-data` trains on every split except the unseen-scanner validation
-surface: roughly 3,800 studies instead of the gate's 1,447.
-`--no-gradient-checkpointing` is identical maths and faster; the run peaks
-near 1.4 GiB, so the memory checkpointing saves is not needed.
+surface: 3,801 studies rather than the gate's 1,447, scored on the same 548.
+
+Six epochs, not more: on 1,447 studies the peak was epoch 5 of 6 and epoch 6
+fell back, so the schedule shape is worth reproducing rather than extending.
+
+**Do not add `--no-gradient-checkpointing` without preflighting it.** It is
+identical maths and roughly 30% faster, but it retains every encoder
+activation and needs about 15 GiB at this geometry -- it OOMs on a 16 GiB
+card. Worth trying only on a larger GPU.
 
 Run `verify.sh` first. It re-checks every fingerprint and actually loads the
 base checkpoint and imports the package, so a truncated copy fails in seconds
@@ -153,7 +161,7 @@ rather than two hours into training.
 ## Preflight before committing a long run
 
 ```bash
-DATA_ROOT=/path/to/data ./run.sh 8 --all-data --no-gradient-checkpointing --preflight-only
+DATA_ROOT=/path/to/data ./run.sh 6 --all-data --preflight-only
 ```
 
 One forward and backward pass. It fails loudly if no gradient reaches the
