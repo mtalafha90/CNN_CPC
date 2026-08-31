@@ -137,6 +137,20 @@ Everything B52 needs except the competition data folder.
 ```bash
 pip install "numpy>=1.26" "pandas>=2.0" "scikit-learn>=1.3" "pydicom>=2.4" \
             "PyYAML>=6.0" "torch>=2.2" "torchvision>=0.17"
+```
+
+**On a Blackwell card (RTX 50-series), install torch from the CUDA 12.8 index
+instead.** Blackwell is compute capability 12.0, and a wheel built for an older
+CUDA carries no kernels for it -- the failure is `no kernel image is available
+for execution on the device`, at the first forward pass rather than at import.
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+
+python -c "import torch; print(torch.__version__, torch.cuda.get_device_name(0), torch.cuda.get_device_capability(0))"
+```
+
+The capability must print for your card before you spend a night on a run.
 
 ./verify.sh                      # checksums, then a real import and load
 
@@ -166,6 +180,24 @@ DATA_ROOT=/path/to/data ./run.sh 6 --all-data --preflight-only
 
 One forward and backward pass. It fails loudly if no gradient reaches the
 encoder, and prints peak memory.
+
+## Feeding a fast GPU
+
+`num_workers: 0` in the config means DICOM decoding and all nine augmentations
+run on the main thread, between GPU steps. That was chosen for operational
+safety in Kaggle submission, where a worker crash loses the run.
+
+On a fast card the GPU then waits for the CPU. If an epoch is slower than the
+card suggests it should be, raise it in `config/b42_constant_area_aspect_sparse.yaml`:
+
+```yaml
+num_workers: 6
+prefetch_factor: 2
+```
+
+This changes no maths -- the loader is seeded through `worker_init_fn`, and the
+B42 geometry contract does not cover worker count. Preflight after changing it:
+each worker is a separate process under `spawn` and costs host RAM.
 
 ## What is in here
 
