@@ -102,6 +102,12 @@ from .b48_global_conditioned_sparse_training import (
 )
 from .b50_adapted_hierarchy_mil import B50AdaptedHierarchySparseMILResidual
 from .b50_adapted_hierarchy_training import load_b50_selection_gate
+from .b50_ordered_slice_selection_split import (
+    B50_SPLIT_EXCLUDED,
+    B50_SPLIT_SEEN,
+    B50_SPLIT_TRAIN,
+    B50_SPLIT_UNSEEN,
+)
 from .constants import TARGETS
 from .data import backfill_series_metadata, load_series_csv
 from .encoder_finetune import MAX_TRAINABLE_STAGES
@@ -122,8 +128,15 @@ B52_DEFAULT_HIERARCHY_LR_SCALE = 0.05
 B52_INHERITED_EPOCHS = 2
 B52_INHERITED_ENCODER_STAGES = 1
 
-B52_PRIMARY_SPLIT = "validation_unseen_scanners"
-B52_TRAIN_SPLIT = "train"
+B52_PRIMARY_SPLIT = B50_SPLIT_UNSEEN
+B52_TRAIN_SPLIT = B50_SPLIT_TRAIN
+
+# The gate's `train` rows alone are about a third of the report-only population.
+# For a competition run every row that is not the validation surface is training
+# data: the seen-scanner comparator and the rows B48/B49 spent were withheld to
+# keep a *selection* surface clean, and selection here happens only on unseen
+# scanners. Nothing that validates B52 is trained on.
+B52_FULL_TRAIN_SPLITS = (B50_SPLIT_TRAIN, B50_SPLIT_SEEN, B50_SPLIT_EXCLUDED)
 B52_SEED = 2026
 B52_CONSTRUCTION_SEED_OFFSET = 11
 B52_LOADER_SEED_OFFSET = 29
@@ -182,7 +195,9 @@ def b52_parameter_groups(
     return groups
 
 
-def select_train_and_validation(all_uids: list, domain_rows) -> tuple:
+def select_train_and_validation(
+    all_uids: list, domain_rows, train_splits: tuple = (B52_TRAIN_SPLIT,)
+) -> tuple:
     """Split the report-only surface into training and unseen-scanner validation.
 
     `_indices_for_split` returns a NumPy array and already refuses an empty
@@ -190,7 +205,16 @@ def select_train_and_validation(all_uids: list, domain_rows) -> tuple:
     no study appears on both sides. A leak there would raise the validation
     score and silently corrupt every checkpoint choice made from it.
     """
-    train_indices = _indices_for_split(all_uids, domain_rows, B52_TRAIN_SPLIT)
+    names = tuple(train_splits or (B52_TRAIN_SPLIT,))
+    if B52_PRIMARY_SPLIT in names:
+        raise ValueError(
+            f"{B52_PRIMARY_SPLIT} is the validation surface and cannot also train"
+        )
+    train_indices = np.unique(
+        np.concatenate(
+            [_indices_for_split(all_uids, domain_rows, name) for name in names]
+        )
+    )
     valid_indices = _indices_for_split(all_uids, domain_rows, B52_PRIMARY_SPLIT)
 
     train_uids = [all_uids[int(index)] for index in train_indices]
@@ -291,6 +315,8 @@ def train_b52(
     encoder_lr_scale: float = B52_DEFAULT_ENCODER_LR_SCALE,
     hierarchy_lr_scale: float = B52_DEFAULT_HIERARCHY_LR_SCALE,
     augment: bool = True,
+    train_splits: tuple = (B52_TRAIN_SPLIT,),
+    gradient_checkpointing: bool = True,
     seed: int = B52_SEED,
     out_root: str | Path = B52_RUN_ROOT,
     preflight_only: bool = False,
@@ -353,7 +379,12 @@ def train_b52(
     )
 
     train_indices, valid_indices, train_uids, valid_uids = select_train_and_validation(
-        all_uids, domain_rows
+        all_uids, domain_rows, tuple(train_splits)
+    )
+    print(
+        f"[B52] training on {len(train_uids)} studies from {list(train_splits)}; "
+        f"validating on {len(valid_uids)} from {B52_PRIMARY_SPLIT}",
+        flush=True,
     )
 
     train_targets, train_weights = all_targets[train_indices], all_weights[train_indices]
@@ -415,6 +446,10 @@ def train_b52(
         encoder_chunk_size=int(settings["b37_encoder_chunk_size"]),
         adapt_hierarchy=True,
     ).to(runtime.device)
+    # Checkpointing recomputes the encoder forward during backward to save
+    # memory. With five stages this run peaks near 1.4 GiB of a 16 GiB card, so
+    # the memory it buys is not needed and the recompute is pure time.
+    model.gradient_checkpointing = bool(gradient_checkpointing)
     model.train()
 
     trainable = model.trainable_parameter_summary()
@@ -547,6 +582,8 @@ def train_b52(
                 "encoder_lr_scale": float(encoder_lr_scale),
                 "hierarchy_lr_scale": float(hierarchy_lr_scale),
                 "augmentation_enabled": bool(augment),
+                "train_splits": list(train_splits),
+                "gradient_checkpointing": bool(gradient_checkpointing),
                 "head_lr": head_lr,
                 "changed_from_frozen_contract": {
                     "epochs": [B52_INHERITED_EPOCHS, int(epochs)],
@@ -619,6 +656,17 @@ def main() -> None:
     parser.add_argument("--encoder-lr-scale", type=float, default=B52_DEFAULT_ENCODER_LR_SCALE)
     parser.add_argument("--hierarchy-lr-scale", type=float, default=B52_DEFAULT_HIERARCHY_LR_SCALE)
     parser.add_argument("--no-augment", action="store_true")
+    parser.add_argument(
+        "--all-data", action="store_true",
+        help=(
+            "train on every split except the unseen-scanner validation surface "
+            f"({', '.join(B52_FULL_TRAIN_SPLITS)}) instead of the gate's train rows alone"
+        ),
+    )
+    parser.add_argument(
+        "--no-gradient-checkpointing", action="store_true",
+        help="faster, uses more GPU memory; identical maths",
+    )
     parser.add_argument("--seed", type=int, default=B52_SEED)
     parser.add_argument("--out-root", default=B52_RUN_ROOT)
     parser.add_argument("--preflight-only", action="store_true")
@@ -636,6 +684,8 @@ def main() -> None:
         encoder_lr_scale=args.encoder_lr_scale,
         hierarchy_lr_scale=args.hierarchy_lr_scale,
         augment=not args.no_augment,
+        train_splits=B52_FULL_TRAIN_SPLITS if args.all_data else (B52_TRAIN_SPLIT,),
+        gradient_checkpointing=not args.no_gradient_checkpointing,
         seed=args.seed,
         out_root=args.out_root,
         preflight_only=args.preflight_only,
@@ -648,6 +698,7 @@ if __name__ == "__main__":
 
 __all__ = [
     "B52_EXPERIMENT",
+    "B52_FULL_TRAIN_SPLITS",
     "B52_RUN_ROOT",
     "B52_VERSION",
     "b52_parameter_groups",

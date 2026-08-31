@@ -248,3 +248,97 @@ def test_an_empty_split_is_refused_upstream():
     rows = _rows([("a", "train"), ("b", "train")])
     with pytest.raises(RuntimeError, match="missing or zero report-only UIDs"):
         select_train_and_validation(["a", "b"], rows)
+
+
+# --- training on all the data ----------------------------------------------
+
+
+def test_all_data_trains_on_everything_except_the_validation_surface():
+    from rsna_knee.b52_competition_training import (
+        B52_FULL_TRAIN_SPLITS,
+        B52_PRIMARY_SPLIT,
+        select_train_and_validation,
+    )
+
+    uids = ["a", "b", "c", "d"]
+    rows = _rows(
+        [
+            ("a", "train"),
+            ("b", "validation_seen_scanners"),
+            ("c", "excluded_prior_surface"),
+            ("d", "validation_unseen_scanners"),
+        ]
+    )
+    _ti, _vi, train_uids, valid_uids = select_train_and_validation(
+        uids, rows, B52_FULL_TRAIN_SPLITS
+    )
+    assert sorted(train_uids) == ["a", "b", "c"], "everything but the validation surface"
+    assert valid_uids == ["d"]
+    assert B52_PRIMARY_SPLIT not in B52_FULL_TRAIN_SPLITS
+
+
+def test_the_validation_surface_can_never_be_trained_on():
+    """The one mistake that would make the selection number meaningless."""
+    from rsna_knee.b52_competition_training import (
+        B52_PRIMARY_SPLIT,
+        select_train_and_validation,
+    )
+
+    rows = _rows([("a", "train"), ("d", "validation_unseen_scanners")])
+    with pytest.raises(ValueError, match="cannot also train"):
+        select_train_and_validation(["a", "d"], rows, ("train", B52_PRIMARY_SPLIT))
+
+
+def test_the_default_is_still_the_gate_train_rows_alone():
+    """The completed 6-epoch run must stay reproducible as it was."""
+    import inspect  # noqa: PLC0415
+
+    from rsna_knee.b52_competition_training import (
+        B52_TRAIN_SPLIT,
+        select_train_and_validation,
+        train_b52,
+    )
+
+    assert inspect.signature(select_train_and_validation).parameters[
+        "train_splits"
+    ].default == (B52_TRAIN_SPLIT,)
+    assert inspect.signature(train_b52).parameters["train_splits"].default == (
+        B52_TRAIN_SPLIT,
+    )
+
+
+# --- gradient checkpointing -------------------------------------------------
+
+
+def test_checkpointing_stays_on_for_every_model_that_predates_the_flag():
+    """Absent attribute must mean the old behaviour, or past runs change."""
+    import inspect  # noqa: PLC0415
+
+    from rsna_knee.b42_constant_area_aspect_sparse_mil import (
+        B42ConstantAreaAspectSparseMILResidual,
+    )
+
+    source = inspect.getsource(B42ConstantAreaAspectSparseMILResidual)
+    assert 'getattr(self, "gradient_checkpointing", True)' in source, (
+        "the default must be True so models built before the flag are unchanged"
+    )
+
+
+def test_the_flag_can_turn_checkpointing_off():
+    class _Fake:
+        training = True
+        encoder_trainable_stages = 5
+
+    fake = _Fake()
+    assert bool(
+        fake.training
+        and fake.encoder_trainable_stages > 0
+        and getattr(fake, "gradient_checkpointing", True)
+    ), "absent attribute keeps checkpointing on"
+
+    fake.gradient_checkpointing = False
+    assert not bool(
+        fake.training
+        and fake.encoder_trainable_stages > 0
+        and getattr(fake, "gradient_checkpointing", True)
+    )

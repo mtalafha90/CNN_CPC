@@ -305,7 +305,15 @@ class B42ConstantAreaAspectSparseMILResidual(B37HighResSparseMILResidual):
         if h % B42_STRIDE_ALIGNMENT or w % B42_STRIDE_ALIGNMENT:
             raise ValueError("B42 rectangular inputs must be stride aligned")
         global_blocks, spatial_blocks = [], []
-        use_checkpoint = bool(self.training and self.encoder_trainable_stages > 0)
+        # `gradient_checkpointing` defaults to True when absent, so every model
+        # built before this attribute existed behaves exactly as it did. B52 turns
+        # it off: it trades speed for memory, and with five encoder stages the run
+        # peaks near 1.4 GiB of a 16 GiB card, so the trade is the wrong way round.
+        use_checkpoint = bool(
+            self.training
+            and self.encoder_trainable_stages > 0
+            and getattr(self, "gradient_checkpointing", True)
+        )
         for chunk in group.split(self.encoder_chunk_size, dim=0):
             if use_checkpoint:
                 global_feature, spatial = checkpoint(
