@@ -152,6 +152,9 @@ python -c "import torch; print(torch.__version__, torch.cuda.get_device_name(0),
 
 The capability must print for your card before you spend a night on a run.
 
+## Check the bundle, then train
+
+```bash
 ./verify.sh                      # checksums, then a real import and load
 
 DATA_ROOT=/path/to/rsna-knee-abnormality-detection ./run.sh 6 --all-data
