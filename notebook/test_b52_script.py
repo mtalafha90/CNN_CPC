@@ -499,3 +499,73 @@ def test_max_studies_copies_rather_than_edits_the_export(module, tiny_dataset, t
     import pandas as pd
 
     assert len(pd.read_csv(trimmed)) == 2
+
+
+# --- the augmentation presets ----------------------------------------------
+
+
+def test_the_b53_preset_matches_the_frozen_config(module):
+    """A subset run is only a rehearsal if it uses the same strengths.
+
+    The values are read from config/b42_constant_area_aspect_sparse.yaml, which
+    is what B53 reads, so the two cannot drift apart silently.
+    """
+    import yaml
+
+    config = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / "config" / "b42_constant_area_aspect_sparse.yaml")
+        .read_text(encoding="utf-8")
+    )
+    preset = module.AUGMENT_PRESETS["b53"]
+
+    for field, key in (
+        ("rotation_deg", "b7_rotation_deg"),
+        ("translate_frac", "b7_translate_frac"),
+        ("scale_jitter", "b7_scale_jitter"),
+        ("gamma_jitter", "b7_gamma_jitter"),
+        ("noise_std", "b7_noise_std"),
+        ("slice_dropout", "b7_slice_dropout"),
+        ("bias_field_strength", "b7_bias_field_strength"),
+    ):
+        assert getattr(preset, field) == pytest.approx(float(config[key])), (
+            f"{field} does not match {key} in the frozen config"
+        )
+
+
+def test_the_notebook_preset_is_the_default(module):
+    """Adding a preset must not silently change what an existing command does."""
+    arguments = module.build_argument_parser().parse_args(
+        ["--data-root", "d", "--labels", "l", "--out", "o"]
+    )
+    assert arguments.augment_preset == "notebook"
+    assert module.AUGMENT_PRESETS["notebook"] is module.AUGMENTATION
+
+
+def test_the_presets_really_differ(module):
+    """If they were the same, --augment-preset would be a decoration."""
+    notebook = module.asdict(module.AUGMENT_PRESETS["notebook"])
+    b53 = module.asdict(module.AUGMENT_PRESETS["b53"])
+    differing = [key for key in notebook if notebook[key] != b53[key]]
+    assert len(differing) >= 5, f"only {differing} differ"
+    assert all(b53[key] <= notebook[key] for key in b53), (
+        "B53's settings are the milder ones on every axis"
+    )
+
+
+def test_an_unknown_preset_is_refused(module):
+    with pytest.raises(SystemExit):
+        module.build_argument_parser().parse_args(
+            ["--data-root", "d", "--labels", "l", "--out", "o", "--augment-preset", "wild"]
+        )
+
+
+def test_the_results_record_which_preset_ran(module, tiny_dataset, tmp_path):
+    """A folder of results that cannot say how it was augmented is hard to read."""
+    data_root, labels = tiny_dataset
+    out = tmp_path / "preset"
+    module.run_b52(
+        _arguments(module, data_root, labels, out, "--epochs", "1", "--augment-preset", "b53")
+    )
+    settings = json.loads((out / "config.json").read_text())
+    assert settings["augmentation_preset"] == "b53"
+    assert settings["augmentation"]["rotation_deg"] == pytest.approx(5.0)

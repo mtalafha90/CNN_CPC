@@ -265,6 +265,28 @@ APPENDIX = '''
 # turns that run into files on disk.
 
 
+# The augmentation the real B53 run uses, taken from
+# config/b42_constant_area_aspect_sparse.yaml rather than chosen here. It is
+# milder than this notebook's own defaults on every geometric setting, so a
+# subset run with --augment-preset b53 is a rehearsal for the full-data run
+# rather than a differently-tuned experiment.
+B53_AUGMENTATION = AugmentationPolicy(
+    rotation_deg=5.0,
+    translate_frac=0.03,
+    scale_jitter=0.05,
+    gamma_jitter=0.12,
+    noise_std=0.02,
+    slice_dropout=0.08,
+    bias_field_strength=0.08,
+)
+
+AUGMENT_PRESETS = {
+    "notebook": AUGMENTATION,
+    "b53": B53_AUGMENTATION,
+    "off": NO_AUGMENTATION,
+}
+
+
 def resolve_paths(data_root: Path, out_dir: Path) -> DrivePaths:
     """Point the inherited path bundle at a plain folder rather than at Drive."""
     data_root = Path(data_root).expanduser().resolve()
@@ -573,7 +595,7 @@ def run_b52(arguments: argparse.Namespace) -> Path:
         image_size=int(arguments.image_size),
         slices_per_series=int(arguments.slices_per_series),
     )
-    policy = NO_AUGMENTATION if arguments.no_augment else AUGMENTATION
+    policy = NO_AUGMENTATION if arguments.no_augment else AUGMENT_PRESETS[arguments.augment_preset]
 
     print("=" * 74)
     print("B52: building the run")
@@ -585,6 +607,7 @@ def run_b52(arguments: argparse.Namespace) -> Path:
             {
                 "config": asdict(config),
                 "augmentation": asdict(policy),
+                "augmentation_preset": "off" if arguments.no_augment else arguments.augment_preset,
                 "augmentations_on": describe_augmentation(policy),
                 "data_root": str(paths.data_root),
                 "labels": str(labels_path),
@@ -700,6 +723,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-augment", action="store_true",
         help="turn augmentation off -- this removes one of B52's three changes",
+    )
+    parser.add_argument(
+        "--augment-preset", choices=sorted(AUGMENT_PRESETS), default="notebook",
+        help=(
+            "which augmentation strengths to use. 'b53' takes them from the "
+            "frozen config, so a subset run rehearses the full-data B53 run; "
+            "'notebook' is this file's own, stronger, defaults"
+        ),
     )
     parser.add_argument(
         "--test-root", default=None,

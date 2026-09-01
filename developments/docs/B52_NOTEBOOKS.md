@@ -44,6 +44,35 @@ export rather than trimming it), and `--image-size` / `--slices-per-series`,
 which make a trial run cheap and are the geometry every experiment otherwise
 holds fixed at 448 and 32.
 
+### Running a subset on a machine that has no full dataset
+
+This script is the only one of the three that can. The `developments/` trainers
+read the B50 gate, which fingerprints the `train.csv` it was built from and
+refuses anything else, and they expect all 4,349 report-only studies. This
+script takes whatever studies are in front of it, splits them itself, and needs
+no gate.
+
+**Its augmentation has always worked.** The bug B53 fixes is in the
+`developments/` trainer, where the flag sets fields `B42ConstantAreaAspectDataset`
+never reads. This script carries its own `augment_series`, which is tested and
+mutation-verified to change the image.
+
+`--augment-preset` chooses the strengths:
+
+```text
+notebook   the default: this file's own, stronger settings
+b53        the values from config/b42_constant_area_aspect_sparse.yaml,
+           which is what the real B53 run uses
+off        equivalent to --no-augment
+```
+
+A subset run with `--augment-preset b53` is a rehearsal for the full-data B53
+run rather than a differently-tuned experiment. A test compares the preset
+against the config file, so the two cannot drift apart.
+
+Its absolute numbers still mean nothing — different studies, a random rather
+than scanner-grouped split, and a model built from scratch.
+
 ### What the transform removes, and why
 
 A notebook cell mixes definitions with the lines that run them; in a script
