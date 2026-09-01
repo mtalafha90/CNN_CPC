@@ -138,6 +138,21 @@ def test_the_notebook_is_current(cells):
         assert "".join(cell["source"]) == text, f"cell {index} is stale; rebuild the notebook"
 
 
+def test_the_colab_badge_opens_this_notebook(cells):
+    """The badge is inherited, and inherited it names the base notebook.
+
+    Pressing "Open In Colab" on GitHub would then load the old B37 notebook
+    while looking exactly like this one had opened. It is invisible in a diff
+    and obvious only to whoever runs it.
+    """
+    badge = cells[0][1]
+    assert "colab-badge" in badge, "the first cell is no longer the Colab badge"
+    assert NOTEBOOK.name in badge, (
+        f"the badge does not open {NOTEBOOK.name}; it points at: {badge}"
+    )
+    assert "/blob/main/" in badge, "the badge points at a branch other than main"
+
+
 def test_every_code_cell_parses(cells):
     import ast  # noqa: PLC0415
 

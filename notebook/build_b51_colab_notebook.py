@@ -79,6 +79,19 @@ def insert_cells(marker: str, new_cells: list) -> None:
 
 
 # --- what this notebook is -------------------------------------------------
+#
+# The badge is the first thing in the file and the first thing a reader clicks.
+# Inherited unchanged it names the base notebook, so opening this file on GitHub
+# and pressing "Open In Colab" silently loads the old B37 notebook instead --
+# which looks like this notebook failing to be itself.
+
+replace_cell(
+    0,
+    "markdown",
+    """
+<a href="https://colab.research.google.com/github/mtalafha90/CNN_CPC/blob/main/notebook/b51_adapted_hierarchy_colab.ipynb" target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/></a>
+""",
+)
 
 replace_cell(
     1,
