@@ -96,6 +96,35 @@ def _load_replica(
     return model, payload
 
 
+def _b42_endpoint_manifest(payload: dict) -> dict:
+    """What the manifest says about *which endpoint* produced the predictions.
+
+    Split out from the manifest body because it is the only part that describes
+    B42's own frozen run rather than this execution. A sibling launcher
+    submitting a different endpoint supplies its own, so it cannot inherit
+    claims that are untrue of it -- `fixed_endpoint` and B42's completed-epoch
+    and training-population counts above all. Writing those unchanged into
+    another endpoint's manifest would put a false provenance record beside a
+    real submission, which is worse than having no manifest at all.
+    """
+    return {
+        "experiment": B42_SUBMISSION_EXPERIMENT,
+        "version": B42_VERSION,
+        "fixed_endpoint": True,
+        "completed_epochs": int(payload.get("completed_epochs", -1)),
+        "training_studies": int(payload.get("training_studies", -1)),
+        "training_series": int(payload.get("training_series", -1)),
+        "training_supervision_cells": int(payload.get("training_supervision_cells", -1)),
+        "prediction": "frozen B42 combined sparse-MIL logits; raw sigmoid probability",
+        "governance": (
+            "Exact frozen B42 fixed-E2 endpoint. Do not change checkpoint, reference "
+            "area 448^2, 90% native crop, native-aspect constant-area resize, reflection "
+            "stride padding, ragged encoding, offsets [-1,0,1], sparse-MIL, thresholds "
+            "or blending after Expert-58."
+        ),
+    }
+
+
 def _infer_shard(
     *,
     rank: int,
@@ -219,8 +248,18 @@ def generate_b42_submission_dual_gpu_fast(
     base_checkpoint: str | Path,
     out_path: str | Path = "submission.csv",
     expected_checkpoint_sha256: str = B42_FROZEN_CHECKPOINT_SHA256,
+    load_replica=_load_replica,
+    endpoint_manifest=_b42_endpoint_manifest,
 ) -> Path:
-    """Generate the exact frozen B42 hidden-test submission on two Kaggle T4s."""
+    """Generate the exact frozen B42 hidden-test submission on two Kaggle T4s.
+
+    `load_replica` and `endpoint_manifest` exist so a sibling launcher can submit
+    a different endpoint through this exact inference loop rather than copying
+    it. Both default to B42's own, so a call that passes neither behaves exactly
+    as it did before they existed. Everything they do not cover -- the geometry,
+    the sharding, the TTA offsets, the aggregation, the runtime guard and the
+    validation -- is shared code and cannot diverge between endpoints.
+    """
     settings = dict(config)
     root = Path(data_root).resolve()
     settings["data_root"] = str(root)
@@ -253,8 +292,8 @@ def generate_b42_submission_dual_gpu_fast(
 
     # Load replicas sequentially so checkpoint deserialization does not compete
     # for host RAM. Both replicas are reconstructed and fingerprint-verified.
-    model0, payload0 = _load_replica(checkpoint_path, base_path, torch.device("cuda:0"))
-    model1, payload1 = _load_replica(checkpoint_path, base_path, torch.device("cuda:1"))
+    model0, payload0 = load_replica(checkpoint_path, base_path, torch.device("cuda:0"))
+    model1, payload1 = load_replica(checkpoint_path, base_path, torch.device("cuda:1"))
     if payload0.get("encoder_sha256_final") != payload1.get("encoder_sha256_final"):
         raise RuntimeError("B42 dual-GPU replicas do not share the same encoder endpoint")
 
@@ -354,8 +393,7 @@ def generate_b42_submission_dual_gpu_fast(
     base_checkpoint_sha256 = sha256_file(base_path)
     elapsed_hours = (time.monotonic() - global_started) / 3600.0
     manifest = {
-        "experiment": B42_SUBMISSION_EXPERIMENT,
-        "version": B42_VERSION,
+        **endpoint_manifest(payload0),
         "execution_version": B42_FAST_EXECUTION_VERSION,
         "execution_only_change": True,
         "gpu_count": B42_DUALGPU_COUNT,
@@ -368,14 +406,10 @@ def generate_b42_submission_dual_gpu_fast(
         "checkpoint_base_sha256_verified": (
             base_checkpoint_sha256 == str(payload0.get("base_checkpoint_sha256", ""))
         ),
-        "fixed_endpoint": True,
-        "completed_epochs": int(payload0.get("completed_epochs", -1)),
-        "training_studies": int(payload0.get("training_studies", -1)),
-        "training_series": int(payload0.get("training_series", -1)),
-        "training_supervision_cells": int(payload0.get("training_supervision_cells", -1)),
+        # Leakage hygiene, not endpoint identity: true of every endpoint this
+        # path may submit, so it stays here rather than moving with the rest.
         "gold_studies_used_in_gradient": int(payload0.get("gold_studies_used_in_gradient", -1)),
         "gold_labels_used": bool(payload0.get("gold_labels_used", True)),
-        "prediction": "frozen B42 combined sparse-MIL logits; raw sigmoid probability",
         "thresholding_used": False,
         "blending_used": False,
         "preprocessing": b42_preprocessing_state(),
@@ -414,12 +448,6 @@ def generate_b42_submission_dual_gpu_fast(
             "resize and reflection stride-pad operation remains a separate historical "
             "view; encoder chunk remains 4."
         ),
-        "governance": (
-            "Exact frozen B42 fixed-E2 endpoint. Do not change checkpoint, reference "
-            "area 448^2, 90% native crop, native-aspect constant-area resize, reflection "
-            "stride padding, ragged encoding, offsets [-1,0,1], sparse-MIL, thresholds "
-            "or blending after Expert-58."
-        ),
         **sample_validation,
     }
     manifest_path = output_path.with_suffix(output_path.suffix + ".manifest.json")
@@ -437,6 +465,7 @@ def generate_b42_submission_dual_gpu_fast(
 
 
 __all__ = [
+    "B42_DUALGPU_COUNT",
     "B42_FAST_ENCODER_CHUNK_SIZE",
     "B42_FAST_EXECUTION_VERSION",
     "B42_FROZEN_CHECKPOINT_SHA256",
