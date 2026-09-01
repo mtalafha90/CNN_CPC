@@ -208,32 +208,46 @@ submit it to the competition.
 
 ## If a hidden run throws an exception you cannot see
 
-The first B51 hidden submission did exactly that. Kaggle shows only "Notebook
-Threw Exception" for a code competition, because the log would leak the hidden
-data. The commit run had passed on the three visible studies moments before, so
-the code was identical and only the data differed.
+This has now happened three times: B39, B41 and B51 each passed their visible
+three-study notebook and then hit `Notebook Threw Exception` on the hidden
+rerun, with no traceback exposed. The same code passed and failed on different
+data, so the cause is data or scale.
 
-The frozen path has four places where one bad study ends the whole run:
+B39 and B41 were diagnosed in `B39_B41_HIDDEN_SAFE_STREAMING.md` and given a
+hidden-safe execution contract. **That contract never reached B42's path**,
+which is what B51 and B52 run on. It does now. Three switches, all defaulting to
+B42's frozen behaviour and all turned on for B51 and B52:
 
 ```text
-a study whose series all have an unrecognised plane   ValueError, before inference
-a series directory that cannot be found               FileNotFoundError, strict_dicom
-a series that cannot be decoded                       the decoder's exception, strict_dicom
-a study whose probabilities come out non-finite       RuntimeError
+stream_views=True       one TTA view at a time, not [3, K, 32, 3, H, W] for the
+                        whole study. At 14 series -- the maximum in the data --
+                        that is about 3.2 GiB against roughly 0.6, and two shards
+                        run at once. Host arenas are trimmed after each study.
+
+abort_on_budget=False   the runtime projection becomes telemetry. It is
+                        mean(last five) x remaining x 1.35, so one slow early
+                        study in a 650-study shard can forecast past the budget
+                        and raise -- turning a conservative estimate into the
+                        exception it exists to prevent.
+
+on_unreadable=fallback  a study that cannot be read gets 0.5 for all twelve
+                        targets and the run carries on; a single unreadable
+                        series is dropped and the rest of the study still
+                        predicts. An out-of-memory study is retried once with an
+                        empty cache first.
 ```
 
-None of them can fire on three clean studies. Across roughly 7,000 hidden
-series, at least one is close to certain.
+Streaming changes when memory is held, not what the model sees.
+`normalized_view_b42` is asserted bit-identical to the audited normalize-once
+helper with `torch.equal`, and the wiring around it -- series order, positions,
+per-series metadata, the three offsets -- is compared against that helper too.
 
-Both sibling launchers now default to `on_unreadable="fallback"`: a study that
-cannot be read gets `0.5` for all twelve targets and the run carries on, and an
-out-of-memory study is retried once with an empty cache before being given up.
-Every such study is counted and named in the manifest:
+Every guessed row is counted and named in the manifest:
 
 ```json
-"on_unreadable": "fallback",
+"hidden_safe_execution": {"tta_materialization": "one complete study view at a time",
+                          "runtime_projection": "telemetry_only_no_exception"},
 "studies_predicted_from_fallback": 3,
-"studies_predicted_from_fallback_fraction": 0.0023,
 "fallback_studies": [{"index": 417, "study_uid": "...", "error": "..."}]
 ```
 
@@ -241,8 +255,8 @@ Every such study is counted and named in the manifest:
 1,300 costs almost nothing. Hundreds means something systemic went wrong -- most
 likely the data path -- and the score is meaningless rather than disappointing.
 
-B42's own launcher keeps `on_unreadable="raise"` as its default, because its
-`0.714` hidden run was made under it and must stay reproducible.
+B42's own launcher keeps all three frozen defaults, because its `0.714` hidden
+run was made under them and must stay reproducible.
 
 ## After the score appears
 

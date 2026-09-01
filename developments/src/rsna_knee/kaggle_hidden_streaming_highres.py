@@ -145,6 +145,50 @@ def normalized_view_b41(
     return image, torch.from_numpy(position)
 
 
+def normalized_view_b42(
+    normalized: np.ndarray,
+    *,
+    gap: int,
+    center_offset: int,
+    crop_fraction: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build one exact B42 constant-area rectangular view from normalized native data.
+
+    Transcribed from the loop body of `preprocess_three_offsets_b42_normalize_once`
+    so that the streamed view is the same tensor the audited helper produces, not
+    an equivalent one. `test_kaggle_hidden_streaming_highres.py` asserts that with
+    `torch.equal` rather than a tolerance.
+
+    Unlike the B39 and B41 views this one is **rectangular and ragged**: constant
+    pixel area, native aspect, stride-padded to a multiple of 32. Two series in
+    the same study can therefore have different shapes, which is why B42 cannot
+    use `build_streamed_view` and streams into a list instead of a preallocated
+    [K,32,3,448,448] block.
+    """
+    # Local, so a B39/B41-only Kaggle artifact need not carry B42's modules.
+    from .b37_highres_sparse_mil import _native_center_crop
+    from .b42_constant_area_aspect_sparse_mil import resize_triplets_constant_area
+
+    gap = int(gap)
+    if gap < 1:
+        raise ValueError("B42 streaming 2.5D gap must be positive")
+    centers, position = b35_centers(
+        len(normalized),
+        gap=gap,
+        center_offset=int(center_offset),
+    )
+    triplet_offsets = np.asarray([-gap, 0, gap], dtype=np.int64)
+    index = np.clip(
+        centers[:, None] + triplet_offsets[None, :],
+        0,
+        len(normalized) - 1,
+    )
+    triplets = normalized[index].astype(np.float32, copy=False)
+    cropped = _native_center_crop(triplets, float(crop_fraction))
+    image = resize_triplets_constant_area(cropped)
+    return image, torch.from_numpy(position)
+
+
 def load_normalized_study(
     reader,
     *,
@@ -362,6 +406,7 @@ def infer_streaming_shard(
 
 __all__ = [
     "build_streamed_view",
+    "normalized_view_b42",
     "infer_streaming_shard",
     "load_normalized_study",
     "normalized_view_b39",

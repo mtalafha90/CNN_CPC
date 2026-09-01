@@ -46,6 +46,12 @@ from .b42_kaggle_fast_preprocess import (
 )
 from .constants import TARGETS
 from .data import backfill_series_metadata, load_series_csv, load_test_csv
+from .dicom import _normalise_volume, find_series_dir
+from .kaggle_hidden_streaming_highres import (
+    normalized_view_b42,
+    process_rss_gib,
+    trim_host_memory,
+)
 from .runtime import resolve_runtime
 
 B42_FROZEN_CHECKPOINT_SHA256 = (
@@ -191,6 +197,102 @@ def _infer_one_study(index: int, dataset, model, device: torch.device):
     return result
 
 
+
+def _read_normalized_series(reader, uid: str, records: list[dict]):
+    """Decode and normalise each native series once, keeping only the small arrays.
+
+    This is the half of the hidden-safe contract that matters for host RAM. The
+    fast dataset returns `[3, 32, 3, H, W]` per series -- roughly 230 MiB at the
+    448-squared reference area -- so a 14-series study materialises about 3.2 GiB
+    of resized views, and two shards run at once. The normalised native volume is
+    an order of magnitude smaller, and one view is built from it at a time.
+
+    A series that cannot be read is dropped rather than ending the study. The
+    model takes a variable-length series list, so a study with one unreadable
+    series out of six is still a real prediction from the other five.
+    """
+    normalized: list[np.ndarray] = []
+    kept: list[dict] = []
+    dropped: list[dict] = []
+    for record in records:
+        series_uid = str(record["series_uid"])
+        path = find_series_dir(reader.config.data_root, reader.config.split, str(uid), series_uid)
+        if path is None:
+            dropped.append({"series_uid": series_uid, "error": "series directory not found"})
+            continue
+        try:
+            raw = reader._read_volume(path, str(record["plane"]).lower())
+            normalized.append(np.asarray(_normalise_volume(raw), dtype=np.float32))
+            kept.append(record)
+            del raw
+        except Exception as error:  # noqa: BLE001
+            dropped.append({
+                "series_uid": series_uid,
+                "error": f"{type(error).__name__}: {error}",
+            })
+    return normalized, kept, dropped
+
+
+def _infer_one_study_streamed(
+    uid: str,
+    records: list[dict],
+    reader,
+    model,
+    device: torch.device,
+    *,
+    gap: int,
+    crop_fraction: float,
+):
+    """One study, one TTA view materialised at a time. Same tensors, less memory.
+
+    `normalized_view_b42` is bit-identical to the audited normalize-once helper --
+    `test_kaggle_hidden_streaming_highres.py` asserts that with `torch.equal` --
+    so this changes when memory is held, not what the model is shown.
+    """
+    normalized_series, kept, dropped = _read_normalized_series(reader, uid, records)
+    if not normalized_series:
+        raise RuntimeError(f"B42 study {uid} has no readable MRI series")
+
+    present = torch.ones(len(kept), dtype=torch.float32).to(device)
+    series_meta = torch.tensor(
+        [[int(r["plane_id"]), int(r["fluid_id"]), int(r["fat_id"])] for r in kept],
+        dtype=torch.long,
+    ).to(device)
+
+    view_probabilities: list[torch.Tensor] = []
+    shapes: list[tuple[int, int]] = []
+    for view_index, center_offset in enumerate(B42_SUBMISSION_TTA_OFFSETS):
+        volumes, positions = [], []
+        for normalized in normalized_series:
+            image, position = normalized_view_b42(
+                normalized, gap=int(gap), center_offset=int(center_offset),
+                crop_fraction=float(crop_fraction),
+            )
+            if image.ndim != 4:
+                raise RuntimeError(
+                    f"B42 streamed view shape changed for {uid}: {tuple(image.shape)}"
+                )
+            if view_index == 0:
+                shapes.append((int(image.shape[-2]), int(image.shape[-1])))
+            # Straight to the device, so the host never holds the whole view.
+            volumes.append(image.to(device, non_blocking=True))
+            positions.append(position)
+            del image
+        position_tensor = torch.stack(positions).to(device, non_blocking=True)
+        with torch.autocast(device_type=device.type, dtype=torch.float16):
+            output = model(volumes, present, series_meta, position_tensor)
+        view_probabilities.append(torch.sigmoid(output.logits.float()).cpu())
+        del volumes, positions, position_tensor, output
+
+    probability = torch.stack(view_probabilities, dim=0).mean(dim=0)
+    if probability.shape != (1, len(TARGETS)) or not torch.isfinite(probability).all():
+        raise RuntimeError(f"B42 study {uid} produced invalid probabilities")
+
+    result = (str(uid), probability.numpy()[0], shapes, dropped)
+    del normalized_series, present, series_meta, view_probabilities, probability
+    return result
+
+
 def _infer_shard(
     *,
     rank: int,
@@ -204,13 +306,31 @@ def _infer_shard(
     on_unreadable: str = ON_UNREADABLE_RAISE,
     fallback_probability: float = DEFAULT_FALLBACK_PROBABILITY,
     device: torch.device | None = None,
+    stream_views: bool = False,
+    abort_on_budget: bool = True,
+    variable_index: dict | None = None,
+    gap: int = 1,
+    crop_fraction: float = 0.90,
 ) -> tuple[list[tuple[int, str, np.ndarray, list[tuple[int, int]]]], list[dict]]:
     """Infer complete ragged studies on one fixed CUDA device.
 
-    `on_unreadable="raise"` is the frozen behaviour: any study that cannot be
-    read ends the whole run. `on_unreadable="fallback"` gives that one study a
-    constant prediction and carries on, which is what a hidden run needs -- one
-    unreadable study out of 1,300 should not destroy the other 1,299.
+    Three switches, all defaulting to the frozen B42 behaviour byte for byte.
+
+    `on_unreadable="fallback"` gives an unreadable study a constant prediction
+    instead of ending the run -- one bad study out of 1,300 should not destroy
+    the other 1,299.
+
+    `stream_views=True` materialises one TTA view at a time from the normalised
+    native arrays instead of holding `[3, K, 32, 3, H, W]` for the whole study.
+    At 14 series that is about 3.2 GiB against roughly 0.6, and two shards run at
+    once. This is the host-memory half of the hidden-safe contract B39 and B41
+    already use.
+
+    `abort_on_budget=False` makes the runtime projection telemetry. The
+    projection is the mean of the last five studies times the remaining count
+    times 1.35, so a single slow early study can put a 650-study shard over the
+    budget and raise -- turning a conservative forecast into the very exception
+    it exists to prevent. B39 and B41 removed it for exactly that reason.
     """
     if on_unreadable not in ON_UNREADABLE_MODES:
         raise ValueError(f"on_unreadable must be one of {ON_UNREADABLE_MODES}")
@@ -237,19 +357,44 @@ def _infer_shard(
                     - elapsed
                 )
                 if projected > available:
-                    raise RuntimeError(
+                    message = (
                         f"B42 dual-GPU shard {rank} cannot finish inside the runtime "
                         f"budget: projected={projected/60.0:.1f} min "
                         f"available={available/60.0:.1f} min"
                     )
+                    if abort_on_budget:
+                        raise RuntimeError(message)
+                    print(f"[B42 dual submit gpu{rank}] WARNING {message}", flush=True)
 
             started = time.monotonic()
+
+            def _one_study(index=index):
+                if not stream_views:
+                    return _infer_one_study(index, dataset, model, device)
+                study_uid = str(uids[index]) if uids is not None else None
+                if study_uid is None or variable_index is None:
+                    raise RuntimeError("streaming requires uids and variable_index")
+                records = variable_index.get(study_uid, [])
+                if not records:
+                    raise RuntimeError(f"B42 study {study_uid} has no eligible MRI series")
+                study_uid, probability, shapes, dropped = _infer_one_study_streamed(
+                    study_uid, records, dataset, model, device,
+                    gap=int(gap), crop_fraction=float(crop_fraction),
+                )
+                if dropped:
+                    print(
+                        f"[B42 dual submit gpu{rank}] {study_uid}: dropped "
+                        f"{len(dropped)}/{len(records)} unreadable series",
+                        flush=True,
+                    )
+                return study_uid, probability, shapes
+
             if on_unreadable == ON_UNREADABLE_RAISE:
-                uid, probability, shapes = _infer_one_study(index, dataset, model, device)
+                uid, probability, shapes = _one_study()
                 rows.append((int(index), uid, probability, shapes))
             else:
                 try:
-                    uid, probability, shapes = _infer_one_study(index, dataset, model, device)
+                    uid, probability, shapes = _one_study()
                 except torch.OutOfMemoryError as first:
                     # Memory, not data. The cache is deliberately kept warm between
                     # studies, so an unusually large study can fail where it would
@@ -262,7 +407,7 @@ def _infer_shard(
                     if device.type == "cuda":
                         torch.cuda.empty_cache()
                     try:
-                        uid, probability, shapes = _infer_one_study(index, dataset, model, device)
+                        uid, probability, shapes = _one_study()
                     except Exception as second:  # noqa: BLE001
                         uid, probability, shapes = None, None, None
                         error = second
@@ -289,9 +434,13 @@ def _infer_shard(
                     )
                 rows.append((int(index), uid, probability, shapes))
 
-            # Do not call gc.collect() or torch.cuda.empty_cache() here. Normal
-            # reference counting releases tensors while CUDA allocator blocks stay
-            # available for the next study, changing allocation overhead only.
+            # Do not call torch.cuda.empty_cache() here. Normal reference counting
+            # releases tensors while CUDA allocator blocks stay available for the
+            # next study, changing allocation overhead only. Host arenas are a
+            # different matter: glibc does not return them on its own, and a
+            # 14-series study is where a hidden run runs out of RAM.
+            if stream_views:
+                trim_host_memory()
             durations.append(time.monotonic() - started)
 
             completed = local_position + 1
@@ -301,10 +450,12 @@ def _infer_shard(
                     remaining_studies=len(indices) - completed,
                     safety_factor=B42_TIMING_SAFETY_FACTOR,
                 )
+                rss, rss_peak = process_rss_gib()
                 print(
                     f"[B42 dual submit gpu{rank}] {completed}/{len(indices)} "
                     f"shard elapsed={sum(durations)/60.0:.1f} min "
-                    f"estimated_remaining={remaining/60.0:.1f} min",
+                    f"estimated_remaining={remaining/60.0:.1f} min "
+                    f"rss={rss:.2f}GiB rss_peak={rss_peak:.2f}GiB",
                     flush=True,
                 )
 
@@ -323,6 +474,8 @@ def generate_b42_submission_dual_gpu_fast(
     endpoint_manifest=_b42_endpoint_manifest,
     on_unreadable: str = ON_UNREADABLE_RAISE,
     fallback_probability: float = DEFAULT_FALLBACK_PROBABILITY,
+    stream_views: bool = False,
+    abort_on_budget: bool = True,
 ) -> Path:
     """Generate the exact frozen B42 hidden-test submission on two Kaggle T4s.
 
@@ -349,7 +502,9 @@ def generate_b42_submission_dual_gpu_fast(
     print(runtime.describe(), flush=True)
     print(
         f"[B42 dual submit] using cuda:0 + cuda:1; exact TTA offsets="
-        f"{list(B42_SUBMISSION_TTA_OFFSETS)}",
+        f"{list(B42_SUBMISSION_TTA_OFFSETS)}; "
+        f"view streaming={stream_views}; "
+        f"runtime guard={'abort' if abort_on_budget else 'telemetry only'}",
         flush=True,
     )
 
@@ -435,6 +590,11 @@ def generate_b42_submission_dual_gpu_fast(
                 uids=uids,
                 on_unreadable=on_unreadable,
                 fallback_probability=fallback_probability,
+                stream_views=stream_views,
+                abort_on_budget=abort_on_budget,
+                variable_index=variable_index,
+                gap=int(dataset_config.triplet_gap),
+                crop_fraction=float(crop_policy["crop_fraction"]),
             )
             for rank in range(B42_DUALGPU_COUNT)
         ]
@@ -507,6 +667,19 @@ def generate_b42_submission_dual_gpu_fast(
         # How many rows the model did not actually produce. A submission that had
         # to guess for some studies is still a submission, but the number of them
         # is the first thing anyone reading the score needs to know.
+        "hidden_safe_execution": {
+            "tta_materialization": (
+                "one complete study view at a time" if stream_views
+                else "all three TTA views held for the whole study"
+            ),
+            "all_tta_study_tensor_materialized": not stream_views,
+            "native_volume_normalizations_per_series": 1,
+            "host_trim_after_each_study": bool(stream_views),
+            "runtime_projection": (
+                "abort_on_exceeding_budget" if abort_on_budget else "telemetry_only_no_exception"
+            ),
+            "strict_dicom": on_unreadable == ON_UNREADABLE_RAISE,
+        },
         "on_unreadable": on_unreadable,
         "fallback_probability": float(fallback_probability),
         "studies_predicted_from_fallback": len(failures),
@@ -563,8 +736,9 @@ def generate_b42_submission_dual_gpu_fast(
     print(manifest_path, flush=True)
     print(json.dumps(manifest, indent=2), flush=True)
     print(
-        "[B42 fast submit] normalize_once=True execution_chunk=4 "
-        "dual_gpu=True cuda_cache_reuse=True",
+        f"[B42 fast submit] normalize_once=True execution_chunk=4 dual_gpu=True "
+        f"cuda_cache_reuse=True stream_views={stream_views} "
+        f"abort_on_budget={abort_on_budget}",
         flush=True,
     )
     if failures:

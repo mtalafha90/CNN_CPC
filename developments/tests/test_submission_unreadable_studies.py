@@ -214,3 +214,92 @@ def test_a_study_that_is_out_of_memory_twice_falls_back():
     assert len(failures) == 1
     assert "OutOfMemoryError" in failures[0]["error"]
     assert np.allclose(rows[0][2], DEFAULT_FALLBACK_PROBABILITY)
+
+
+# --- the two hidden-scale risks B39 and B41 already had fixed ---------------
+#
+# Both were diagnosed after B39 and B41 passed their visible three-study
+# notebooks and then hit "Notebook Threw Exception" on the hidden rerun, with no
+# traceback exposed. Neither fix had ever reached B42's path, which is what B51
+# and B52 run on.
+
+
+def test_the_runtime_projection_can_be_telemetry_instead_of_an_exception():
+    """One slow early study must not turn a forecast into the crash it predicts.
+
+    The projection is mean(last five) x remaining x 1.35, compared against what
+    is left of the budget. In a real 650-study shard a first study at 40 s
+    forecasts 9.7 hours and raises about a minute in, on a run that would have
+    finished. Here the same branch is reached by shrinking the budget instead of
+    lengthening the studies: 30 studies at 20 ms forecast roughly 0.8 s against a
+    budget of 0.36 s.
+    """
+    class _Slow(_Dataset):
+        def __getitem__(self, index):
+            import time as _time  # noqa: PLC0415
+
+            _time.sleep(0.02)
+            return super().__getitem__(index)
+
+    many = list(range(30))
+    tiny_budget = dict(max_hours=0.0001, reserve_minutes=0.0)  # 0.36 seconds
+
+    with pytest.raises(RuntimeError, match="cannot finish inside the runtime budget"):
+        _infer_shard(
+            rank=0, indices=many, model=_Model(), dataset=_Slow(30),
+            global_started=0.0, device=CPU, abort_on_budget=True, **tiny_budget,
+        )
+
+    rows, failures = _infer_shard(
+        rank=0, indices=many, model=_Model(), dataset=_Slow(30),
+        global_started=0.0, device=CPU, abort_on_budget=False, **tiny_budget,
+    )
+    assert len(rows) == 30, "telemetry mode must complete the shard"
+    assert failures == [], "an over-budget forecast is not a failed study"
+
+
+def test_abort_on_budget_defaults_to_the_frozen_behaviour():
+    import inspect  # noqa: PLC0415
+
+    assert inspect.signature(_infer_shard).parameters["abort_on_budget"].default is True
+    assert inspect.signature(_infer_shard).parameters["stream_views"].default is False
+
+
+def test_the_sibling_launchers_turn_the_hidden_safe_contract_on():
+    """B42 keeps the frozen defaults; B51 and B52 must not inherit them."""
+    import inspect  # noqa: PLC0415
+
+    from rsna_knee.b42_constant_area_aspect_sparse_submission_dualgpu_fast import (
+        generate_b42_submission_dual_gpu_fast,
+    )
+    from rsna_knee.b51_submission_dualgpu_fast import generate_b51_submission_dual_gpu_fast
+    from rsna_knee.b52_competition_submission_dualgpu_fast import (
+        generate_b52_submission_dual_gpu_fast,
+    )
+
+    frozen = inspect.signature(generate_b42_submission_dual_gpu_fast).parameters
+    assert frozen["stream_views"].default is False
+    assert frozen["abort_on_budget"].default is True
+    assert frozen["on_unreadable"].default == ON_UNREADABLE_RAISE
+
+    for launcher in (
+        generate_b51_submission_dual_gpu_fast,
+        generate_b52_submission_dual_gpu_fast,
+    ):
+        parameters = inspect.signature(launcher).parameters
+        assert parameters["stream_views"].default is True, launcher.__name__
+        assert parameters["abort_on_budget"].default is False, launcher.__name__
+        assert parameters["on_unreadable"].default == ON_UNREADABLE_FALLBACK, launcher.__name__
+
+
+def test_streaming_needs_the_index_it_streams_from():
+    """A silent wrong answer is the failure mode worth refusing here."""
+    dataset = _Dataset(2)
+    rows, failures = _infer_shard(
+        rank=0, indices=[0, 1], model=_Model(), dataset=dataset,
+        global_started=0.0, max_hours=8.25, reserve_minutes=30.0,
+        device=CPU, stream_views=True, uids=["a", "b"], variable_index=None,
+        on_unreadable=ON_UNREADABLE_FALLBACK,
+    )
+    assert len(failures) == 2
+    assert all("variable_index" in record["error"] for record in failures)

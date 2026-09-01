@@ -96,6 +96,8 @@ def generate_b51_submission_dual_gpu_fast(
     out_path: str | Path = "submission.csv",
     on_unreadable: str = ON_UNREADABLE_FALLBACK,
     fallback_probability: float = DEFAULT_FALLBACK_PROBABILITY,
+    stream_views: bool = True,
+    abort_on_budget: bool = False,
 ) -> Path:
     """Run B42's dual-T4 path against the declared B51 checkpoint.
 
@@ -131,6 +133,8 @@ def generate_b51_submission_dual_gpu_fast(
         expected_checkpoint_sha256=expected_checkpoint_sha256,
         on_unreadable=on_unreadable,
         fallback_probability=fallback_probability,
+        stream_views=stream_views,
+        abort_on_budget=abort_on_budget,
     )
 
 
