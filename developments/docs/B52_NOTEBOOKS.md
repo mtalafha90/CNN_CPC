@@ -1,9 +1,8 @@
-# The two B52 notebooks
-
-There are two, because one file cannot do both jobs.
+# The three B52 deliverables
 
 ```text
 notebook/b52_colab_subset.ipynb   Colab, a Google Drive subset, self-contained
+notebook/b52_standalone.py        the same run as one script, no notebook needed
 notebook/b52_local_full.ipynb     a local machine, the full dataset, real code
 ```
 
@@ -11,14 +10,83 @@ Each is generated from a builder and must be rebuilt after any edit to it:
 
 ```bash
 python notebook/build_b52_colab_subset_notebook.py
+python notebook/build_b52_script.py
 python notebook/build_b52_local_notebook.py
 python -m pytest notebook/ -q
 ```
 
-A test in each suite compares every cell of the checked-in notebook against its
-builder, so a forgotten rebuild fails rather than shipping quietly.
+A test in each suite compares the checked-in file against its builder, so a
+forgotten rebuild fails rather than shipping quietly.
 
-## Why two, and not one
+## `b52_standalone.py` — run it once, get every result
+
+The script and the Colab notebook are the same code. The script is generated
+from the notebook's cells, so a fix to the augmentation or the split lands in
+both and neither can drift.
+
+```bash
+python b52_standalone.py \
+    --data-root /path/to/data \
+    --labels training_targets.csv \
+    --out b52_results \
+    --epochs 6
+```
+
+One run writes eleven files: `config.json`, `labels_summary.json`,
+`history.json` and `history.csv`, `per_target_auc.csv`,
+`holdout_predictions.csv`, `gold_predictions.csv`, `loss_curve.png`,
+`auc_curve.png`, `best_model.pt` and `summary.txt`. With `--test-root` it also
+writes `test_predictions.csv`.
+
+Useful flags: `--preflight-only` (one forward and backward pass, then stop),
+`--max-studies N` (a quick trial on the first N labelled studies — it copies the
+export rather than trimming it), and `--image-size` / `--slices-per-series`,
+which make a trial run cheap and are the geometry every experiment otherwise
+holds fixed at 448 and 32.
+
+### What the transform removes, and why
+
+A notebook cell mixes definitions with the lines that run them; in a script
+those lines would fire on import. So only definitions and a named list of
+constants survive, and a `main()` runs everything once, in order. Colab-only
+code — mounting Drive, unzipping archives, the `pip install` cell — goes, since
+a script is handed paths.
+
+Five inherited definitions are dropped by name because each one runs, looks
+right, and is not B52:
+
+```text
+build_experiment          trains on the 58 expert-gold studies
+run_epoch                 ignores confidence, so it trains on report silence
+masked_bce_with_logits    the unweighted loss, not B52's
+run_preflight             checks gradient flow with the wrong loss
+evaluate_predictions      truncates soft report labels; see below
+```
+
+In a notebook they at least sit under headings that say what they are. In a flat
+file they would be one call away from anything.
+
+Comments are preserved: the transform slices the original source text rather
+than regenerating it from a syntax tree, because the comments are most of what
+makes the inherited code readable.
+
+### The soft-label scoring bug
+
+`evaluate_predictions` turns a target into a class with `.astype(int)`. That is
+right for the expert studies, whose labels really are `0` or `1`, and wrong for
+report labels, where a positive is `0.97` and a negated is `0.03` — **both
+truncate to `0`**. Every target then looks one-class, every AUC comes back
+undefined, and no epoch can be chosen; the run would train for hours and raise
+at the very end.
+
+`evaluate_weak_predictions` replaces it, taking the truth to be "above 0.5",
+which is what the real pipeline does. It works unchanged on hard `0`/`1` labels,
+so one function scores both surfaces. Its rank-based AUC gives tied predictions a
+shared rank and is checked against scikit-learn on random data with many ties.
+
+The bug was found by the end-to-end test, not by reading.
+
+## Why the subset and the full run cannot share one file
 
 The real trainer refuses to run on a subset, on purpose:
 
@@ -82,6 +150,14 @@ fair estimate of anything else.
 Nothing from B48, B50 or B51's comparison sections is carried over. A test
 asserts they are gone, including the inherited gold-only build cell, which would
 otherwise still run and still train on the 58 expert studies without saying so.
+
+**B37 is gone entirely.** The base notebook carried a live `B37Reference`
+dataclass, a function that displayed it, and a `save_results` that wrote
+`b37_reference.json` beside every run. B37's `0.714` is a leaderboard score from
+a different model on the full population, and a subset run saving it alongside
+its own numbers invites exactly the comparison that means nothing. A
+`B52Reference` replaces it, recording what B52 actually measured, and a test
+fails on the string `B37` appearing anywhere in the generated script.
 
 ### `b52_local_full.ipynb`
 

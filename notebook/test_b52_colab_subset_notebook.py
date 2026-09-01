@@ -34,6 +34,7 @@ def cells() -> list[tuple[str, str]]:
 
 WANTED = (
     "def load_report_labels",
+    "def evaluate_weak_predictions",
     "def target_balance_multipliers",
     "class AugmentationPolicy",
     "def split_report_studies",
@@ -748,3 +749,108 @@ def test_a_rarely_mentioned_target_gets_a_larger_multiplier(namespace):
     confidence[:, 0] = 0.1  # this target is rarely written about
     multiplier = namespace["target_balance_multipliers"](confidence)
     assert multiplier[0] > multiplier[1]
+
+
+# --- scoring a soft label ---------------------------------------------------
+
+
+def _twelve(values: list):
+    """One column per finding, all carrying the same pattern.
+
+    The scorer averages over all twelve targets, so a single-column array would
+    raise. Repeating one pattern keeps each test about one thing.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    column = np.asarray(values, dtype=np.float32)[:, None]
+    return np.repeat(column, len(FAKE_TARGETS), axis=1)
+
+
+def test_a_soft_report_label_is_scored_at_the_half_way_mark(namespace):
+    """The bug this function exists to fix, pinned.
+
+    Report labels are 0.97 for positive and 0.03 for negated. Turning a target
+    into a class with `.astype(int)` sends both to 0, so every target looks
+    one-class, every AUC comes back undefined, and no epoch can be chosen. The
+    run then trains for hours and raises at the very end.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    target = _twelve([0.97, 0.03, 0.97, 0.03])
+    probability = _twelve([0.9, 0.1, 0.8, 0.2])
+
+    scores = namespace["evaluate_weak_predictions"](target, probability)
+    assert scores["mean_auc"] == pytest.approx(1.0), (
+        "a perfectly ranked soft-labelled target must score 1.0"
+    )
+    assert scores["targets_defined"] == len(FAKE_TARGETS)
+
+    assert set(np.unique(target.astype(int))) == {0}, (
+        "this is what the inherited scorer sees: every label becomes 0"
+    )
+
+
+def test_the_same_scorer_still_works_on_hard_gold_labels(namespace):
+    """One function scores both surfaces, so they cannot drift apart."""
+    scores = namespace["evaluate_weak_predictions"](
+        _twelve([1.0, 0.0, 1.0, 0.0]), _twelve([0.9, 0.1, 0.8, 0.2])
+    )
+    assert scores["mean_auc"] == pytest.approx(1.0)
+
+
+def test_a_reversed_ranking_scores_zero(namespace):
+    """A scorer that ignored its input would pass the perfect-ranking test."""
+    scores = namespace["evaluate_weak_predictions"](
+        _twelve([0.97, 0.03, 0.97, 0.03]), _twelve([0.1, 0.9, 0.2, 0.8])
+    )
+    assert scores["mean_auc"] == pytest.approx(0.0)
+
+
+def test_tied_predictions_score_one_half(namespace):
+    """Identical predictions must not be counted as if the model had ordered them."""
+    scores = namespace["evaluate_weak_predictions"](
+        _twelve([0.97, 0.03, 0.97, 0.03]), _twelve([0.5, 0.5, 0.5, 0.5])
+    )
+    assert scores["mean_auc"] == pytest.approx(0.5)
+
+
+def test_a_one_class_target_is_undefined_rather_than_an_error(namespace):
+    """A hold-out split with one class is a fact about the split, not a bug."""
+    scores = namespace["evaluate_weak_predictions"](
+        _twelve([0.97, 0.97]), _twelve([0.9, 0.1])
+    )
+    assert scores["mean_auc"] is None
+    assert scores["targets_defined"] == 0
+    assert scores["per_target_auc"][FAKE_TARGETS[0]] is None
+
+
+def test_an_unmentioned_cell_is_excluded_from_the_score(namespace):
+    """Report silence must not be scored any more than it is trained on."""
+    import numpy as np  # noqa: PLC0415
+
+    scores = namespace["evaluate_weak_predictions"](
+        _twelve([0.97, np.nan, 0.03]), _twelve([0.9, 0.5, 0.1])
+    )
+    assert scores["known_cells"] == 2 * len(FAKE_TARGETS)
+    assert scores["mean_auc"] == pytest.approx(1.0)
+
+
+def test_it_agrees_with_scikit_learn_on_random_data(namespace):
+    """The implementation is hand-rolled, so it is checked against a reference."""
+    sklearn_metrics = pytest.importorskip("sklearn.metrics")
+    import numpy as np  # noqa: PLC0415
+
+    generator = np.random.default_rng(2026)
+    for _trial in range(20):
+        truth = generator.integers(0, 2, size=40)
+        if truth.sum() in (0, len(truth)):
+            continue
+        # Coarse scores on purpose, so ties are common.
+        score = generator.integers(0, 5, size=40).astype(np.float32) / 4.0
+
+        ours = namespace["evaluate_weak_predictions"](
+            _twelve(np.where(truth == 1, 0.97, 0.03)), _twelve(score)
+        )["mean_auc"]
+        assert ours == pytest.approx(
+            float(sklearn_metrics.roc_auc_score(truth, score)), abs=1e-9
+        )

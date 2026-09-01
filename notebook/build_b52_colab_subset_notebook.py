@@ -78,6 +78,92 @@ def insert_cells(marker: str, new_cells: list) -> None:
     CELLS[index:index] = [(kind, text.strip("\n")) for kind, text in new_cells]
 
 
+def substitute(marker: str, old: str, new: str) -> None:
+    """Patch one phrase inside an inherited cell, and refuse a silent no-op.
+
+    Used to pull the last B37 references out of cells that are otherwise wanted
+    as they are. Asserting the phrase was found means a change to the base
+    builder fails here rather than leaving a stale reference behind.
+    """
+    index = find_cell(marker)
+    kind, text = CELLS[index]
+    if old not in text:
+        raise RuntimeError(f"cell {index} no longer contains {old!r}")
+    CELLS[index] = (kind, text.replace(old, new))
+
+
+# --- take B37 out of the notebook entirely ---------------------------------
+#
+# The base notebook carries a live B37Reference dataclass, a function that
+# displays it, and a save_results that writes b37_reference.json beside every
+# run. None of it belongs in a B52 notebook: B37's 0.714 is a leaderboard score
+# from a different model on the full population, and a subset run saving it
+# alongside its own numbers invites exactly the comparison that is meaningless.
+
+replace_cell(
+    find_cell("class B37Reference"),
+    "code",
+    '''
+@dataclass(frozen=True)
+class B52Reference:
+    """What B52 has actually measured, recorded so a run can be read against it.
+
+    These are the real runs, on the real data. They are here to give this
+    notebook's numbers some context, and not to be compared with them: this
+    notebook trains a fresh compact model on a subset.
+    """
+
+    # Name the regime this notebook reproduces.
+    experiment: str = "B52 competition full fine-tune"
+    # Record what B52 changed, since that is the whole experiment.
+    changed: str = "encoder trains, augmentation on, cosine completes, best epoch kept"
+    # Record the frozen control B52 is measured against.
+    frozen_control_macro_auc: float = 0.763117
+    # Record B52 on the gate's training rows, 1,447 studies.
+    gate_split_macro_auc: float = 0.802666
+    # Record B52 on the full training population, 3,801 studies.
+    all_data_macro_auc: float = 0.834998
+    # State the surface all three were measured on.
+    evaluation: str = "548 unseen-scanner studies, report-derived labels"
+    # State plainly what kind of number these are.
+    caveat: str = "selection statistics: the best of several epochs on the surface used to pick the epoch"
+    # Explain why this notebook's own numbers are not comparable.
+    scope: str = "Reference only; this notebook trains fresh compact subset weights."
+
+
+# Create the immutable reference used by the saved-result functions.
+B52_REFERENCE = B52Reference()
+
+
+def describe_b52_reference() -> pd.DataFrame:
+    """Show what B52 measured, before this notebook trains anything of its own."""
+    table = pd.DataFrame([asdict(B52_REFERENCE)]).T.rename(columns={0: "value"})
+    display(table)
+    return table
+
+
+# Show the context before data loading and model construction.
+B52_REFERENCE_TABLE = describe_b52_reference()
+''',
+)
+
+substitute("def save_results", '"b37_reference": asdict(B37_REFERENCE),', '"b52_reference": asdict(B52_REFERENCE),')
+substitute(
+    "def save_results",
+    "# Save the immutable B37 reference separately so it cannot be mistaken for a subset result.\n"
+    '    (run_root / "b37_reference.json").write_text(\n'
+    "        json.dumps(asdict(B37_REFERENCE), indent=2),",
+    "# Save the reference separately so it cannot be mistaken for a subset result.\n"
+    '    (run_root / "b52_reference.json").write_text(\n'
+    "        json.dumps(asdict(B52_REFERENCE), indent=2),",
+)
+substitute(
+    "class RunConfig",
+    "# Run B37's fixed two-epoch duration by default; this is not a B37 reproduction.",
+    "# Two epochs is the inherited default and is the thing B52 replaces; see section 16.",
+)
+
+
 # --- what this notebook is -------------------------------------------------
 #
 # The badge is the first thing in the file and the first thing a reader clicks.
@@ -460,8 +546,8 @@ gamma_jitter   = ... if train else 0.0
 bias_field     = ... if train else 0.0
 ```
 
-So every model since B37 saw each study in exactly the same way, every epoch. On
-a few thousand studies that is a direct invitation to memorise them.
+So every model in this line saw each study in exactly the same way, every epoch.
+On a few thousand studies that is a direct invitation to memorise them.
 
 Seven of the nine are reproduced below. Rotation, translation and scale are one
 affine warp; then gamma, noise, slice dropout and a smooth bias field.
@@ -689,6 +775,19 @@ which makes a report-labelled hold-out the better guide and the 58 expert studie
 the misleading one. The gold studies are still scored every epoch, but only as
 something to read; nothing is chosen from them.
 
+### Scoring a soft label
+
+One detail that is easy to get wrong and hard to notice. Report labels are soft:
+a positive is `0.97`, a negated is `0.03`. The inherited `evaluate_predictions`
+turns a target into a class with `.astype(int)`, which is right for the expert
+studies — their labels really are `0` or `1` — and wrong here, because `0.97`
+and `0.03` both truncate to `0`.
+
+Every target would then look one-class, every AUC would come back undefined, and
+no epoch could ever be chosen. So this section brings its own scorer, which
+takes the truth to be "above 0.5". That is what the real pipeline does, and it
+works unchanged on hard `0`/`1` labels, so one function scores both surfaces.
+
 **One honest gap.** The real B52 holds out whole scanner models, so the
 validation studies come from machines the model has never seen. This notebook
 splits at random, because a small Drive subset may not contain enough different
@@ -744,6 +843,61 @@ def build_cosine_schedule(optimizer, epochs: int):
     return torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=int(epochs), eta_min=0.0
     )
+
+
+def evaluate_weak_predictions(target: np.ndarray, probability: np.ndarray) -> dict:
+    """Macro AUC against report labels, where the truth is "above 0.5".
+
+    The inherited `evaluate_predictions` casts the target with `.astype(int)`.
+    That is right for the expert-gold studies, whose labels really are 0 or 1,
+    and quietly wrong here: a report label of `0.97` and one of `0.03` both
+    truncate to `0`, so every target looks one-class, every AUC comes back
+    undefined, and no epoch can ever be chosen.
+
+    Binarising at 0.5 is what the real pipeline does. It also works unchanged on
+    hard 0/1 labels, so this one function scores both surfaces.
+    """
+    per_target: dict = {}
+    for index, name in enumerate(TARGETS):
+        known = np.isfinite(target[:, index])
+        truth = (target[known, index] > 0.5).astype(int)
+        # An AUC needs one of each class. One-class is a fact about this split,
+        # not an error, so the target is reported as undefined rather than raising.
+        per_target[name] = (
+            fast_auc_or_none(truth, probability[known, index])
+            if known.any() and 0 < truth.sum() < len(truth) else None
+        )
+
+    defined = [value for value in per_target.values() if value is not None]
+    return {
+        "mean_auc": None if not defined else float(np.mean(defined)),
+        "per_target_auc": per_target,
+        "targets_defined": len(defined),
+        "known_cells": int(np.isfinite(target).sum()),
+    }
+
+
+def fast_auc_or_none(truth: np.ndarray, score: np.ndarray) -> float | None:
+    """Rank-based AUC for one target, or None when it is not defined."""
+    if len(truth) < 2 or truth.sum() in (0, len(truth)):
+        return None
+    order = np.argsort(score, kind="mergesort")
+    ranks = np.empty(len(score), dtype=np.float64)
+    ranks[order] = np.arange(1, len(score) + 1, dtype=np.float64)
+
+    # Tied scores must share a rank, or identical predictions would be counted
+    # as if the model had ordered them.
+    sorted_scores = score[order]
+    start = 0
+    for position in range(1, len(sorted_scores) + 1):
+        if position == len(sorted_scores) or sorted_scores[position] != sorted_scores[start]:
+            if position - start > 1:
+                ranks[order[start:position]] = ranks[order[start:position]].mean()
+            start = position
+
+    positives = float(truth.sum())
+    negatives = float(len(truth) - positives)
+    return float((ranks[truth == 1].sum() - positives * (positives + 1) / 2) / (positives * negatives))
 
 
 class BestEpoch:
@@ -1152,7 +1306,7 @@ def train_b52(run: B52Run) -> list[dict]:
         holdout = run_b52_epoch(
             experiment, experiment.validation_loader, run.supervision, training=False
         )
-        holdout_scores = evaluate_predictions(holdout["target"], holdout["probability"])
+        holdout_scores = evaluate_weak_predictions(holdout["target"], holdout["probability"])
 
         row = {
             "epoch": epoch,
@@ -1169,7 +1323,7 @@ def train_b52(run: B52Run) -> list[dict]:
             gold = run_b52_epoch(experiment, run.gold_loader, run.supervision, training=False)
             # Read only. Choosing on the 58 expert studies is exactly what
             # section 14 explains this notebook does not do.
-            row["gold_macro_auc"] = evaluate_predictions(
+            row["gold_macro_auc"] = evaluate_weak_predictions(
                 gold["target"], gold["probability"]
             )["mean_auc"]
 
