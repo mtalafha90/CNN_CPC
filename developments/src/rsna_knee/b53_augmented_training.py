@@ -125,6 +125,7 @@ from .b52_competition_training import (
 )
 from .constants import TARGETS
 from .data import backfill_series_metadata, load_series_csv
+from .dicom_coverage import require_dicom_coverage
 from .encoder_finetune import MAX_TRAINABLE_STAGES
 from .phase9_matched_supervision_training import load_phase9_checkpoint
 from .runtime import make_scaler, resolve_runtime
@@ -627,6 +628,23 @@ def train_b53(
     _train_summary, train_index = audit_variable_series_surface(series, train_uids)
     _valid_summary, valid_index = audit_variable_series_surface(series, valid_uids)
 
+    # A study whose DICOM folders are absent yields a zero placeholder for every
+    # series, and the model raises "B42 study has no readable MRI series" from
+    # inside the first epoch, naming neither the study nor the path. Checking
+    # here costs one stat call per series and turns twenty wasted minutes into a
+    # message that says which of the two causes it is.
+    coverage = {
+        "train": require_dicom_coverage(root, train_index, label="training surface"),
+        "validation": require_dicom_coverage(root, valid_index, label="validation surface"),
+    }
+    print(
+        f"[B53] DICOM coverage: {coverage['train']['series_found']}/"
+        f"{coverage['train']['series_total']} training series, "
+        f"{coverage['validation']['series_found']}/"
+        f"{coverage['validation']['series_total']} validation series",
+        flush=True,
+    )
+
     crop_policy = require_b42_contract(settings)
 
     # Both configs are built with train=False, and that is deliberate. The flag
@@ -831,6 +849,7 @@ def train_b53(
                 "supervision": supervision,
                 "series_policy_signature": B13_SERIES_SIGNATURE,
                 "metadata_repair": metadata_stats,
+                "dicom_coverage": coverage,
                 "domain_split_sha256": domain_meta["sha256"],
                 "config_sha256": _config_sha256(settings),
                 "source_sha256": {"training": sha256_file(Path(__file__))},
