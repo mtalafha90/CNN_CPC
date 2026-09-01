@@ -1,7 +1,6 @@
 # B52 — training the model, and what it was worth
 
-**Status:** first run complete on the B50 gate's `train` rows. Not a submission
-candidate. The full-data run is the follow-up.
+**Status:** both runs complete. Not a submission candidate.
 
 > **Correction, found after both runs.** B52 reports three changes. Only two of
 > them happened. `augment=True` sets fields on a `DatasetConfig` that
@@ -128,11 +127,53 @@ what the governance elsewhere in this archive forbids, for good reasons that do
 not apply to a leaderboard entry. B52 sits beside that line and takes nothing
 from it; every experiment recorded before it remains as it was.
 
+## The full-data run
+
+3,801 training studies, the same 548 unseen-scanner validation surface, seed
+2026, six epochs, 26.9 hours on an RTX A4500.
+
+```text
+epoch   train      validation   macro AUC    minutes
+  1     1.124810   1.075395     0.777063     269.1
+  2     1.054743   1.028828     0.815093     275.3
+  3     1.002861   1.049431     0.832568     260.3
+  4     0.965207   1.013574     0.828500     262.7
+  5     0.928085   1.010989     0.834998     263.2     <- selected
+  6     0.903380   1.015765     0.833541     283.2
+```
+
+```text
+B50 frozen control                     0.763117
+B50 adapted hierarchy                  0.774336
+B52, gate train rows, 1,447 studies    0.802666
+B52, --all-data, 3,801 studies         0.834998
+
+B52 all-data - frozen control         +0.071881
+B52 all-data - adapted hierarchy      +0.060662
+B52 all-data - B52 on 1,447 studies   +0.032332
+```
+
+### It flattened rather than turned over
+
+The 1,447-study run peaked at epoch 5 and **fell** to `0.794551` at six, a drop
+of `0.008`. This one peaked at epoch 5 and came back to `0.833541`, a drop of
+`0.0015`. The last four epochs span `0.0065` in total.
+
+That is a plateau, not an overfit turnover, and three signals agree on what it
+is: train loss kept falling the whole way (`-0.221` end to end), validation loss
+went flat after epoch 2, and validation AUC went flat with it. A model that
+keeps fitting the training data while the held-out score stops moving is
+memorising.
+
+More epochs at these settings would not help. **What this describes is exactly
+the condition augmentation addresses**, which is what B53 tests -- and this run
+had none, whatever its own log said. See the correction at the top.
+
 ## Next
 
 ```text
-1. full data, six epochs      ~3,800 studies instead of 1,447
-2. convert and submit         the only measurement that settles the question
+1. B53                        the same regime with augmentation actually applied
+2. convert and submit         no launcher pins a B52/B53 checkpoint yet
 3. only then, further levers  more slices, no checkpointing, ensembling
 ```
 

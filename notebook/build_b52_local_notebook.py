@@ -84,12 +84,11 @@ run                                  studies   validation   macro AUC
 B50 frozen control                     1,447          548     0.763117
 B50 adapted hierarchy                  1,447          548     0.774336
 B52, gate train split, 6 epochs        1,447          548     0.802666   (epoch 5)
-B52, --all-data, best of 5 so far      3,801          548     0.834998   (epoch 5)
+B52, --all-data, 6 epochs              3,801          548     0.834998   (epoch 5)
 ```
 
 All four rows are validated on the same 548 unseen-scanner studies, so they are
-directly comparable. The last row is from a run whose sixth epoch had not
-finished when this was written, so it is the best of five, not a final result.
+directly comparable. Both B52 runs are complete.
 
 **These are selection statistics.** Each is the best of several epochs on the
 surface used to pick the epoch, so each is optimistically biased by construction.
@@ -491,9 +490,12 @@ it should fit — preflight it and read the reported peak before committing.
 
 ### How many epochs
 
-Six is what both runs so far used. The 1,447-study run peaked at epoch 5 and
-fell back at 6; the full-data run had also peaked at 5 (`0.834998`) by the time
-this was written. Twelve is the next thing worth measuring, on the reasoning that
+Six is what both completed runs used, and on this data it is enough. The
+1,447-study run peaked at epoch 5 and fell `0.008` at six. The full-data run
+peaked at 5 and came back only `0.0015` at six, with its last four epochs
+spanning `0.0065` -- a plateau. Train loss kept falling while validation loss
+and AUC went flat, which is memorisation, not undertraining. More epochs are
+not the lever; augmentation is. Twelve was the next thing worth measuring on
 more training data supports a longer schedule — but it is a measurement, not a
 known result. Nothing in the archive establishes it.
 
