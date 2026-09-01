@@ -88,44 +88,61 @@ import torch
 payload = torch.load("models/phase9_llm_fill_base.pt", map_location="cpu", weights_only=False)
 print("base checkpoint loads; keys:", len(payload))
 from rsna_knee.b52_competition_training import train_b52  # noqa: F401
+from rsna_knee.b53_augmented_training import train_b53  # noqa: F401
 print("rsna_knee imports")
 PY
 echo "bundle OK"
 VERIFY
 chmod +x "$OUT/verify.sh"
 
-cat > "$OUT/run.sh" <<'RUN'
+# One launcher, parameterised by experiment. B52 and B53 take identical
+# arguments -- B53 is B52 with the augmentation actually applied -- so a second
+# hand-written script would only be a second thing to keep in step.
+write_runner() {
+  local name="$1" module="$2" extra_help="$3"
+  cat > "$OUT/run_${name}.sh" <<RUN
 #!/usr/bin/env bash
-# Train B52 from this bundle. The only thing not in here is the data folder.
+# Train ${name^^} from this bundle. The only thing not in here is the data folder.
 #
-#   DATA_ROOT=/path/to/rsna-knee-abnormality-detection ./run.sh [epochs] [extra flags]
+#   DATA_ROOT=/path/to/rsna-knee-abnormality-detection ./run_${name}.sh [epochs] [extra flags]
 #
 # The full-data run this bundle is meant for:
-#   DATA_ROOT=... ./run.sh 6 --all-data
+#   DATA_ROOT=... ./run_${name}.sh 6 --all-data
+#
+# ${extra_help}
 #
 # --no-gradient-checkpointing is faster but needs about 15 GiB. It OOMs on a
 # 16 GiB card at this geometry. Try it only on a larger GPU, and preflight it.
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "\$(dirname "\$0")"
 
-: "${DATA_ROOT:?set DATA_ROOT to the folder holding train.csv and train_series.csv}"
-EPOCHS="${1:-6}"
+: "\${DATA_ROOT:?set DATA_ROOT to the folder holding train.csv and train_series.csv}"
+EPOCHS="\${1:-6}"
 
-test -f "$DATA_ROOT/train.csv" || { echo "no train.csv under $DATA_ROOT"; exit 1; }
-test -f "$DATA_ROOT/train_series.csv" || { echo "no train_series.csv under $DATA_ROOT"; exit 1; }
+test -f "\$DATA_ROOT/train.csv" || { echo "no train.csv under \$DATA_ROOT"; exit 1; }
+test -f "\$DATA_ROOT/train_series.csv" || { echo "no train_series.csv under \$DATA_ROOT"; exit 1; }
 
-PYTHONPATH=src python -m rsna_knee.b52_competition_training \
-  --config config/b42_constant_area_aspect_sparse.yaml \
-  --data-root "$DATA_ROOT" \
-  --labels-root labels \
-  --series-policy policy/series_policy.json \
-  --base-checkpoint models/phase9_llm_fill_base.pt \
-  --domain-split gate \
-  --out-root runs/b52 \
-  --epochs "$EPOCHS" \
-  "${@:2}"
+PYTHONPATH=src python -m ${module} \\
+  --config config/b42_constant_area_aspect_sparse.yaml \\
+  --data-root "\$DATA_ROOT" \\
+  --labels-root labels \\
+  --series-policy policy/series_policy.json \\
+  --base-checkpoint models/phase9_llm_fill_base.pt \\
+  --domain-split gate \\
+  --out-root runs/${name} \\
+  --epochs "\$EPOCHS" \\
+  "\${@:2}"
 RUN
-chmod +x "$OUT/run.sh"
+  chmod +x "$OUT/run_${name}.sh"
+}
+
+write_runner b52 rsna_knee.b52_competition_training \
+  "Note: B52's augmentation flag sets fields the B42 dataset never reads, so this run is not augmented. B53 is the corrected experiment."
+write_runner b53 rsna_knee.b53_augmented_training \
+  "B53 refuses to start unless it can prove augmentation reaches the pixels."
+
+# Keep the old name working for anyone following the earlier instructions.
+ln -sf run_b52.sh "$OUT/run.sh"
 
 cat > "$OUT/README.md" <<'DOC'
 # B52 standalone bundle

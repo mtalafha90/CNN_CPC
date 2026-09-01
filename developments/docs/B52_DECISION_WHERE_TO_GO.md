@@ -98,6 +98,12 @@ This is almost certainly the single largest lever in the repository.
 `train=False` disables all nine augmentations. The machinery exists, is
 configured, and is switched off. Turning it on costs one flag.
 
+> **This was wrong about the cost, and B52 acted on it.** The flag sets fields
+> that `B42ConstantAreaAspectDataset` never reads, so B52 turned it on and
+> nothing happened. Applying the augmentation where this dataset can actually
+> see it takes a dataset subclass, which is B53. See
+> `B53_AUGMENTATION_APPLIED.md`.
+
 ### 3. Train properly, and select on validation
 
 Two epochs at 100% and 90.5% of peak learning rate is not a training run. Use a

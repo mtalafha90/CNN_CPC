@@ -3,6 +3,20 @@
 **Status:** first run complete on the B50 gate's `train` rows. Not a submission
 candidate. The full-data run is the follow-up.
 
+> **Correction, found after both runs.** B52 reports three changes. Only two of
+> them happened. `augment=True` sets fields on a `DatasetConfig` that
+> `B42ConstantAreaAspectDataset` never reads, so every epoch trained on
+> byte-identical pixels. Measured: two draws of the same study with augmentation
+> on are identical to each other and to the same study with it off, to `0.0`.
+>
+> The gains below are real and came from the encoder training and the completing
+> schedule. The trainer's `augment=...` line, and the `augmentation_enabled`
+> field in every B52 checkpoint, describe a flag rather than a behaviour and
+> should not be read as evidence that augmentation ran.
+>
+> `B53_AUGMENTATION_APPLIED.md` has the two causes, the measurement, and the
+> corrected experiment.
+
 ## The question
 
 Eight architecture experiments since B37 searched for a missing mechanism and
