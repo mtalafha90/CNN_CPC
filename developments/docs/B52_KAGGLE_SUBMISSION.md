@@ -78,7 +78,7 @@ Read them; do not assume them.
 
 ```bash
 cd /media/talafha/Disk_1/CNN_CPC
-R=runs/086_Experiment_B52_competition_full_finetune    # your B52 run directory
+R=runs/087_Experiment_B52_full_data    # the 3,801-study run, NOT 086
 
 sha256sum "$R/b52_best_model.pt"
 
@@ -98,6 +98,38 @@ print('base sha256   :', p['base_checkpoint_sha256'])
 The first hash is what you will declare as `B52_SHA`. The base checkpoint path
 and hash are what you must upload alongside it — the loader refuses a mismatch.
 
+**Check the identity, not just the hash.** There are two completed B52 runs and
+both are legitimate checkpoints, so nothing will refuse the wrong one:
+
+```text
+runs/086_Experiment_B52_competition_full_finetune   0.802666   1,447 studies
+runs/087_Experiment_B52_full_data                   0.834998   3,801 studies   <- this one
+```
+
+The hash proves the file is the one you pointed at. It says nothing about whether
+you pointed at the right one. To list every B52 run that exists:
+
+```python
+from pathlib import Path
+import torch
+
+for path in sorted(Path("runs").rglob("b52_best_model.pt")):
+    p = torch.load(path, map_location="cpu", weights_only=False)
+    print(
+        f"{p.get('selection_value', float('nan')):.6f}  "
+        f"{p.get('training_studies'):>5} studies  "
+        f"epoch {p.get('selected_epoch')}/{p.get('epochs_planned')}  "
+        f"splits={p.get('train_splits')}  {path}"
+    )
+```
+
+The launcher prints the same identity before it spends a GPU, and that line is
+the last chance to notice:
+
+```text
+[B52 submit] epoch 5 selected at 0.834998, trained on 3801 studies, augmentation=False
+```
+
 ## 2. Build the artifact dataset
 
 The checkpoint bytes must not change. Only the code payload is rebuilt.
@@ -107,7 +139,7 @@ cd /media/talafha/Disk_1/CNN_CPC
 git pull --ff-only origin main
 conda activate rsna-knee
 
-export R="/media/talafha/Disk_1/CNN_CPC/runs/086_Experiment_B52_competition_full_finetune"
+export R="/media/talafha/Disk_1/CNN_CPC/runs/087_Experiment_B52_full_data"
 export B52_CHECKPOINT="$R/b52_best_model.pt"
 export BASE_CHECKPOINT="$(python -c "import torch;print(torch.load('$R/b52_best_model.pt',map_location='cpu',weights_only=False)['base_checkpoint'])")"
 
