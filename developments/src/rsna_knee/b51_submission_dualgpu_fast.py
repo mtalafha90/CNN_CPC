@@ -33,6 +33,8 @@ import yaml
 from .b35_training import sha256_file
 from .b42_constant_area_aspect_sparse_mil import B42_EXPERIMENT, B42_VERSION
 from .b42_constant_area_aspect_sparse_submission_dualgpu_fast import (
+    DEFAULT_FALLBACK_PROBABILITY,
+    ON_UNREADABLE_FALLBACK,
     generate_b42_submission_dual_gpu_fast,
 )
 from .b51_full_population_training import B51_EXPERIMENT
@@ -92,8 +94,17 @@ def generate_b51_submission_dual_gpu_fast(
     base_checkpoint: str | Path,
     expected_checkpoint_sha256: str,
     out_path: str | Path = "submission.csv",
+    on_unreadable: str = ON_UNREADABLE_FALLBACK,
+    fallback_probability: float = DEFAULT_FALLBACK_PROBABILITY,
 ) -> Path:
-    """Run B42's dual-T4 path against the declared B51 checkpoint."""
+    """Run B42's dual-T4 path against the declared B51 checkpoint.
+
+    Defaults to `on_unreadable="fallback"`, unlike B42's own launcher, whose
+    0.714 hidden run was made under the strict default and must stay
+    reproducible. B51's first hidden attempt threw an exception it could not
+    report, on data three clean example studies could not reveal; aborting 1,300
+    studies for one unreadable one is not a property a submission wants.
+    """
     identity = require_converted_b51(checkpoint)
     if identity["sha256"] != expected_checkpoint_sha256:
         raise ValueError(
@@ -118,6 +129,8 @@ def generate_b51_submission_dual_gpu_fast(
         base_checkpoint=base_checkpoint,
         out_path=out_path,
         expected_checkpoint_sha256=expected_checkpoint_sha256,
+        on_unreadable=on_unreadable,
+        fallback_probability=fallback_probability,
     )
 
 

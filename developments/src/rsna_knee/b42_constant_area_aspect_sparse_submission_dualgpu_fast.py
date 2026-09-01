@@ -125,6 +125,72 @@ def _b42_endpoint_manifest(payload: dict) -> dict:
     }
 
 
+ON_UNREADABLE_RAISE = "raise"
+ON_UNREADABLE_FALLBACK = "fallback"
+ON_UNREADABLE_MODES = (ON_UNREADABLE_RAISE, ON_UNREADABLE_FALLBACK)
+
+# A study nothing could be read from still needs a row, and every target gets the
+# same number. ROC AUC only sees ordering, so one constant leaves those studies
+# tied among themselves and contributes nothing either way -- which is the honest
+# outcome for a study the model never saw.
+DEFAULT_FALLBACK_PROBABILITY = 0.5
+
+
+def _infer_one_study(index: int, dataset, model, device: torch.device):
+    """One complete ragged study. Every shape assertion the frozen path makes."""
+    item = dataset[index]
+    volumes_all = item["volumes"]
+    position_all = item["slice_position"]
+    present_cpu = item["present"]
+
+    if not isinstance(volumes_all, list) or not volumes_all:
+        raise RuntimeError(f"B42 row {index} has no ragged series tensors")
+    if position_all.ndim != 3 or int(position_all.shape[1]) != len(B42_SUBMISSION_TTA_OFFSETS):
+        raise RuntimeError(
+            f"B42 row {index} TTA position shape changed: {tuple(position_all.shape)}"
+        )
+    for series_tensor in volumes_all:
+        if series_tensor.ndim != 5 or int(series_tensor.shape[0]) != len(B42_SUBMISSION_TTA_OFFSETS):
+            raise RuntimeError(
+                f"B42 row {index} TTA series shape changed: {tuple(series_tensor.shape)}"
+            )
+
+    present = present_cpu.to(device, non_blocking=True)
+    series_meta = item["series_meta"].to(device, non_blocking=True)
+    view_probabilities: list[torch.Tensor] = []
+
+    for view in range(len(B42_SUBMISSION_TTA_OFFSETS)):
+        view_volumes = [
+            series_tensor[view].to(device, non_blocking=True)
+            for series_tensor in volumes_all
+        ]
+        position = position_all[:, view].to(device, non_blocking=True)
+        # device.type, not a literal: identical on the real path, where the device
+        # is always CUDA, and it lets the shard be exercised on CPU by a test.
+        with torch.autocast(device_type=device.type, dtype=torch.float16):
+            output = model(view_volumes, present, series_meta, position)
+        view_probabilities.append(torch.sigmoid(output.logits.float()).cpu())
+        del view_volumes, position, output
+
+    probability = torch.stack(view_probabilities, dim=0).mean(dim=0)
+    if probability.shape != (1, len(TARGETS)) or not torch.isfinite(probability).all():
+        raise RuntimeError(f"B42 row {index} produced invalid probabilities")
+
+    shapes = [
+        (int(series_tensor.shape[-2]), int(series_tensor.shape[-1]))
+        for series_tensor, flag in zip(volumes_all, present_cpu)
+        if float(flag.item()) > 0
+    ]
+    uid = str(item["study_uid"])
+    result = (uid, probability.numpy()[0], shapes)
+
+    del (
+        item, volumes_all, position_all, present_cpu, present,
+        series_meta, view_probabilities, probability,
+    )
+    return result
+
+
 def _infer_shard(
     *,
     rank: int,
@@ -134,11 +200,25 @@ def _infer_shard(
     global_started: float,
     max_hours: float,
     reserve_minutes: float,
-) -> list[tuple[int, str, np.ndarray, list[tuple[int, int]]]]:
-    """Infer complete ragged studies on one fixed CUDA device."""
-    device = torch.device(f"cuda:{int(rank)}")
-    torch.cuda.set_device(device)
+    uids: list[str] | None = None,
+    on_unreadable: str = ON_UNREADABLE_RAISE,
+    fallback_probability: float = DEFAULT_FALLBACK_PROBABILITY,
+    device: torch.device | None = None,
+) -> tuple[list[tuple[int, str, np.ndarray, list[tuple[int, int]]]], list[dict]]:
+    """Infer complete ragged studies on one fixed CUDA device.
+
+    `on_unreadable="raise"` is the frozen behaviour: any study that cannot be
+    read ends the whole run. `on_unreadable="fallback"` gives that one study a
+    constant prediction and carries on, which is what a hidden run needs -- one
+    unreadable study out of 1,300 should not destroy the other 1,299.
+    """
+    if on_unreadable not in ON_UNREADABLE_MODES:
+        raise ValueError(f"on_unreadable must be one of {ON_UNREADABLE_MODES}")
+    device = torch.device(f"cuda:{int(rank)}") if device is None else device
+    if device.type == "cuda":
+        torch.cuda.set_device(device)
     rows: list[tuple[int, str, np.ndarray, list[tuple[int, int]]]] = []
+    failures: list[dict] = []
     durations: list[float] = []
 
     with torch.inference_mode():
@@ -164,60 +244,51 @@ def _infer_shard(
                     )
 
             started = time.monotonic()
-            item = dataset[index]
-            volumes_all = item["volumes"]
-            position_all = item["slice_position"]
-            present_cpu = item["present"]
-
-            if not isinstance(volumes_all, list) or not volumes_all:
-                raise RuntimeError(f"B42 row {index} has no ragged series tensors")
-            if position_all.ndim != 3 or int(position_all.shape[1]) != len(B42_SUBMISSION_TTA_OFFSETS):
-                raise RuntimeError(
-                    f"B42 row {index} TTA position shape changed: {tuple(position_all.shape)}"
-                )
-            for series_tensor in volumes_all:
-                if series_tensor.ndim != 5 or int(series_tensor.shape[0]) != len(B42_SUBMISSION_TTA_OFFSETS):
-                    raise RuntimeError(
-                        f"B42 row {index} TTA series shape changed: {tuple(series_tensor.shape)}"
+            if on_unreadable == ON_UNREADABLE_RAISE:
+                uid, probability, shapes = _infer_one_study(index, dataset, model, device)
+                rows.append((int(index), uid, probability, shapes))
+            else:
+                try:
+                    uid, probability, shapes = _infer_one_study(index, dataset, model, device)
+                except torch.OutOfMemoryError as first:
+                    # Memory, not data. The cache is deliberately kept warm between
+                    # studies, so an unusually large study can fail where it would
+                    # have fitted from clean. Give it one clean attempt.
+                    print(
+                        f"[B42 dual submit gpu{rank}] row {index} out of memory, "
+                        f"retrying once with an empty cache: {first}",
+                        flush=True,
                     )
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
+                    try:
+                        uid, probability, shapes = _infer_one_study(index, dataset, model, device)
+                    except Exception as second:  # noqa: BLE001
+                        uid, probability, shapes = None, None, None
+                        error = second
+                except Exception as only:  # noqa: BLE001
+                    uid, probability, shapes = None, None, None
+                    error = only
 
-            present = present_cpu.to(device, non_blocking=True)
-            series_meta = item["series_meta"].to(device, non_blocking=True)
-            view_probabilities: list[torch.Tensor] = []
+                if probability is None:
+                    uid = str(uids[index]) if uids is not None else f"row-{index}"
+                    probability = np.full(
+                        len(TARGETS), float(fallback_probability), dtype=np.float32
+                    )
+                    shapes = []
+                    failures.append({
+                        "index": int(index),
+                        "study_uid": uid,
+                        "error": f"{type(error).__name__}: {error}",
+                    })
+                    print(
+                        f"[B42 dual submit gpu{rank}] row {index} uid={uid} unreadable, "
+                        f"predicting {fallback_probability} for all targets: "
+                        f"{type(error).__name__}: {error}",
+                        flush=True,
+                    )
+                rows.append((int(index), uid, probability, shapes))
 
-            for view in range(len(B42_SUBMISSION_TTA_OFFSETS)):
-                view_volumes = [
-                    series_tensor[view].to(device, non_blocking=True)
-                    for series_tensor in volumes_all
-                ]
-                position = position_all[:, view].to(device, non_blocking=True)
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    output = model(view_volumes, present, series_meta, position)
-                view_probabilities.append(torch.sigmoid(output.logits.float()).cpu())
-                del view_volumes, position, output
-
-            probability = torch.stack(view_probabilities, dim=0).mean(dim=0)
-            if probability.shape != (1, len(TARGETS)) or not torch.isfinite(probability).all():
-                raise RuntimeError(f"B42 row {index} produced invalid probabilities")
-
-            shapes = [
-                (int(series_tensor.shape[-2]), int(series_tensor.shape[-1]))
-                for series_tensor, flag in zip(volumes_all, present_cpu)
-                if float(flag.item()) > 0
-            ]
-            uid = str(item["study_uid"])
-            rows.append((int(index), uid, probability.numpy()[0], shapes))
-
-            del (
-                item,
-                volumes_all,
-                position_all,
-                present_cpu,
-                present,
-                series_meta,
-                view_probabilities,
-                probability,
-            )
             # Do not call gc.collect() or torch.cuda.empty_cache() here. Normal
             # reference counting releases tensors while CUDA allocator blocks stay
             # available for the next study, changing allocation overhead only.
@@ -237,7 +308,7 @@ def _infer_shard(
                     flush=True,
                 )
 
-    return rows
+    return rows, failures
 
 
 def generate_b42_submission_dual_gpu_fast(
@@ -250,6 +321,8 @@ def generate_b42_submission_dual_gpu_fast(
     expected_checkpoint_sha256: str = B42_FROZEN_CHECKPOINT_SHA256,
     load_replica=_load_replica,
     endpoint_manifest=_b42_endpoint_manifest,
+    on_unreadable: str = ON_UNREADABLE_RAISE,
+    fallback_probability: float = DEFAULT_FALLBACK_PROBABILITY,
 ) -> Path:
     """Generate the exact frozen B42 hidden-test submission on two Kaggle T4s.
 
@@ -306,12 +379,26 @@ def generate_b42_submission_dual_gpu_fast(
     variable_index = build_variable_series_index(series, uids)
     counts = [len(variable_index.get(uid, [])) for uid in uids]
     missing = [uid for uid, count in zip(uids, counts) if count == 0]
-    if missing:
+    if missing and on_unreadable == ON_UNREADABLE_RAISE:
         raise ValueError(
             f"B42 submission found {len(missing)} test study/studies with zero MRI series"
         )
+    if missing:
+        print(
+            f"[B42 dual submit] {len(missing)} study/studies have no series with a "
+            f"recognised anatomical plane; they will be predicted at "
+            f"{fallback_probability}",
+            flush=True,
+        )
 
     dataset_config = _b37_test_dataset_config(settings, root)
+    if on_unreadable == ON_UNREADABLE_FALLBACK:
+        # A series that cannot be found or decoded becomes a zero volume with
+        # present=0, which the study aggregation already masks out. Under the
+        # frozen strict setting the same series ends the run instead, and one bad
+        # series in roughly 7,000 is a near certainty on a hidden set that three
+        # clean example studies cannot reveal.
+        dataset_config.strict_dicom = False
     datasets = [
         B42KaggleNormalizeOnceDataset(
             uids,
@@ -345,12 +432,19 @@ def generate_b42_submission_dual_gpu_fast(
                 global_started=global_started,
                 max_hours=budget.max_hours,
                 reserve_minutes=budget.reserve_minutes,
+                uids=uids,
+                on_unreadable=on_unreadable,
+                fallback_probability=fallback_probability,
             )
             for rank in range(B42_DUALGPU_COUNT)
         ]
         rows = []
+        failures: list[dict] = []
         for future in futures:
-            rows.extend(future.result())
+            shard_rows, shard_failures = future.result()
+            rows.extend(shard_rows)
+            failures.extend(shard_failures)
+    failures.sort(key=lambda record: record["index"])
 
     rows.sort(key=lambda row: row[0])
     if [row[0] for row in rows] != list(range(len(uids))):
@@ -410,6 +504,18 @@ def generate_b42_submission_dual_gpu_fast(
         # path may submit, so it stays here rather than moving with the rest.
         "gold_studies_used_in_gradient": int(payload0.get("gold_studies_used_in_gradient", -1)),
         "gold_labels_used": bool(payload0.get("gold_labels_used", True)),
+        # How many rows the model did not actually produce. A submission that had
+        # to guess for some studies is still a submission, but the number of them
+        # is the first thing anyone reading the score needs to know.
+        "on_unreadable": on_unreadable,
+        "fallback_probability": float(fallback_probability),
+        "studies_predicted_from_fallback": len(failures),
+        "studies_predicted_from_fallback_fraction": (
+            float(len(failures)) / float(len(uids)) if uids else 0.0
+        ),
+        "studies_with_no_recognised_plane": len(missing),
+        "fallback_studies": failures[:50],
+        "fallback_studies_truncated": max(0, len(failures) - 50),
         "thresholding_used": False,
         "blending_used": False,
         "preprocessing": b42_preprocessing_state(),
@@ -461,11 +567,23 @@ def generate_b42_submission_dual_gpu_fast(
         "dual_gpu=True cuda_cache_reuse=True",
         flush=True,
     )
+    if failures:
+        print(
+            f"[B42 fast submit] WARNING {len(failures)}/{len(uids)} studies "
+            f"({100.0 * len(failures) / len(uids):.2f}%) were predicted at "
+            f"{fallback_probability} because they could not be read. The score "
+            "reflects that; see fallback_studies in the manifest.",
+            flush=True,
+        )
     return output_path
 
 
 __all__ = [
     "B42_DUALGPU_COUNT",
+    "DEFAULT_FALLBACK_PROBABILITY",
+    "ON_UNREADABLE_FALLBACK",
+    "ON_UNREADABLE_MODES",
+    "ON_UNREADABLE_RAISE",
     "B42_FAST_ENCODER_CHUNK_SIZE",
     "B42_FAST_EXECUTION_VERSION",
     "B42_FROZEN_CHECKPOINT_SHA256",

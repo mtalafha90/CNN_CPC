@@ -206,6 +206,44 @@ execution version.
 Save a version of the notebook with internet **off** and both T4s enabled, then
 submit it to the competition.
 
+## If a hidden run throws an exception you cannot see
+
+The first B51 hidden submission did exactly that. Kaggle shows only "Notebook
+Threw Exception" for a code competition, because the log would leak the hidden
+data. The commit run had passed on the three visible studies moments before, so
+the code was identical and only the data differed.
+
+The frozen path has four places where one bad study ends the whole run:
+
+```text
+a study whose series all have an unrecognised plane   ValueError, before inference
+a series directory that cannot be found               FileNotFoundError, strict_dicom
+a series that cannot be decoded                       the decoder's exception, strict_dicom
+a study whose probabilities come out non-finite       RuntimeError
+```
+
+None of them can fire on three clean studies. Across roughly 7,000 hidden
+series, at least one is close to certain.
+
+Both sibling launchers now default to `on_unreadable="fallback"`: a study that
+cannot be read gets `0.5` for all twelve targets and the run carries on, and an
+out-of-memory study is retried once with an empty cache before being given up.
+Every such study is counted and named in the manifest:
+
+```json
+"on_unreadable": "fallback",
+"studies_predicted_from_fallback": 3,
+"studies_predicted_from_fallback_fraction": 0.0023,
+"fallback_studies": [{"index": 417, "study_uid": "...", "error": "..."}]
+```
+
+**Read that number before you read the score.** A handful of guessed rows out of
+1,300 costs almost nothing. Hundreds means something systemic went wrong -- most
+likely the data path -- and the score is meaningless rather than disappointing.
+
+B42's own launcher keeps `on_unreadable="raise"` as its default, because its
+`0.714` hidden run was made under it and must stay reproducible.
+
 ## After the score appears
 
 Record it against B42's `0.714` and stop. Whatever it shows, do not tune the
