@@ -30,15 +30,18 @@ internal reserve                            0.50 h   for writing the output
 ```
 
 Every ten studies each GPU projects its own remaining time from the mean of its
-last five studies, multiplied by a **1.35 safety factor**, and aborts with a
-message if the projection runs past the budget. Aborting early is deliberate: a
-run killed at nine hours writes nothing at all, and in a hidden run nobody can
-see why.
+last five studies, multiplied by a **1.35 safety factor**. For B52 that
+projection is **telemetry and cannot raise**. It used to abort the run, and that
+is one of the two documented causes of B39's, B41's and B51's hidden failures: in
+a 650-study shard a single slow early study forecasts past the budget and kills a
+run that would in fact have finished. B42's own launcher keeps the abort, because
+its `0.714` hidden run was made under it.
 
-You will see this line, per GPU, throughout the run:
+You will see this line, per GPU, throughout the run, now carrying host memory as
+well:
 
 ```text
-[B42 dual submit gpu0] 250/650 shard elapsed=71.3 min estimated_remaining=115.6 min
+[B42 dual submit gpu0] 250/650 shard elapsed=71.3 min estimated_remaining=115.6 min rss=2.9GiB rss_peak=3.1GiB
 ```
 
 **The single thing that decides whether you finish: both T4s must be on.**
@@ -61,6 +64,13 @@ number the budget above was calibrated against.
 Three things that would break the budget, all of them refused rather than
 silently allowed: a single visible GPU, a chunk size other than 4, and
 `num_workers` or `pin_memory` set in the config.
+
+B52 also inherits B51's memory contract, and for the same reason: one TTA view is
+materialised at a time rather than `[3, K, 32, 3, H, W]` for a whole study. At
+the 14 series this dataset actually contains that is roughly 0.6 GiB against 3.2,
+doubled because two shards run at once. Nothing about B52 changes this either
+way -- its five trainable encoder stages and `requires_grad` flags cost nothing
+under `torch.inference_mode()`, so its per-study memory and time are B42's.
 
 ## 1. Fingerprints this run depends on
 
