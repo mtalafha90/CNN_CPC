@@ -16,6 +16,61 @@
 > `B53_AUGMENTATION_APPLIED.md` has the two causes, the measurement, and the
 > corrected experiment.
 
+## B53 partial: three epochs, then stopped
+
+**STOPPED AT EPOCH 3 OF 6. INCONCLUSIVE BY CONSTRUCTION.** Recorded because
+three epochs of measurement are still measurement, and because the reason it
+cannot conclude is the interesting part.
+
+```text
+epoch    B52 no aug   B53 aug     delta  B53 step
+1          0.777063  0.770903   -0.0062         -
+2          0.815093  0.794150   -0.0209   +0.0232
+3          0.832568  0.809708   -0.0229   +0.0156
+```
+
+Augmentation is behind at every epoch and the gap is widening. `-0.0229` is
+three times the `0.0065` that B52's own last four epochs span, so it is not
+noise on this surface.
+
+### Why three epochs cannot settle it
+
+Augmentation is expected to lose early. It makes each epoch harder, which is
+the whole mechanism -- and its payoff arrives late, when the unaugmented run
+starts memorising and stops improving. B52's own curve shows exactly when that
+happened to it:
+
+```text
+B52 gains per epoch  +0.0380  +0.0175  -0.0041  +0.0065  -0.0015
+```
+
+B52's gains were over by epoch 3. B53 was still climbing at `+0.0156` when it
+stopped. Whether it would have crossed is the question the experiment exists to
+answer, and the three epochs that would have answered it are the three that
+were not run.
+
+So this is not evidence that augmentation fails. It is evidence that
+augmentation costs early epochs, which was never in doubt.
+
+### What it did establish
+
+* The augmentation reaches the pixels: `5/5 series changed, max |diff| 1.000000`.
+  The defect B53 exists to fix is fixed, and verified at run time.
+* The file-descriptor fix holds at `workers=6`, with `sharing=file_system` and
+  no crash through three epochs and a validation pass.
+* **Throughput improved sharply.** B52 took 26.9 hours for six epochs, about
+  4.5 per epoch. B53 ran 3.0 to 3.3 hours per epoch *with* augmentation added.
+  Raising the worker count was worth more than I predicted -- I said it would
+  buy nothing because the GPU was already 95% busy, and it cut roughly a third
+  off the epoch time.
+
+### If it is resumed
+
+There is no resume, so it restarts from epoch 1: about 19 hours at the measured
+pace. The comparison it would produce is against B52's `0.834998`, on the
+report-derived surface, with the old teacher -- which the teacher audit has
+since given reason to distrust as a ruler.
+
 ## Completed hidden result
 
 **COMPLETED / KAGGLE `0.716`.**
