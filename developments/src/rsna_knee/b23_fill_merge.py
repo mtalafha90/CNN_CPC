@@ -94,9 +94,13 @@ def _read_export(root: str | Path) -> tuple[pd.DataFrame, dict]:
     """Read an export directory, or a single labels CSV.
 
     `training_targets.csv` carries no gold rows and no `__model_confidence`.
-    `structured_labels.csv` carries both, so a filler pointed at it must be
-    stripped of gold before anything else happens: the 58 expert studies are
-    held out of every run in this project and a merge is not where that changes.
+    `structured_labels.csv` carries both.
+
+    Gold rows are **kept** here, and excluded where it actually matters: at the
+    write step, which emits `training_targets.csv` from the non-gold rows only
+    and counts what it dropped rather than asserting it. Carrying them is what
+    lets a merged export be measured against the 58 expert studies at all --
+    without it, the only teacher nobody can audit is the one being trained on.
     """
     root = Path(root)
     if root.is_file():
@@ -108,15 +112,13 @@ def _read_export(root: str | Path) -> tuple[pd.DataFrame, dict]:
 
     frame = pd.read_csv(targets_path)
     frame["StudyInstanceUID"] = frame["StudyInstanceUID"].astype(str)
-    if "is_gold" in frame.columns:
-        gold = frame["is_gold"].astype(bool)
-        if gold.any():
-            print(
-                f"[merge] {targets_path.name}: dropping {int(gold.sum())} gold "
-                "studies before merging",
-                flush=True,
-            )
-        frame = frame.loc[~gold].reset_index(drop=True)
+    if "is_gold" in frame.columns and frame["is_gold"].astype(bool).any():
+        print(
+            f"[merge] {targets_path.name}: carrying "
+            f"{int(frame['is_gold'].astype(bool).sum())} gold studies for audit; "
+            "they are excluded from training_targets.csv at the write step",
+            flush=True,
+        )
     if frame["StudyInstanceUID"].duplicated().any():
         raise ValueError(f"{targets_path} lists a study more than once")
 
@@ -200,7 +202,17 @@ def merge_fill_only(
         )
         fillable = ~base_committed & filler_committed
 
-        for column in (target, f"{target}__confidence", f"{target}__state"):
+        carried = [target, f"{target}__confidence", f"{target}__state"]
+        # The labeller's own confidence travels with the cell it belongs to, so a
+        # merged export can be filtered on it later. Base cells keep NaN: the
+        # regex parser has no self-report and pretending otherwise would invent
+        # one. Base cells are never filled, so no filter ever consults it there.
+        model_column = f"{target}__model_confidence"
+        if model_column in aligned.columns:
+            if model_column not in merged.columns:
+                merged[model_column] = float("nan")
+            carried.append(model_column)
+        for column in carried:
             merged.loc[fillable, column] = aligned.loc[fillable, column].to_numpy()
 
         filled_states = aligned.loc[fillable, f"{target}__state"].astype(str)
@@ -248,18 +260,64 @@ def write_merged_export(
     base_audit: dict,
     filler_audit: dict,
 ) -> Path:
-    """Write the three files the training pipeline expects from a label export."""
+    """Write the files the training pipeline expects, plus one it can be audited by.
+
+    `training_targets.csv` is what trains: non-gold rows only, and the count of
+    what was withheld is computed here rather than declared, because
+    `load_fill_merged_export` refuses any export that cannot certify zero.
+
+    `structured_labels.csv` is written whenever the merge carried gold rows. It
+    is the file `report_label_gold_audit` reads, so a merged teacher can be
+    measured against the 58 expert studies instead of being inferred from its
+    two halves.
+    """
     out = Path(out_root)
     out.mkdir(parents=True, exist_ok=True)
 
     columns = ["StudyInstanceUID"]
     for target in TARGETS:
         columns.extend([target, f"{target}__confidence", f"{target}__state"])
-    merged[columns].to_csv(out / "training_targets.csv", index=False)
+
+    has_gold = "is_gold" in merged.columns
+    if has_gold:
+        structured_columns = [
+            column
+            for column in (
+                ["StudyInstanceUID", "is_gold"]
+                + [
+                    name
+                    for target in TARGETS
+                    for name in (
+                        target,
+                        f"{target}__confidence",
+                        f"{target}__model_confidence",
+                        f"{target}__state",
+                    )
+                ]
+            )
+            if column in merged.columns
+        ]
+        merged[structured_columns].to_csv(out / "structured_labels.csv", index=False)
+        training = merged.loc[~merged["is_gold"].astype(bool)]
+    else:
+        training = merged
+
+    training[columns].to_csv(out / "training_targets.csv", index=False)
+
+    withheld = int(len(merged) - len(training))
+    remaining_gold = (
+        int(training["is_gold"].astype(bool).sum()) if has_gold else 0
+    )
+    if remaining_gold:
+        raise RuntimeError(
+            f"{remaining_gold} gold studies reached training_targets.csv; refusing to write"
+        )
 
     full_audit = {
         **audit,
-        "gold_rows_in_training_targets": 0,
+        "gold_rows_in_training_targets": remaining_gold,
+        "gold_rows_withheld_from_training": withheld,
+        "structured_labels_written": bool(has_gold),
         # Both sources are recorded whole: this export is only as reproducible
         # as the labellers behind it, and the LLM's provenance lives in its own
         # audit rather than here.

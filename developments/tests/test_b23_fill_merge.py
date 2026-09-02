@@ -315,3 +315,93 @@ def test_the_two_filters_compose():
     )
     # a: positive, refused by state. b: negated but unconfident. c: both pass.
     assert merged["ACL__state"].tolist() == ["unmentioned", "unmentioned", "negated"]
+
+
+# --- a merged teacher must be auditable, and must still withhold gold -----
+#
+# Until now the merged export was the only teacher nobody could measure: it
+# wrote training_targets.csv, which carries no gold rows, so the 58 expert
+# studies had nothing to score it against and its quality was inferred from its
+# two halves. Carrying gold through the merge fixes that, and moves the
+# no-gold-in-training guarantee to the write step where it is computed rather
+# than declared.
+
+
+def _with_gold(frame, gold_uids):
+    frame = frame.copy()
+    frame["is_gold"] = frame["StudyInstanceUID"].isin(gold_uids)
+    return frame
+
+
+def test_a_merge_carrying_gold_writes_a_file_the_audit_can_read(tmp_path):
+    base = _with_gold(_export(["a", "g"], {"ACL": ["positive", "negated"]}), {"g"})
+    filler = _with_gold(_export(["a", "g"], {"MCL": ["negated", "negated"]}), {"g"})
+    merged, audit = merge_fill_only(base, filler)
+
+    write_merged_export(tmp_path, merged, audit, base_audit={}, filler_audit={})
+
+    structured = pd.read_csv(tmp_path / "structured_labels.csv")
+    assert set(structured["StudyInstanceUID"]) == {"a", "g"}
+    assert "is_gold" in structured.columns
+    for column in ("ACL", "ACL__confidence", "ACL__state"):
+        assert column in structured.columns
+
+
+def test_gold_never_reaches_training_targets(tmp_path):
+    """The property load_fill_merged_export refuses an export without."""
+    base = _with_gold(_export(["a", "g"], {"ACL": ["positive", "positive"]}), {"g"})
+    filler = _with_gold(_export(["a", "g"], {"MCL": ["negated", "negated"]}), {"g"})
+    merged, audit = merge_fill_only(base, filler)
+
+    write_merged_export(tmp_path, merged, audit, base_audit={}, filler_audit={})
+
+    training = pd.read_csv(tmp_path / "training_targets.csv")
+    assert training["StudyInstanceUID"].tolist() == ["a"]
+    assert "is_gold" not in training.columns
+
+    written = json.loads((tmp_path / "audit.json").read_text())
+    assert written["gold_rows_in_training_targets"] == 0
+    assert written["gold_rows_withheld_from_training"] == 1
+    assert written["structured_labels_written"] is True
+
+
+def test_the_gold_count_is_computed_not_declared(tmp_path):
+    """A hard-coded zero would keep certifying an export that stopped being safe."""
+    import inspect  # noqa: PLC0415
+
+    from rsna_knee.b23_fill_merge import write_merged_export as writer
+
+    source = inspect.getsource(writer)
+    assert '"gold_rows_in_training_targets": 0' not in source, (
+        "the certification must be measured from the rows actually written"
+    )
+    assert "refusing to write" in source, "and it must refuse rather than warn"
+
+
+def test_an_export_without_gold_information_behaves_exactly_as_before(tmp_path):
+    """training_targets.csv on both sides is the completed runs' path."""
+    base = _export(["a"], {"ACL": ["positive"]})
+    filler = _export(["a"], {"MCL": ["negated"]})
+    merged, audit = merge_fill_only(base, filler)
+
+    write_merged_export(tmp_path, merged, audit, base_audit={}, filler_audit={})
+
+    assert not (tmp_path / "structured_labels.csv").exists()
+    assert pd.read_csv(tmp_path / "training_targets.csv")["StudyInstanceUID"].tolist() == ["a"]
+    written = json.loads((tmp_path / "audit.json").read_text())
+    assert written["gold_rows_in_training_targets"] == 0
+    assert written["gold_rows_withheld_from_training"] == 0
+
+
+def test_the_model_confidence_column_survives_into_the_structured_file(tmp_path):
+    """So a merged export can be re-merged, or filtered on confidence later."""
+    base = _with_gold(_export(["a", "g"], {"ACL": ["unmentioned", "unmentioned"]}), {"g"})
+    filler = _model_confidence(
+        _with_gold(_export(["a", "g"], {"ACL": ["negated", "negated"]}), {"g"}),
+        {"ACL": [1.0, 1.0]},
+    )
+    merged, audit = merge_fill_only(base, filler)
+    write_merged_export(tmp_path, merged, audit, base_audit={}, filler_audit={})
+
+    structured = pd.read_csv(tmp_path / "structured_labels.csv")
+    assert "ACL__model_confidence" in structured.columns
