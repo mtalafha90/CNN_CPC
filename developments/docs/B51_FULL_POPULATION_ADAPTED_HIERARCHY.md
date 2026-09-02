@@ -26,7 +26,7 @@ unit in the last place on this many studies is inside the noise of the
 measurement. The honest statement is that the adapted hierarchy is
 indistinguishable from the frozen one on hidden data, not that it is worse.
 
-### One confound, stated rather than buried
+### One confound, narrowed but not closed
 
 This run was the first through the hidden-safe execution contract, which
 **drops a series it cannot decode** instead of ending the run. B42's `0.714`
@@ -35,14 +35,38 @@ impossible by construction: the run crashed instead.
 
 All local and visible data is uncompressed (`1.2.840.10008.1.2.1`), and the
 competition contract says the hidden set may contain JPEG Lossless and JPEG
-2000. The decoder preflight raised `no decoder for JPEG Lossless P14` in the
-B52 notebook and was never resolved, so we do not know whether the same was
-true of this run. If series were dropped, `0.713` is a floor and the true
-figure is higher.
+2000. A decoder preflight in the B52 notebook raised `no decoder for JPEG
+Lossless P14`, which looked like a missing codec. It was not:
 
-The hidden run's log and manifest are not visible, so the count of dropped
-series cannot be recovered for this submission. **Resolve the decoders before
-the next one**, and the comparison becomes clean.
+```text
+gdcm OK 3.0.24
+1.2.840.10008.1.2.4.57  available=True
+1.2.840.10008.1.2.4.70  available=True
+1.2.840.10008.1.2.4.90  available=True
+1.2.840.10008.1.2.4.91  available=True
+```
+
+The four `missing_dependencies` entries name *pylibjpeg*, an optional second
+plugin. GDCM alone covers every syntax the contract mentions.
+
+The earlier failure was an **import-cache artefact**: `pip install` into a
+running kernel left a stale path cache, so pydicom's decoder module tried
+`import gdcm`, failed, and cached the plugin as unavailable. pydicom resolves
+plugin availability when `pydicom.pixels.decoders` is first imported, not per
+call, so that verdict then stands for the life of the kernel.
+
+**What is still unknown.** The B51 submission notebook installed the wheel and
+then imported pydicom in a later cell without calling
+`importlib.invalidate_caches()`. Whether that kernel resolved GDCM depends on
+whether its path cache was stale at that moment, and the hidden run's log is
+not visible. The visible three studies prove nothing either way -- they are
+uncompressed and need no decoder.
+
+So `0.713` is either clean or a floor, and which one cannot be recovered for
+this submission. Every future submission should call
+`importlib.invalidate_caches()` before the first pydicom import and assert
+`is_available` on all four syntaxes, which now passes and therefore means
+something when it fails.
 
 ### What this does and does not settle
 

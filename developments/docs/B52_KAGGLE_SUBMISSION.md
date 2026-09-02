@@ -209,26 +209,50 @@ the accelerator setting — the run cannot finish inside the limit on one T4.
 ## 4. Verify the compressed-DICOM decoders
 
 The hidden set contains mixed transfer syntaxes. The visible example is too
-small to prove every decoder is present.
+small to prove every decoder is present -- all local and visible data is
+uncompressed (`1.2.840.10008.1.2.1`), so it exercises no decoder at all.
+
+**`importlib.invalidate_caches()` is load-bearing, not tidiness.** `pip install`
+into a running kernel leaves a stale path cache; pydicom then fails to import
+GDCM, and because it resolves plugin availability once when
+`pydicom.pixels.decoders` is first imported, that verdict stands for the life
+of the kernel. This is what produced a spurious `no decoder for JPEG Lossless
+P14` in an earlier B52 notebook, on an environment where GDCM was in fact
+installed and working.
 
 ```python
+import importlib
+
+importlib.invalidate_caches()   # before any pydicom import, after the pip install
+
+import gdcm
+print("gdcm", gdcm.Version.GetVersion())
+
 from pydicom.pixels import get_decoder
 
 required = {
     "JPEG Lossless P14": "1.2.840.10008.1.2.4.57",
     "JPEG Lossless SV1": "1.2.840.10008.1.2.4.70",
     "JPEG2000 Lossless": "1.2.840.10008.1.2.4.90",
-    "JPEG2000": "1.2.840.10008.1.2.4.91",
+    "JPEG2000":          "1.2.840.10008.1.2.4.91",
 }
 for name, uid in required.items():
     decoder = get_decoder(uid)
-    print(name, "available=", decoder.is_available, "missing=", decoder.missing_dependencies)
-    assert decoder.is_available, f"Missing DICOM decoder for {name} ({uid})"
+    print(f"{name:<20} available={decoder.is_available}")
+    assert decoder.is_available, f"no decoder for {name} ({uid})"
 print("Compressed DICOM decoder preflight: PASS")
 ```
 
-If this fails, bundle the offline decoder wheels in the artifact dataset before
-scoring. Internet installation cannot be relied on during code-competition runs.
+Measured on the Kaggle image with `python-gdcm 3.0.24.1`: all four report
+`available=True`. Their `missing_dependencies` lists name *pylibjpeg*, an
+optional second plugin -- GDCM alone covers every syntax the contract
+mentions, so a missing pylibjpeg is not a problem.
+
+Because this passes on a healthy environment, a failure now means something
+real. Assert it rather than warning: with the hidden-safe contract an
+undecodable series is silently dropped and the study still predicts, so the
+cost of getting this wrong is a quietly weaker score you cannot measure -- the
+hidden run's log and manifest are not visible to you.
 
 ## 5. Verify the checkpoint is the one you meant
 

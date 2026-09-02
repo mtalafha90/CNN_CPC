@@ -120,26 +120,50 @@ during hidden scoring, which is exactly how B41's first submission failed.
 ## 3. Verify the compressed-DICOM decoders
 
 The hidden set contains mixed transfer syntaxes. The visible example is too
-small to prove every decoder is present.
+small to prove every decoder is present -- all local and visible data is
+uncompressed (`1.2.840.10008.1.2.1`), so it exercises no decoder at all.
+
+**`importlib.invalidate_caches()` is load-bearing, not tidiness.** `pip install`
+into a running kernel leaves a stale path cache; pydicom then fails to import
+GDCM, and because it resolves plugin availability once when
+`pydicom.pixels.decoders` is first imported, that verdict stands for the life
+of the kernel. This is what produced a spurious `no decoder for JPEG Lossless
+P14` in an earlier B52 notebook, on an environment where GDCM was in fact
+installed and working.
 
 ```python
+import importlib
+
+importlib.invalidate_caches()   # before any pydicom import, after the pip install
+
+import gdcm
+print("gdcm", gdcm.Version.GetVersion())
+
 from pydicom.pixels import get_decoder
 
 required = {
     "JPEG Lossless P14": "1.2.840.10008.1.2.4.57",
     "JPEG Lossless SV1": "1.2.840.10008.1.2.4.70",
     "JPEG2000 Lossless": "1.2.840.10008.1.2.4.90",
-    "JPEG2000": "1.2.840.10008.1.2.4.91",
+    "JPEG2000":          "1.2.840.10008.1.2.4.91",
 }
 for name, uid in required.items():
     decoder = get_decoder(uid)
-    print(name, "available=", decoder.is_available, "missing=", decoder.missing_dependencies)
-    assert decoder.is_available, f"Missing DICOM decoder for {name} ({uid})"
+    print(f"{name:<20} available={decoder.is_available}")
+    assert decoder.is_available, f"no decoder for {name} ({uid})"
 print("Compressed DICOM decoder preflight: PASS")
 ```
 
-If this fails, bundle the offline decoder wheels in the artifact dataset before
-scoring. Internet installation cannot be relied on during code-competition runs.
+Measured on the Kaggle image with `python-gdcm 3.0.24.1`: all four report
+`available=True`. Their `missing_dependencies` lists name *pylibjpeg*, an
+optional second plugin -- GDCM alone covers every syntax the contract
+mentions, so a missing pylibjpeg is not a problem.
+
+Because this passes on a healthy environment, a failure now means something
+real. Assert it rather than warning: with the hidden-safe contract an
+undecodable series is silently dropped and the study still predicts, so the
+cost of getting this wrong is a quietly weaker score you cannot measure -- the
+hidden run's log and manifest are not visible to you.
 
 ## 4. Verify the checkpoint is the one you meant
 
@@ -278,7 +302,7 @@ unit in the last place on this many studies is inside the noise of the
 measurement. The honest statement is that the adapted hierarchy is
 indistinguishable from the frozen one on hidden data, not that it is worse.
 
-### One confound, stated rather than buried
+### One confound, narrowed but not closed
 
 This run was the first through the hidden-safe execution contract, which
 **drops a series it cannot decode** instead of ending the run. B42's `0.714`
@@ -287,14 +311,38 @@ impossible by construction: the run crashed instead.
 
 All local and visible data is uncompressed (`1.2.840.10008.1.2.1`), and the
 competition contract says the hidden set may contain JPEG Lossless and JPEG
-2000. The decoder preflight raised `no decoder for JPEG Lossless P14` in the
-B52 notebook and was never resolved, so we do not know whether the same was
-true of this run. If series were dropped, `0.713` is a floor and the true
-figure is higher.
+2000. A decoder preflight in the B52 notebook raised `no decoder for JPEG
+Lossless P14`, which looked like a missing codec. It was not:
 
-The hidden run's log and manifest are not visible, so the count of dropped
-series cannot be recovered for this submission. **Resolve the decoders before
-the next one**, and the comparison becomes clean.
+```text
+gdcm OK 3.0.24
+1.2.840.10008.1.2.4.57  available=True
+1.2.840.10008.1.2.4.70  available=True
+1.2.840.10008.1.2.4.90  available=True
+1.2.840.10008.1.2.4.91  available=True
+```
+
+The four `missing_dependencies` entries name *pylibjpeg*, an optional second
+plugin. GDCM alone covers every syntax the contract mentions.
+
+The earlier failure was an **import-cache artefact**: `pip install` into a
+running kernel left a stale path cache, so pydicom's decoder module tried
+`import gdcm`, failed, and cached the plugin as unavailable. pydicom resolves
+plugin availability when `pydicom.pixels.decoders` is first imported, not per
+call, so that verdict then stands for the life of the kernel.
+
+**What is still unknown.** The B51 submission notebook installed the wheel and
+then imported pydicom in a later cell without calling
+`importlib.invalidate_caches()`. Whether that kernel resolved GDCM depends on
+whether its path cache was stale at that moment, and the hidden run's log is
+not visible. The visible three studies prove nothing either way -- they are
+uncompressed and need no decoder.
+
+So `0.713` is either clean or a floor, and which one cannot be recovered for
+this submission. Every future submission should call
+`importlib.invalidate_caches()` before the first pydicom import and assert
+`is_available` on all four syntaxes, which now passes and therefore means
+something when it fails.
 
 ### What this does and does not settle
 
