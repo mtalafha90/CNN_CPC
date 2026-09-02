@@ -201,6 +201,17 @@ def test_a_missing_state_column_is_named(tmp_path):
         read_teacher(path)
 
 
+def test_a_missing_rescue_path_says_how_to_find_it(tmp_path):
+    """Phase 7 completed, so the output exists somewhere; say that, not 'missing'."""
+    with pytest.raises(FileNotFoundError, match="find . -name recovered_cells.csv"):
+        read_recovered_cells(tmp_path / "not_here")
+
+
+def test_a_directory_without_the_rescue_file_says_which_directory(tmp_path):
+    with pytest.raises(FileNotFoundError, match="not a Phase-7 rescue directory"):
+        read_recovered_cells(tmp_path)
+
+
 def test_an_unknown_target_in_the_rescue_is_refused(tmp_path):
     path = tmp_path / "recovered_cells.csv"
     _recovered([("a", "Kneecap", "positive")]).to_csv(path, index=False)

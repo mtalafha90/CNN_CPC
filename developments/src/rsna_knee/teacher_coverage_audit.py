@@ -113,6 +113,16 @@ def read_recovered_cells(phase7_root: str | Path) -> pd.DataFrame:
     path = Path(phase7_root)
     if path.is_dir():
         path = path / "recovered_cells.csv"
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"{path.parent} exists but holds no recovered_cells.csv; "
+                "it is not a Phase-7 rescue directory"
+            )
+    elif not path.exists():
+        raise FileNotFoundError(
+            f"nothing at {path}. Phase 7 completed, so its output is somewhere: "
+            "find it with  find . -name recovered_cells.csv"
+        )
     if not path.is_file():
         raise FileNotFoundError(f"missing Phase-7 recovered cells: {path}")
 
