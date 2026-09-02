@@ -109,6 +109,114 @@ It is small and it does not change any conclusion above -- the merged export is
 below B6 on either set of B6 numbers -- but a reference that is quoted and does
 not reproduce should be either explained or replaced.
 
+## Where the errors are, measured
+
+`mismatches.csv` for the merged export, 111 disagreements:
+
+```text
+expert says NO, report says YES   106
+expert says YES, report says NO     5
+```
+
+Spread evenly across all twelve findings -- 18, 15, 12, 9, 9, 9, 9, 7, 7, 7, 5,
+4 -- so this is systemic over-calling, not one broken target. Per-target repair
+will not help.
+
+Split by what the teacher says, on B23's 442 committed gold cells:
+
+```text
+negated cells      137    97.8% correct
+positive cells     305    67.2% correct
+```
+
+**The teacher is reliable when it says no and unreliable when it says yes.**
+
+## The confidence column is a constant
+
+`b23_llm_labels.py` stamps `B23_DEFINITE_STATE_CONFIDENCE = 0.90` on every
+definite call, right or wrong. The column that gates supervision at `>= 0.75`,
+and that `confidence_weighted_bce` weights by, therefore takes exactly two
+values: `0.90` and `0.0`. **No threshold on it can separate anything**, and
+every supervised cell currently carries identical weight.
+
+The LLM's own confidence is recorded as `__model_confidence`, deliberately
+unused, and never reaches `training_targets.csv`. Measured against being right:
+
+```text
+correct calls   mean 0.974   sd 0.039
+wrong calls     mean 0.957   sd 0.055
+```
+
+About `0.61` AUC at detecting its own errors. Thresholding it buys little:
+
+```text
+conf >= 0.99    255 cells (57.7%)   80.0% correct
+conf >= 1.00    242 cells (54.8%)   80.2% correct
+baseline        442 cells           76.7% correct
+```
+
+The comment in the source calls it "an uncalibrated self-report" and declines to
+threshold on it. That judgement is confirmed.
+
+## Corroboration beats self-confidence
+
+Keep every `negated` cell; accept a `positive` only where the frozen B6 parser
+independently says positive too:
+
+```text
+agreement rule  296 cells (67.0%)   83.4% correct
+conf >= 0.99    255 cells (57.7%)   80.0% correct
+```
+
+**It dominates**: more cells kept and more of them right. It also has no free
+parameter, which matters more than the margin -- a threshold chosen by looking
+at these 58 studies is the same move that produced B23's pilot result and lost
+it again at full scale.
+
+## The ceiling this exposes
+
+```text
+B23 positive, B6 also positive    159 cells    71.1% correct
+B23 positive, B6 silent           145 cells    62.8% correct
+```
+
+**Two independent extractors agreeing on a positive is still wrong 29% of the
+time.** The disagreement is therefore not mostly between the parsers and the
+report. It is between the *report* and the *expert* -- the radiologist writing
+the report and the radiologist labelling for this task are not calling the same
+knees positive.
+
+That bounds what better extraction can buy. A perfect reader of these reports
+would still inherit that 29%.
+
+## The cost of the agreement rule, stated plainly
+
+```text
+dropping the uncorroborated positives loses 91 correct labels
+to remove 54 wrong ones
+```
+
+Better label purity, less supervision. Whether that trade helps a trained model
+is not settled by any number here: purity on 58 studies is a proxy, and the only
+test that resolves it is a retrain and a hidden submission.
+
+## Recommended: agreement as a weight, not a gate
+
+The loss already supports per-cell weighting and that mechanism is currently
+inert, because every cell carries the same `0.90`. Giving it something real to
+carry keeps the 91 good labels instead of discarding them:
+
+```text
+negated                     full weight    97.8% correct
+positive, corroborated      full weight    71.1% correct
+positive, uncorroborated    half weight    62.8% correct
+```
+
+Half is chosen as "trust it half as much", not by sweeping for the best number
+on 58 studies. The one free parameter is soft and monotone rather than a
+hard cut-off, which is the safer shape when the surface you can measure on is
+this small.
+
 ## What follows
 
 Nothing here changes a model, and nothing here is a gate. What it changes is
