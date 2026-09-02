@@ -142,6 +142,43 @@ def test_the_positive_and_negated_split_is_reported():
     assert result["frozen_policy"]["studies"] == 2
 
 
+def test_the_landing_is_broken_down_by_finding():
+    """The aggregate hides the risk: B26 fell over on Synovitis alone."""
+    frame = _export(["a", "b"], {"MCL": ["unmentioned", "negated"]})
+    result = rescue_headroom(
+        frame,
+        _recovered(
+            [
+                ("a", "Synovitis", "positive"),
+                ("a", "ACL", "negated"),
+                ("b", "Synovitis", "positive"),
+            ]
+        ),
+    )
+
+    assert result["frozen_policy"]["per_target"]["Synovitis"] == {
+        "positive": 1,
+        "negated": 0,
+    }
+    assert result["frozen_policy"]["per_target"]["ACL"] == {"positive": 0, "negated": 1}
+    assert result["new_policy"]["per_target"]["Synovitis"] == {
+        "positive": 1,
+        "negated": 0,
+    }
+    assert result["new_policy"]["per_target"]["ACL"] == {"positive": 0, "negated": 0}
+
+
+def test_the_per_target_breakdown_sums_to_the_pile():
+    frame = _export(["a"], {})
+    result = rescue_headroom(
+        frame, _recovered([("a", "ACL", "positive"), ("a", "MCL", "negated")])
+    )
+    pile = result["frozen_policy"]
+
+    assert sum(v["positive"] for v in pile["per_target"].values()) == pile["positive"]
+    assert sum(v["negated"] for v in pile["per_target"].values()) == pile["negated"]
+
+
 def test_a_rescued_study_missing_from_the_export_is_reported_not_ignored():
     frame = _export(["a"], {})
     result = rescue_headroom(frame, _recovered([("z", "ACL", "positive")]))

@@ -237,6 +237,19 @@ def rescue_headroom(
             "positive": int((subset["state"] == "positive").sum()),
             "negated": int((subset["state"] == "negated").sum()),
             "studies": int(subset["StudyInstanceUID"].nunique()),
+            # Which findings the cells pile into, because the aggregate hides
+            # the risk. B26 fell over on Synovitis alone.
+            "per_target": {
+                target: {
+                    "positive": int(
+                        ((subset["target"] == target) & (subset["state"] == "positive")).sum()
+                    ),
+                    "negated": int(
+                        ((subset["target"] == target) & (subset["state"] == "negated")).sum()
+                    ),
+                }
+                for target in TARGETS
+            },
         }
 
     return {
@@ -306,6 +319,17 @@ def _report(result: dict) -> None:
         f"  studies with nothing at all: {before['silent_studies']:,}"
         f" -> {headroom['silent_studies_left_after_rescue']:,}"
     )
+    print()
+    print("  where the cells land, by finding      frozen pile      new pile")
+    print(f"  {'':<18}{'pos':>7}{'neg':>7}   {'pos':>7}{'neg':>7}")
+    for target in TARGETS:
+        a, b = frozen["per_target"][target], fresh["per_target"][target]
+        if not (a["positive"] or a["negated"] or b["positive"] or b["negated"]):
+            continue
+        print(
+            f"  {target:<18}{a['positive']:>7,}{a['negated']:>7,}   "
+            f"{b['positive']:>7,}{b['negated']:>7,}"
+        )
     if headroom["studies_absent_count"]:
         print(
             f"  WARNING {headroom['studies_absent_count']:,} rescued studies are not "
