@@ -217,6 +217,71 @@ on 58 studies. The one free parameter is soft and monotone rather than a
 hard cut-off, which is the safer shape when the surface you can measure on is
 this small.
 
+## Result: filling negatives only beats every other teacher measured
+
+```text
+                 cover    prec    sens    spec  bal acc   cells  wrong     err
+b6_v121         0.3606  0.6736  0.9721  0.5752   0.7736     251     55   21.9%
+b23_full        0.6351  0.6647  0.9869  0.4919   0.7394     442    103   23.3%
+fill_merged     0.6580  0.6527  0.9768  0.4988   0.7378     458    111   24.2%
+negated_fill    0.4497  0.6736  0.9568  0.6518   0.8043     313     57   18.2%
+```
+
+`negated_fill` is the best on balanced accuracy and specificity, and it beats
+B6 -- the teacher whose specificity the whole fill-only argument was built to
+protect -- on both, while carrying 25% more coverage and a **lower** error rate.
+
+Against B6, cell for cell:
+
+```text
+what negated_fill adds to B6      62 cells,  2 wrong   ->  96.8% correct
+B6's own cells, for comparison   251 cells, 55 wrong   ->  78.1% correct
+```
+
+**The added cells are cleaner than the ones already there.** That is the
+opposite of what filling both states did, where the added cells ran at 27.1%
+error against B6's 21.9%.
+
+The trade is visible and it is the right one for this failure:
+
+```text
+specificity   0.5752 -> 0.6518   +0.077
+sensitivity   0.9721 -> 0.9568   -0.015
+```
+
+Sensitivity falls because some added `negated` cells are wrong where the expert
+says yes. That costs little: the measured failure was 106 false positives
+against 5 false negatives, so buying specificity with sensitivity is spending
+the currency in surplus.
+
+On the full corpus the export carries 25,524 usable cells across 4,349 studies,
+48.9% coverage, with every parser call preserved and zero positives added.
+
+## Why this evidence is stronger than the margin suggests
+
+`+0.031` balanced accuracy sits right at the `+/-0.03` that 58 studies resolve.
+Taken alone that is one study short of silence.
+
+What makes it worth acting on is that **the rule was chosen from the mechanism
+before the number existed**. The prediction written down in advance was that
+filling only negatives would raise specificity, because specificity is precisely
+the rate at which true negatives are identified and the measured failure was
+over-calling positives. The prediction was conservative -- it said specificity
+would return *near* B6's -- and the measurement exceeded it.
+
+That is a different kind of evidence from a threshold swept until a number came
+out well, which is what produced B23's pilot and lost it again at full scale.
+There is no free parameter here to have overfitted.
+
+## What it does not settle
+
+This is a **labeller** audit. It says the labels are better. It does not say a
+model trained on them scores better, and nothing here should be quoted as
+though it did. Fewer positive labels also means a different class balance,
+which `target_balance_multipliers` will absorb but not for free.
+
+The only ruler that settles it is a retrain and a hidden submission.
+
 ## What follows
 
 Nothing here changes a model, and nothing here is a gate. What it changes is
