@@ -14,6 +14,8 @@ import pandas as pd
 import pytest
 
 from rsna_knee.b23_fill_merge import (
+    FILL_BOTH_STATES,
+    FILL_NEGATED_ONLY,
     merge_fill_only,
     write_merged_export,
 )
@@ -202,3 +204,114 @@ def test_an_unknown_target_name_is_refused():
     filler = _export(["a"], {})
     with pytest.raises(ValueError, match="unknown target"):
         merge_fill_only(base, filler, exclude_targets=("Synovytis",))
+
+
+# --- filling only what the parser is reliable about ------------------------
+#
+# Measured on the 58 expert studies, the filler's two states are not alike:
+#
+#     negated cells      137    97.8% correct
+#     positive cells     305    67.2% correct
+#
+# and a filled cell is by definition one the base declined to answer, so
+# "refuse any positive the parser does not corroborate" and "fill negated only"
+# are the same rule. These pin that rule, and that the default is unchanged.
+
+
+def _model_confidence(frame, values):
+    """Attach the labeller's own confidence, which training_targets.csv lacks."""
+    frame = frame.copy()
+    for target in TARGETS:
+        frame[f"{target}__model_confidence"] = values.get(target, [1.0] * len(frame))
+    return frame
+
+
+def test_negated_only_adds_negatives_and_refuses_positives():
+    base = _export(["a", "b"], {"ACL": ["unmentioned", "unmentioned"]})
+    filler = _export(["a", "b"], {"ACL": ["positive", "negated"]})
+
+    merged, audit = merge_fill_only(base, filler, fill_states=FILL_NEGATED_ONLY)
+
+    assert merged["ACL__state"].tolist() == ["unmentioned", "negated"]
+    assert audit["targets"]["ACL"]["filled_positive"] == 0
+    assert audit["targets"]["ACL"]["filled_negative"] == 1
+
+
+def test_negated_only_still_preserves_every_parser_call():
+    """Narrowing what may be filled must not touch what the base already said."""
+    base = _export(["a", "b"], {"ACL": ["positive", "negated"]})
+    filler = _export(["a", "b"], {"ACL": ["negated", "positive"]})
+
+    merged, audit = merge_fill_only(base, filler, fill_states=FILL_NEGATED_ONLY)
+
+    assert merged["ACL__state"].tolist() == ["positive", "negated"]
+    assert audit["targets"]["ACL"]["base_overridden"] == 0
+    assert audit["base_cells_overridden"] == 0
+
+
+def test_the_default_still_fills_both_states():
+    """Every completed run used this. It must not move."""
+    import inspect  # noqa: PLC0415
+
+    default = inspect.signature(merge_fill_only).parameters["fill_states"].default
+    assert default == FILL_BOTH_STATES
+
+    base = _export(["a", "b"], {"ACL": ["unmentioned", "unmentioned"]})
+    filler = _export(["a", "b"], {"ACL": ["positive", "negated"]})
+    _merged, audit = merge_fill_only(base, filler)
+    assert audit["targets"]["ACL"]["filled"] == 2
+
+
+def test_the_policy_is_written_into_the_audit():
+    """A run whose rule cannot be read afterwards cannot be reproduced."""
+    base = _export(["a"], {"ACL": ["unmentioned"]})
+    filler = _export(["a"], {"ACL": ["negated"]})
+    _merged, audit = merge_fill_only(base, filler, fill_states=FILL_NEGATED_ONLY)
+    assert audit["fill_states"] == ["negated"]
+    assert audit["min_model_confidence"] is None
+
+
+def test_an_empty_or_unknown_fill_state_is_refused():
+    base = _export(["a"], {"ACL": ["unmentioned"]})
+    filler = _export(["a"], {"ACL": ["negated"]})
+    for bad in ((), ("uncertain",), ("positive", "nonsense")):
+        with pytest.raises(ValueError, match="fill_states must be"):
+            merge_fill_only(base, filler, fill_states=bad)
+
+
+# --- the labeller's own confidence, recorded but never used ---------------
+
+
+def test_the_model_confidence_floor_filters_filled_cells():
+    base = _export(["a", "b"], {"ACL": ["unmentioned", "unmentioned"]})
+    filler = _model_confidence(
+        _export(["a", "b"], {"ACL": ["negated", "negated"]}),
+        {"ACL": [0.80, 1.00]},
+    )
+    merged, audit = merge_fill_only(filler=filler, base=base, min_model_confidence=0.99)
+
+    assert merged["ACL__state"].tolist() == ["unmentioned", "negated"]
+    assert audit["targets"]["ACL"]["filled"] == 1
+    assert audit["min_model_confidence"] == 0.99
+
+
+def test_asking_for_a_confidence_the_export_does_not_carry_says_which_file_to_use():
+    """training_targets.csv has no __model_confidence. Silence here would be a
+    filter that quietly does nothing."""
+    base = _export(["a"], {"ACL": ["unmentioned"]})
+    filler = _export(["a"], {"ACL": ["negated"]})
+    with pytest.raises(ValueError, match="structured_labels.csv"):
+        merge_fill_only(base, filler, min_model_confidence=0.9)
+
+
+def test_the_two_filters_compose():
+    base = _export(["a", "b", "c"], {"ACL": ["unmentioned"] * 3})
+    filler = _model_confidence(
+        _export(["a", "b", "c"], {"ACL": ["positive", "negated", "negated"]}),
+        {"ACL": [1.00, 0.50, 1.00]},
+    )
+    merged, _audit = merge_fill_only(
+        base, filler, fill_states=FILL_NEGATED_ONLY, min_model_confidence=0.9
+    )
+    # a: positive, refused by state. b: negated but unconfident. c: both pass.
+    assert merged["ACL__state"].tolist() == ["unmentioned", "unmentioned", "negated"]

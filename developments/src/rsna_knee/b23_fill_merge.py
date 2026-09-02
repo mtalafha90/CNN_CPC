@@ -42,23 +42,81 @@ MERGE_VERSION = "b6_preserved_plus_b23_fill_v1"
 COMMITTED_STATES = ("positive", "negated")
 MIN_CONFIDENCE = 0.75
 
+# Which states the filler is allowed to supply. Measured on the 58 expert
+# studies, the two are not remotely alike:
+#
+#     negated cells      137    97.8% correct
+#     positive cells     305    67.2% correct
+#
+# and within the positives, the split is exactly the one this merge creates:
+#
+#     B6 also says positive    159    71.1% correct    <- a base cell, preserved
+#     B6 stayed silent         145    62.8% correct    <- what filling adds
+#
+# So "only accept a positive the frozen parser corroborates" and "fill negated
+# cells only" are the same rule stated two ways, because a filled cell is by
+# definition one the base declined to answer. `NEGATED_ONLY` is that rule.
+FILL_BOTH_STATES = ("positive", "negated")
+FILL_NEGATED_ONLY = ("negated",)
 
-def _committed(frame: pd.DataFrame, target: str, *, min_confidence: float) -> pd.Series:
+
+def _committed(
+    frame: pd.DataFrame,
+    target: str,
+    *,
+    min_confidence: float,
+    states: tuple[str, ...] = COMMITTED_STATES,
+    min_model_confidence: float | None = None,
+) -> pd.Series:
+    """Cells this labeller stands behind, optionally narrowed by state or self-report.
+
+    `min_model_confidence` reads `__model_confidence`, the labeller's own number,
+    which the export records and the supervision pipeline never uses. On the 58
+    expert studies it separates its own right answers from its wrong ones at
+    about 0.61 AUC -- real but weak -- so it is available and off by default.
+    """
     state = frame[f"{target}__state"].astype(str)
     confidence = pd.to_numeric(frame[f"{target}__confidence"], errors="coerce").fillna(0.0)
-    return state.isin(COMMITTED_STATES) & confidence.ge(min_confidence)
+    keep = state.isin(states) & confidence.ge(min_confidence)
+    if min_model_confidence is not None:
+        column = f"{target}__model_confidence"
+        if column not in frame.columns:
+            raise ValueError(
+                f"--min-model-confidence needs {column}, which training_targets.csv "
+                "does not carry; point --filler at the export's structured_labels.csv"
+            )
+        model = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
+        keep = keep & model.ge(float(min_model_confidence))
+    return keep
 
 
 def _read_export(root: str | Path) -> tuple[pd.DataFrame, dict]:
+    """Read an export directory, or a single labels CSV.
+
+    `training_targets.csv` carries no gold rows and no `__model_confidence`.
+    `structured_labels.csv` carries both, so a filler pointed at it must be
+    stripped of gold before anything else happens: the 58 expert studies are
+    held out of every run in this project and a merge is not where that changes.
+    """
     root = Path(root)
-    targets_path = root / "training_targets.csv"
-    audit_path = root / "audit.json"
-    for path in (targets_path, audit_path):
-        if not path.is_file():
-            raise FileNotFoundError(f"missing export artifact: {path}")
+    if root.is_file():
+        targets_path, audit_path = root, root.parent / "audit.json"
+    else:
+        targets_path, audit_path = root / "training_targets.csv", root / "audit.json"
+    if not targets_path.is_file():
+        raise FileNotFoundError(f"missing export artifact: {targets_path}")
 
     frame = pd.read_csv(targets_path)
     frame["StudyInstanceUID"] = frame["StudyInstanceUID"].astype(str)
+    if "is_gold" in frame.columns:
+        gold = frame["is_gold"].astype(bool)
+        if gold.any():
+            print(
+                f"[merge] {targets_path.name}: dropping {int(gold.sum())} gold "
+                "studies before merging",
+                flush=True,
+            )
+        frame = frame.loc[~gold].reset_index(drop=True)
     if frame["StudyInstanceUID"].duplicated().any():
         raise ValueError(f"{targets_path} lists a study more than once")
 
@@ -71,7 +129,12 @@ def _read_export(root: str | Path) -> tuple[pd.DataFrame, dict]:
     if missing:
         raise ValueError(f"{targets_path} is missing columns: {', '.join(missing[:6])}")
 
-    return frame, json.loads(audit_path.read_text(encoding="utf-8"))
+    audit = (
+        json.loads(audit_path.read_text(encoding="utf-8"))
+        if audit_path.is_file()
+        else {"note": f"no audit.json beside {targets_path.name}"}
+    )
+    return frame, audit
 
 
 def merge_fill_only(
@@ -80,6 +143,8 @@ def merge_fill_only(
     *,
     min_confidence: float = MIN_CONFIDENCE,
     exclude_targets: tuple[str, ...] = (),
+    fill_states: tuple[str, ...] = FILL_BOTH_STATES,
+    min_model_confidence: float | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Keep every committed base cell; take a filler cell only where base is silent.
 
@@ -96,6 +161,9 @@ def merge_fill_only(
     unknown = [t for t in exclude_targets if t not in TARGETS]
     if unknown:
         raise ValueError(f"unknown target(s) to exclude: {', '.join(unknown)}")
+    unknown_states = [s for s in fill_states if s not in COMMITTED_STATES]
+    if unknown_states or not fill_states:
+        raise ValueError(f"fill_states must be a non-empty subset of {COMMITTED_STATES}")
 
     merged = base.copy()
     filler_by_uid = filler.set_index("StudyInstanceUID")
@@ -121,7 +189,13 @@ def merge_fill_only(
             continue
 
         filler_committed = (
-            _committed(aligned, target, min_confidence=min_confidence)
+            _committed(
+                aligned,
+                target,
+                min_confidence=min_confidence,
+                states=tuple(fill_states),
+                min_model_confidence=min_model_confidence,
+            )
             & shared.reset_index(drop=True)
         )
         fillable = ~base_committed & filler_committed
@@ -146,6 +220,10 @@ def merge_fill_only(
         "merge_version": MERGE_VERSION,
         "rule": "every committed base cell is preserved; the filler is used only where the base is silent",
         "min_confidence": float(min_confidence),
+        "fill_states": list(fill_states),
+        "min_model_confidence": (
+            None if min_model_confidence is None else float(min_model_confidence)
+        ),
         "studies": int(len(merged)),
         "studies_seen_by_filler": int(shared.sum()),
         "possible_cells": int(possible),
@@ -247,6 +325,25 @@ def main() -> None:
     parser.add_argument("--out-root", required=True)
     parser.add_argument("--min-confidence", type=float, default=MIN_CONFIDENCE)
     parser.add_argument(
+        "--fill-states",
+        choices=("both", "negated"),
+        default="both",
+        help=(
+            "which states the filler may supply. 'negated' keeps every base call "
+            "and adds only negatives, which is the same rule as refusing any "
+            "positive the base parser does not corroborate"
+        ),
+    )
+    parser.add_argument(
+        "--min-model-confidence",
+        type=float,
+        default=None,
+        help=(
+            "also require the labeller's own confidence. Needs a filler export "
+            "carrying __model_confidence, i.e. structured_labels.csv"
+        ),
+    )
+    parser.add_argument(
         "--exclude-target",
         action="append",
         default=[],
@@ -266,6 +363,10 @@ def main() -> None:
         filler,
         min_confidence=args.min_confidence,
         exclude_targets=tuple(args.exclude_target),
+        fill_states=(
+            FILL_NEGATED_ONLY if args.fill_states == "negated" else FILL_BOTH_STATES
+        ),
+        min_model_confidence=args.min_model_confidence,
     )
     _report(audit)
 
