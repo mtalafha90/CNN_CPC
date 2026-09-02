@@ -1,9 +1,60 @@
 # B51 — the adapted hierarchy at full scale, for submission
 
 **Date:** 2026-08-29
-**Status:** PROTOCOL / NOT IMPLEMENTED / NOT RUN.
+**Status:** COMPLETED / KAGGLE `0.713` / NOT PROMOTED.
 
-Frozen before any B51 training. No number below is a result.
+The protocol below was frozen before any B51 training. The completed hidden
+result is recorded immediately after it.
+
+## Completed hidden result
+
+**COMPLETED / KAGGLE `0.713` / NOT PROMOTED.**
+
+```text
+B42 (frozen hierarchy)      0.714
+B51 (adapted hierarchy)     0.713      -0.001
+```
+
+B50's controlled comparison measured `+0.011221` on 548 unseen-scanner
+studies, all twelve targets improved. On roughly 1,300 hidden studies the
+same change measures `-0.001`. The runbook predeclared this outcome as one of
+the two it expected -- "may display `0.714` again and be indistinguishable" --
+and predeclared that it authorises nothing. It does not.
+
+**Do not read `-0.001` as a decrease.** Kaggle displays three decimals, and one
+unit in the last place on this many studies is inside the noise of the
+measurement. The honest statement is that the adapted hierarchy is
+indistinguishable from the frozen one on hidden data, not that it is worse.
+
+### One confound, stated rather than buried
+
+This run was the first through the hidden-safe execution contract, which
+**drops a series it cannot decode** instead of ending the run. B42's `0.714`
+was measured under the strict reader, where an undecodable series was
+impossible by construction: the run crashed instead.
+
+All local and visible data is uncompressed (`1.2.840.10008.1.2.1`), and the
+competition contract says the hidden set may contain JPEG Lossless and JPEG
+2000. The decoder preflight raised `no decoder for JPEG Lossless P14` in the
+B52 notebook and was never resolved, so we do not know whether the same was
+true of this run. If series were dropped, `0.713` is a floor and the true
+figure is higher.
+
+The hidden run's log and manifest are not visible, so the count of dropped
+series cannot be recovered for this submission. **Resolve the decoders before
+the next one**, and the comparison becomes clean.
+
+### What this does and does not settle
+
+* The hidden-safe execution path works. Three previous attempts on this family
+  -- B39, B41 and B51's own first try -- ended in `Notebook Threw Exception`.
+* B50's `+0.011` on 548 report-labelled unseen-scanner studies did not
+  reproduce on ~1,300 hidden studies with expert labels. Either the effect is
+  smaller than the domain-shift split suggested, or the two surfaces measure
+  different things. This project has now seen `0.694`, `0.707`, `0.713` and
+  `0.714` from four architectures, which is a plateau, not a ranking.
+* Nothing here authorises tuning the hierarchy learning rate, the epoch count,
+  the seed or the geometry against this number.
 
 ## What B51 is
 
