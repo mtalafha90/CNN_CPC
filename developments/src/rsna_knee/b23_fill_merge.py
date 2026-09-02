@@ -147,11 +147,20 @@ def merge_fill_only(
     exclude_targets: tuple[str, ...] = (),
     fill_states: tuple[str, ...] = FILL_BOTH_STATES,
     min_model_confidence: float | None = None,
+    only_silent_studies: bool = False,
 ) -> tuple[pd.DataFrame, dict]:
     """Keep every committed base cell; take a filler cell only where base is silent.
 
     The base's study order is preserved exactly, and a study the filler never
     saw simply contributes nothing rather than dropping the study.
+
+    `only_silent_studies` narrows that further: a filler cell is taken only if
+    the base says *nothing whatever* about that study. It exists for the
+    translation rescue, where the two cases are not the same decision. Phase 6
+    froze "no translated cell may enter a B6-active study"; a study the LLM
+    filler has since answered was not B6-active, so whether that clause reaches
+    it is a judgement rather than a lookup. This flag is how a run declines to
+    make that judgement, and it turns 2,725 available cells into 678.
 
     `exclude_targets` leaves a finding entirely on the base labeller. That
     exists for Synovitis: B26 filled its scarce negatives, passed a 100% manual
@@ -173,6 +182,18 @@ def merge_fill_only(
 
     aligned = (
         filler_by_uid.reindex(merged["StudyInstanceUID"]).reset_index(drop=True)
+    )
+
+    # Study-level silence, measured on the base before a single cell is written,
+    # so the first target filled cannot make the later ones ineligible.
+    base_cells_per_study = sum(
+        _committed(base, target, min_confidence=min_confidence).astype(int)
+        for target in TARGETS
+    )
+    eligible_study = (
+        base_cells_per_study.eq(0).reset_index(drop=True)
+        if only_silent_studies
+        else pd.Series(True, index=range(len(merged)))
     )
 
     per_target: dict[str, dict] = {}
@@ -200,7 +221,7 @@ def merge_fill_only(
             )
             & shared.reset_index(drop=True)
         )
-        fillable = ~base_committed & filler_committed
+        fillable = ~base_committed & filler_committed & eligible_study
 
         carried = [target, f"{target}__confidence", f"{target}__state"]
         # The labeller's own confidence travels with the cell it belongs to, so a
@@ -236,6 +257,8 @@ def merge_fill_only(
         "min_model_confidence": (
             None if min_model_confidence is None else float(min_model_confidence)
         ),
+        "only_silent_studies": bool(only_silent_studies),
+        "studies_wholly_silent_in_base": int(base_cells_per_study.eq(0).sum()),
         "studies": int(len(merged)),
         "studies_seen_by_filler": int(shared.sum()),
         "possible_cells": int(possible),
@@ -346,6 +369,11 @@ def write_merged_export(
 
 def _report(audit: dict) -> None:
     print(f"\n{audit['studies']} studies, {audit['possible_cells']:,} possible cells\n")
+    if audit.get("only_silent_studies"):
+        print(
+            f"  filling only the {audit['studies_wholly_silent_in_base']:,} studies "
+            "the base says nothing about\n"
+        )
     print(f"  parser committed   {audit['base_committed_cells']:>7,}"
           f"   {audit['base_coverage'] * 100:5.1f}% coverage")
     print(f"  filled by the LLM  {audit['filled_cells']:>7,}"
@@ -406,9 +434,21 @@ def main() -> None:
         action="append",
         default=[],
         help=(
+            # argparse %-formats help text, so a literal percent must be doubled
+            # or --help raises instead of printing.
             "leave this finding entirely on the base labeller; repeat the flag. "
-            "Synovitis is the known case: B26 filled its negatives at 100% manual "
+            "Synovitis is the known case: B26 filled its negatives at 100%% manual "
             "label accuracy and expert AUC fell anyway"
+        ),
+    )
+    parser.add_argument(
+        "--only-silent-studies",
+        action="store_true",
+        help=(
+            "fill only studies the base says nothing whatever about. For the "
+            "translation rescue: filling a wholly silent study is the frozen "
+            "Phase-8 policy, filling one the LLM has already reached is a new "
+            "and unmeasured one"
         ),
     )
     args = parser.parse_args()
@@ -425,6 +465,7 @@ def main() -> None:
             FILL_NEGATED_ONLY if args.fill_states == "negated" else FILL_BOTH_STATES
         ),
         min_model_confidence=args.min_model_confidence,
+        only_silent_studies=args.only_silent_studies,
     )
     _report(audit)
 

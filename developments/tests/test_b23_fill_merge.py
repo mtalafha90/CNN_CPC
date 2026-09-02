@@ -405,3 +405,95 @@ def test_the_model_confidence_column_survives_into_the_structured_file(tmp_path)
 
     structured = pd.read_csv(tmp_path / "structured_labels.csv")
     assert "ACL__model_confidence" in structured.columns
+
+
+# --- filling only the studies the base never speaks about --------------------
+#
+# The translation rescue makes the distinction matter. Phase 6 froze "no
+# translated cell may enter a B6-active study". A study the LLM filler has since
+# answered was not B6-active, so whether that clause reaches it is a judgement.
+# `only_silent_studies` is how a run declines to make it.
+
+
+def test_a_wholly_silent_study_is_filled():
+    base = _export(["a"], {})
+    filler = _export(["a"], {"ACL": ["positive"]})
+    merged, audit = merge_fill_only(base, filler, only_silent_studies=True)
+
+    assert merged["ACL__state"].iloc[0] == "positive"
+    assert audit["filled_cells"] == 1
+    assert audit["only_silent_studies"] is True
+    assert audit["studies_wholly_silent_in_base"] == 1
+
+
+def test_a_study_the_base_already_speaks_about_is_left_alone():
+    """One MCL call anywhere in the study blocks every other cell in it."""
+    base = _export(["a"], {"MCL": ["negated"]})
+    filler = _export(["a"], {"ACL": ["positive"]})
+    merged, audit = merge_fill_only(base, filler, only_silent_studies=True)
+
+    assert merged["ACL__state"].iloc[0] == "unmentioned"
+    assert audit["filled_cells"] == 0
+    assert audit["studies_wholly_silent_in_base"] == 0
+
+
+def test_the_flag_changes_nothing_when_it_is_off():
+    base = _export(["a"], {"MCL": ["negated"]})
+    filler = _export(["a"], {"ACL": ["positive"]})
+    merged, audit = merge_fill_only(base, filler)
+
+    assert merged["ACL__state"].iloc[0] == "positive"
+    assert audit["only_silent_studies"] is False
+
+
+def test_silence_is_judged_on_the_base_not_as_the_merge_proceeds():
+    """Filling ACL must not make the study ineligible for the targets after it."""
+    base = _export(["a"], {})
+    filler = _export(
+        ["a"], {"ACL": ["positive"], "MCL": ["negated"], "Fracture": ["negated"]}
+    )
+    merged, audit = merge_fill_only(base, filler, only_silent_studies=True)
+
+    assert audit["filled_cells"] == 3
+    assert merged["Fracture__state"].iloc[0] == "negated"
+
+
+def test_only_the_silent_study_of_several_is_filled():
+    base = _export(["quiet", "loud"], {"MCL": ["unmentioned", "negated"]})
+    filler = _export(["quiet", "loud"], {"ACL": ["positive", "positive"]})
+    merged, audit = merge_fill_only(base, filler, only_silent_studies=True)
+
+    assert merged["ACL__state"].tolist() == ["positive", "unmentioned"]
+    assert audit["filled_cells"] == 1
+    assert audit["studies_wholly_silent_in_base"] == 1
+
+
+def test_a_base_cell_below_the_threshold_leaves_the_study_silent():
+    """The same rule decides coverage and eligibility, so it must be one rule."""
+    base = _export(["a"], {"MCL": ["negated"]}, confidences={"MCL": [0.5]})
+    filler = _export(["a"], {"ACL": ["positive"]})
+    merged, audit = merge_fill_only(base, filler, only_silent_studies=True)
+
+    assert audit["studies_wholly_silent_in_base"] == 1
+    assert merged["ACL__state"].iloc[0] == "positive"
+
+
+def test_a_gold_study_the_filler_never_saw_is_untouched():
+    """The expert surface must be identical afterwards, or the merge is wrong."""
+    base = _with_gold(_export(["a", "g"], {"ACL": ["unmentioned", "positive"]}), {"g"})
+    filler = _export(["a"], {"ACL": ["negated"]})
+    merged, _ = merge_fill_only(base, filler, only_silent_studies=True)
+
+    assert merged.loc[merged["StudyInstanceUID"].eq("g"), "ACL__state"].iloc[0] == "positive"
+
+
+def test_help_renders(capsys, monkeypatch):
+    """argparse %-formats help text, so a literal percent makes --help raise."""
+    from rsna_knee.b23_fill_merge import main
+
+    monkeypatch.setattr("sys.argv", ["b23_fill_merge", "--help"])
+    with pytest.raises(SystemExit) as exit_info:
+        main()
+
+    assert exit_info.value.code == 0
+    assert "--only-silent-studies" in capsys.readouterr().out
