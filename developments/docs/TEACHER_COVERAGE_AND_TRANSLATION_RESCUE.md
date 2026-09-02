@@ -2,10 +2,83 @@
 
 ## Status
 
-**MEASUREMENT TOOL READY. THE MEASUREMENT HAS NOT BEEN RUN.**
+**COMPLETE. MERGED TEACHER BUILT AT `runs/092_rescued_negated_fill`, UNTRAINED.**
 
-Nothing here changes a label. It asks one question whose answer decides whether
-a merge is worth building at all.
+The measurement was run, the frozen half of the rescue was merged, and the
+expert surface confirmed unchanged. No model has been trained on it.
+
+## Result
+
+The overlap was most of it. The LLM filler had already reached three quarters of
+the studies B6 could not read:
+
+```text
+studies B6 could not read at all        1,229
+studies the filler still leaves blank     321
+```
+
+Of the 3,901 rescued cells, 1,176 were already answered. The remaining 2,725
+split into two piles that are not the same decision:
+
+```text
+into wholly silent studies      678 cells    659 pos    19 neg    228 studies
+into studies the filler reached 2,047 cells 1,973 pos   74 neg    741 studies
+```
+
+Both piles are about 97% positive, because the negated-only filler had already
+taken every negated cell the rescue had to offer. What was left was positives.
+
+**The frozen pile was taken. The 2,047-cell pile was refused.** Taking both
+would have raised positive labels by 38% and negative labels by 0.5%, in a
+teacher whose measured fault is 106 false positives against 5 false negatives.
+
+```text
+before    25,524 cells    48.9% coverage    321 studies blank
+after     26,202 cells    50.1% coverage     93 studies blank
+```
+
+The 93 remaining are unreachable: not by B6, not by the LLM, not by translation.
+That is 2.1% of the population and no built mechanism is left to try.
+
+### The B26 shape is absent
+
+B26 failed by adding *negatives* to Synovitis. This adds 19 Synovitis
+*positives* — the opposite operation, and 2.8% of the pile. Nothing is
+concentrated; the 678 cells spread across all twelve findings roughly in
+proportion to how common each is, the largest single block being ACL at 102.
+
+These are also not LLM positives. They are the frozen B6 parser's own positives,
+read off a translated report, and B6 positives are accepted everywhere else in
+this teacher. Taking them is consistent rather than a new leniency.
+
+### The expert surface is unchanged, as required
+
+No gold study is in the rescued population, so the audit had to come back
+identical, and did:
+
+```text
+                  rescued_negated_fill    negated_fill
+coverage                        0.4497          0.4497
+precision                       0.6736          0.6736
+sensitivity                     0.9568          0.9568
+specificity                     0.6518          0.6518
+balanced accuracy               0.8043          0.8043
+cells called                       313             313
+disagreeing with the expert         57              57
+```
+
+That is the check, not a formality: a single moved digit would have meant a
+rescued cell had reached a gold study.
+
+### What it does not do
+
+It does not fix ACL. 102 new ACL positives against 3,361 existing is a 3%
+increase, and ACL sits at 0.5478 against expert truth. That remains its own
+problem, and a larger one — ACL and MCL reaching 0.70 is worth +0.029 macro.
+
+The change is 2.6% of the surface and cannot be scored locally. It does not
+justify a training run of its own; it should ride along with one already
+planned.
 
 ## The situation
 
@@ -43,7 +116,8 @@ counting afterwards gets that backwards.
 PYTHONPATH=developments/src \
 python -m rsna_knee.teacher_coverage_audit \
   --export runs/091_negated_fill_merge/structured_labels.csv \
-  --phase7-root runs/report_translation_rescue_full \
+  --phase7-root runs/056_Experiment_AUDIT_P7_full_translation_rescue/\
+report_translation_rescue_full \
   --out-json runs/091_negated_fill_merge/coverage.json
 ```
 
@@ -110,12 +184,30 @@ the filler has run.
 ## Order of work
 
 ```text
-1  measure the overlap                      the command above, minutes
-2  decide the policy before merging         global, or global negated-only
-3  build the merged teacher                 b23_fill_merge, chained
-4  confirm the expert score is unchanged    it must be, exactly
-5  train, and let the hidden test judge     the only ruler that can
+1  measure the overlap                      DONE   678 of 2,725 eligible
+2  decide the policy before merging         DONE   frozen pile only
+3  build the merged teacher                 DONE   runs/092_rescued_negated_fill
+4  confirm the expert score is unchanged    DONE   identical to four decimals
+5  train, and let the hidden test judge     PENDING
 ```
 
-Step 4 is not a formality. If the expert-58 score moves at all, a rescued cell
-has reached a gold study and the merge is wrong.
+Step 5 needs `--expected-cells 26202`: the surface guard is pinned to the base
+checkpoint's own count, and a deliberate teacher change must state its number
+rather than have the guard relaxed for everyone.
+
+The merge command, for the record:
+
+```bash
+PYTHONPATH=developments/src \
+python -m rsna_knee.b23_fill_merge \
+  --base   runs/091_negated_fill_merge/structured_labels.csv \
+  --filler runs/057_Experiment_AUDIT_P8_merged_translation_supervision/\
+translation_rescue_supervision_v1/training_targets.csv \
+  --only-silent-studies \
+  --fill-states both \
+  --out-root runs/092_rescued_negated_fill
+```
+
+The Phase-8 file is B6 plus the rescue, and the base already holds every B6
+cell, so anything the filler can add is by construction a rescued cell. No
+conversion from the long-form `recovered_cells.csv` was needed.
