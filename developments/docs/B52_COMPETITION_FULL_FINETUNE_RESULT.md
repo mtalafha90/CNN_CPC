@@ -16,6 +16,55 @@
 > `B53_AUGMENTATION_APPLIED.md` has the two causes, the measurement, and the
 > corrected experiment.
 
+## Completed hidden result
+
+**COMPLETED / KAGGLE `0.716`.**
+
+```text
+0.694   B37 family, 224 base
+0.707   B49 native tiled multiscale
+0.713   B51 adapted hierarchy
+0.714   B42 / B41 constant-area          the standing reference
+0.716   B52 competition full fine-tune   <- this run
+```
+
+`+0.002` over B42, and the first score this project has put above `0.714`.
+
+**Read it carefully.** Kaggle displays three decimals, and `+0.002` on roughly
+1,300 studies is the same order as the `-0.001` that separated B51 from B42 --
+which was read, correctly, as no difference. One result cannot be evidence of
+an effect when a result of the same size in the other direction was read as
+noise. What can be said is that five architectures now span `0.694` to `0.716`,
+and B52 sits at the top of that range rather than in the middle of it.
+
+The same confound as B51 applies: this ran through the hidden-safe contract,
+which drops an undecodable series instead of ending the run, and the notebook
+imported pydicom after the GDCM install without invalidating caches. The
+decoders were later measured available on that image, so the risk is small,
+but the hidden log is not visible and the count of dropped series cannot be
+recovered. `0.716` is either clean or a floor.
+
+### What B52 changed, and what that does not license
+
+```text
+epochs                      2, fixed     ->  6, best selected
+encoder trainable stages    1            ->  5
+training population         4,349        ->  3,801 plus the seen-scanner splits
+checkpoint selection        none         ->  best held-out epoch
+```
+
+Four changes at once, so this result cannot attribute anything to any one of
+them. B52 was always a competition endpoint rather than an experiment, and it
+is recorded as one. Nothing here identifies which change mattered, and nothing
+here authorises tuning epochs, stages, or the selection rule against `0.716`.
+
+### The local number, for scale
+
+B52's selected epoch scored `0.834998` on 548 unseen-scanner studies with
+report-derived labels. The hidden test returned `0.716` against expert labels.
+**These measure different things on different studies and are not comparable.**
+The gap is not a drop; the two surfaces have never been on the same scale.
+
 ## The question
 
 Eight architecture experiments since B37 searched for a missing mechanism and
