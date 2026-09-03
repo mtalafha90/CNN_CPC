@@ -54,16 +54,43 @@ Lateral OA           0.5725   0.7292   +0.1567
 
 Worse on 9 of 12. No single row is evidence; nine of twelve moving one way is.
 
+## What each teacher actually holds
+
+Counted directly from each export's `structured_labels.csv`, gold rows excluded,
+by the same rule training uses -- `positive` or `negated` at confidence 0.75 or
+above:
+
+```text
+teacher                 studies    cells      pos      neg   pos %    err
+B6 v1.2.1 alone           4,349   14,123    6,871    7,252   48.7%  21.9%
+B52: fill both            4,349   34,010   15,357   18,653   45.2%  24.2%
+091: fill negated         4,349   25,524    6,871   18,653   26.9%  18.2%
+092: 091 + rescue         4,349   26,202    7,530   18,672   28.7%  18.2%
+```
+
+Three identities confirm the merge behaved as designed, and were checked rather
+than assumed: B6 and 091 carry the same 6,871 positives, because the negated-only
+rule never touches a parser cell; B52 and 091 carry the same 18,653 negatives,
+because both take the same negated fills; and B52's 34,010 matches
+`EXPECTED_BASE_CELLS`, so this is the surface B52 actually trained on rather than
+a later rebuild.
+
 ## Why, most likely
 
 The negated-only rule was adopted for a good measured reason. Filled positive
 cells were 62.8% correct where filled negated cells were 97.8%, so dropping the
 positives raised label accuracy from 24.2% wrong to 18.2%.
 
-It also removed 8,486 cells, and almost all of them were positives. The teacher
-went from a mixed surface to one that is 26.9% positive. **The model lost
-examples of what a finding looks like, and gained accuracy about what one does
-not.**
+The LLM had filled 19,887 cells: 11,401 negated and 8,486 positive. The rule
+kept every negated one and discarded every positive one.
+
+```text
+positives   15,357  ->  6,871      a fall of 55%
+```
+
+**The model lost more than half of every example of what a finding looks like,
+and gained accuracy about what one does not.** 092 restores 659 of those 8,486,
+which is 7.8% of what was removed.
 
 That is a hypothesis rather than a demonstration; the run changed one thing, but
 that one thing changed both label accuracy and positive count together, and this
