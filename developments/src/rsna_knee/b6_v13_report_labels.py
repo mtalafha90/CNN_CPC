@@ -61,8 +61,12 @@ flip, because there the negation attaches to something else.
 """
 from __future__ import annotations
 
+import argparse
+import json
 import re
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from .b6_report_labels import (
@@ -71,9 +75,12 @@ from .b6_report_labels import (
     _clause,
     _classify_mention,
     _component_limited_negative,
+    _review_queue,
     _state_to_values,
+    _target_audit,
 )
-from .data import normalize_report
+from .constants import TARGETS
+from .data import gold_mask, load_train_csv, normalize_report
 from .report_labels import (
     OA_TARGETS,
     STATE_NEGATED,
@@ -267,6 +274,169 @@ def predict_target_b6_v13(text: str, target: str, *, use_v13: bool = True) -> B6
     return _resolve(observations, target)
 
 
+def build_b6_v13_frame(df: pd.DataFrame, *, use_v13: bool = True) -> pd.DataFrame:
+    """The same table `build_b6_frame` writes, from the v1.3 parser.
+
+    Identical columns and dtypes, so `b23_fill_merge --base` takes it without
+    changing a line.
+    """
+    out = pd.DataFrame({"StudyInstanceUID": df["StudyInstanceUID"].astype(str)})
+    out["is_gold"] = gold_mask(df).to_numpy(dtype=bool)
+    reports = df["Report"].fillna("").astype(str)
+    out["has_report"] = reports.map(
+        lambda text: bool(normalize_report(text))
+    ).to_numpy(dtype=bool)
+
+    for target in TARGETS:
+        predictions = [
+            predict_target_b6_v13(text, target, use_v13=use_v13) for text in reports
+        ]
+        out[target] = np.asarray(
+            [item.probability for item in predictions], dtype=np.float32
+        )
+        out[f"{target}__confidence"] = np.asarray(
+            [item.confidence for item in predictions], dtype=np.float32
+        )
+        out[f"{target}__state"] = [item.state for item in predictions]
+        out[f"{target}__mentioned"] = [item.mentioned for item in predictions]
+        out[f"{target}__reason"] = [item.reason for item in predictions]
+        out[f"{target}__evidence"] = [item.evidence for item in predictions]
+    return out
+
+
+def change_summary(frozen: pd.DataFrame, updated: pd.DataFrame) -> dict:
+    """What v1.3 moved, counted on the report-only studies that train the model."""
+    report_only = ~frozen["is_gold"].astype(bool)
+    summary: dict = {
+        "version": B6_V13_VERSION,
+        "studies": int(report_only.sum()),
+        "targets": {},
+        "totals": {
+            "cells_newly_answered": 0,
+            "cells_state_changed": 0,
+            "fallback_cells_now_quoted": 0,
+            "cells_flipped_by_list_negation_guard": 0,
+            "cells_silenced": 0,
+        },
+    }
+    for target in TARGETS:
+        old_state = frozen.loc[report_only, f"{target}__state"]
+        new_state = updated.loc[report_only, f"{target}__state"]
+        old_reason = frozen.loc[report_only, f"{target}__reason"]
+        new_reason = updated.loc[report_only, f"{target}__reason"]
+
+        was_silent = old_state.eq(STATE_UNMENTIONED)
+        is_silent = new_state.eq(STATE_UNMENTIONED)
+        newly = int((was_silent & ~is_silent).sum())
+        changed = int((old_state != new_state).sum())
+        requoted = int(
+            (
+                old_reason.eq("compartment_aware_oa_context")
+                & ~new_reason.eq("compartment_aware_oa_context")
+                & ~is_silent
+            ).sum()
+        )
+        flipped = int(new_reason.eq("list_negation_guard").sum())
+        silenced = int((~was_silent & is_silent).sum())
+
+        summary["targets"][target] = {
+            "cells_newly_answered": newly,
+            "cells_state_changed": changed,
+            "fallback_cells_now_quoted": requoted,
+            "cells_flipped_by_list_negation_guard": flipped,
+            "cells_silenced": silenced,
+        }
+        for key, value in summary["targets"][target].items():
+            summary["totals"][key] += value
+    return summary
+
+
+def run_b6_v13_export(
+    train_csv: str | Path,
+    *,
+    out_root: str | Path = "runs/b6_v13_report_labels",
+    min_confidence: float = 0.75,
+    max_review: int = 1000,
+) -> dict:
+    """Write a v1.3 parser export, plus exactly what it changed against v1.2.1."""
+    if not 0.0 <= min_confidence <= 1.0:
+        raise ValueError("min_confidence must be in [0,1]")
+    if max_review < 0:
+        raise ValueError("max_review must be >=0")
+
+    df = load_train_csv(train_csv)
+    out = Path(out_root)
+    out.mkdir(parents=True, exist_ok=True)
+
+    structured = build_b6_v13_frame(df, use_v13=True)
+    frozen = build_b6_v13_frame(df, use_v13=False)
+    structured.to_csv(out / "structured_labels.csv", index=False)
+
+    report_only = structured.loc[~structured["is_gold"].astype(bool)].copy()
+    training_columns = ["StudyInstanceUID"]
+    for target in TARGETS:
+        training_columns.extend([target, f"{target}__confidence", f"{target}__state"])
+    report_only[training_columns].to_csv(out / "training_targets.csv", index=False)
+
+    review = _review_queue(structured, df, max_rows=max_review)
+    review.to_csv(out / "review_queue.csv", index=False)
+
+    changes = change_summary(frozen, structured)
+    (out / "v13_changes.json").write_text(
+        json.dumps(changes, indent=2), encoding="utf-8"
+    )
+
+    audit = {
+        "b6_version": B6_V13_VERSION,
+        "supersedes": "1.2.1",
+        "n_studies": int(len(structured)),
+        "n_gold_audit_only": int(structured["is_gold"].sum()),
+        "n_report_only_training": int((~structured["is_gold"].astype(bool)).sum()),
+        "n_reports_present": int(structured["has_report"].sum()),
+        "min_confidence_for_usable_cell": float(min_confidence),
+        "external_models": False,
+        "external_data": False,
+        "gold_fitted_calibration": False,
+        "gold_rows_in_training_targets": 0,
+        "targets": {
+            target: _target_audit(structured, target, min_confidence=min_confidence)
+            for target in TARGETS
+        },
+        "v13_changes": changes["totals"],
+        "review_queue_rows": int(len(review)),
+    }
+    (out / "audit.json").write_text(json.dumps(audit, indent=2), encoding="utf-8")
+
+    print(json.dumps({"v13_changes": changes}, indent=2))
+    for name in (
+        "structured_labels.csv",
+        "training_targets.csv",
+        "review_queue.csv",
+        "audit.json",
+        "v13_changes.json",
+    ):
+        print(out / name)
+    return audit
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Export B6 v1.3 report labels, and what they change against v1.2.1"
+    )
+    parser.add_argument("--train-csv", required=True)
+    parser.add_argument("--out-root", default="runs/b6_v13_report_labels")
+    parser.add_argument("--min-confidence", type=float, default=0.75)
+    parser.add_argument("--max-review", type=int, default=1000)
+    args = parser.parse_args()
+
+    run_b6_v13_export(
+        args.train_csv,
+        out_root=args.out_root,
+        min_confidence=args.min_confidence,
+        max_review=args.max_review,
+    )
+
+
 def compare_versions(reports: pd.Series, target: str) -> pd.DataFrame:
     """What v1.3 changes, report by report, so the diff can be inspected."""
     rows = []
@@ -289,3 +459,7 @@ def compare_versions(reports: pd.Series, target: str) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+if __name__ == "__main__":
+    main()
