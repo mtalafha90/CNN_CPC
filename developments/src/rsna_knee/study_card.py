@@ -136,16 +136,8 @@ def card(
                     else bool((state == "positive") == bool(float(expert)))
                 ),
                 "from": source,
-                "evidence": (
-                    str(parser_row.get(f"{target}__evidence", "") or "")
-                    if parser_row is not None
-                    else ""
-                ),
-                "reason": (
-                    str(parser_row.get(f"{target}__reason", "") or "")
-                    if parser_row is not None
-                    else ""
-                ),
+                "evidence": _text(parser_row, f"{target}__evidence"),
+                "reason": _text(parser_row, f"{target}__reason"),
             }
         )
 
@@ -159,6 +151,19 @@ def card(
         "answered": sum(1 for item in findings if item["teacher"] != "-"),
         "disagreements": sum(1 for item in findings if item["agrees"] is False),
     }
+
+
+def _text(row: pd.Series | None, column: str) -> str:
+    """A cell's text, with a missing value read as empty rather than "nan".
+
+    An empty string written to CSV comes back as NaN, and NaN is truthy, so
+    `value or ""` keeps it and `str()` then prints the word "nan" where there is
+    simply nothing. That reads as a recorded value and is the opposite of one.
+    """
+    if row is None or column not in row.index:
+        return ""
+    value = row[column]
+    return "" if pd.isna(value) else str(value)
 
 
 def _series_of(root: Path, study: str, split: str) -> list[dict]:
@@ -204,16 +209,28 @@ def _report(result: dict) -> None:
         print("    (no series rows found)")
 
     print()
-    header = f"  {'finding':<18}{'teacher':<11}{'expert':<11}{'from':<9}evidence the parser matched"
+    header = f"  {'finding':<18}{'teacher':<11}{'expert':<11}{'from':<8}rule that fired"
     print(header)
     print("  " + "-" * (len(header) - 2))
     for item in result["findings"]:
         mark = {True: " ", False: "!", None: " "}[item["agrees"]]
-        clause = item["evidence"][:CLAUSE_WIDTH]
         print(
             f" {mark}{item['target']:<18}{item['teacher']:<11}{item['expert']:<11}"
-            f"{item['from']:<9}{clause}"
+            f"{item['from']:<8}{item['reason']}"
         )
+        if item["evidence"]:
+            print(
+                textwrap.fill(
+                    item["evidence"][:CLAUSE_WIDTH],
+                    92,
+                    initial_indent="      > ",
+                    subsequent_indent="        ",
+                )
+            )
+        elif item["teacher"] != "-":
+            # A definite call with no clause behind it. The rule name is then
+            # the only account of why, which is why it is printed above.
+            print("      > (no clause recorded)")
 
     print()
     print(

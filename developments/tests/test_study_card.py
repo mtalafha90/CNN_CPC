@@ -221,3 +221,37 @@ def test_a_low_confidence_cell_is_not_answered(tmp_path):
     assert card(data_root=train.parent, study="alpha", teacher=teacher, min_confidence=0.95)[
         "answered"
     ] == 0
+
+
+def test_an_empty_clause_reads_as_empty_not_as_the_word_nan(tmp_path):
+    """An empty string in CSV comes back as NaN, and NaN is truthy."""
+    rows = [{"uid": "alpha", "states": {"ACL": "negated"}, "evidence": {"ACL": ""}}]
+    train = _train(tmp_path, rows)
+    b6 = _export(tmp_path, "b6.csv", rows)
+    teacher = _export(tmp_path, "t.csv", rows)
+
+    result = card(data_root=train.parent, study="alpha", teacher=teacher, b6_export=b6)
+    by_target = {item["target"]: item for item in result["findings"]}
+
+    assert by_target["ACL"]["evidence"] == ""
+    assert "nan" not in by_target["ACL"]["evidence"]
+
+
+def test_the_rule_that_fired_is_carried_even_with_no_clause(tmp_path):
+    """With no clause, the rule name is the only account of why the call was made."""
+    rows = [
+        {
+            "uid": "alpha",
+            "states": {"Medial OA": "positive"},
+            "evidence": {"Medial OA": ""},
+            "reason": {"Medial OA": "compartment_aware_oa_context"},
+        }
+    ]
+    train = _train(tmp_path, rows)
+    b6 = _export(tmp_path, "b6.csv", rows)
+
+    result = card(data_root=train.parent, study="alpha", teacher=b6, b6_export=b6)
+    by_target = {item["target"]: item for item in result["findings"]}
+
+    assert by_target["Medial OA"]["reason"] == "compartment_aware_oa_context"
+    assert by_target["Medial OA"]["evidence"] == ""
