@@ -28,14 +28,21 @@ does talk about the cruciate ligament in that report, or it does not.
 
 ## What "from" can and cannot tell you
 
-A cell shows `parser` when it carries no `__model_confidence`, because the
-regular expression has no self-report and the LLM always records one. That makes
-the column exact for a merged export and blank for a raw parser export, where
-every cell is the parser's by construction.
+A cell is the parser's when the parser's own export committed it, and the
+filler's when it did not — the merge preserves every parser call and only writes
+where the parser was silent, so the comparison is exact. Without a parser export
+there is no basis for the question and the column says `?` rather than guessing.
 
-It does not attribute the *evidence*: the clause comes from the B6 export, so a
-cell the LLM filled has no clause to show. That is correct rather than missing —
-the LLM was asked the question precisely because the parser found nothing.
+An earlier version inferred it from `__model_confidence`, present on filled
+cells and absent on base ones. That is right for an export written since the
+column was added and silently wrong for every earlier one: with the column
+missing entirely it attributed *every* cell to the parser, making a merged
+teacher look like a pure parser export. A card built to check a join cannot
+afford to be confidently wrong about which labeller made a call.
+
+The *evidence* is attributed differently and cannot be: clauses live in the B6
+export, so a cell the filler answered has none to show. That is correct rather
+than missing — the filler was asked precisely because the parser found nothing.
 
 ## This prints patient data
 
@@ -114,13 +121,7 @@ def card(
         ).fillna(0.0).iloc[0]
         answered = state in COMMITTED and confidence >= min_confidence
 
-        model_confidence = teacher_row.get(f"{target}__model_confidence")
-        has_column = f"{target}__model_confidence" in teacher_row.index
-        source = ""
-        if answered and has_column:
-            source = "parser" if pd.isna(model_confidence) else "LLM"
-        elif answered:
-            source = "parser"
+        source = _attribute(answered, parser_row, target, min_confidence)
 
         expert = pd.to_numeric(pd.Series([truth_row.get(target)]), errors="coerce").iloc[0]
         findings.append(
@@ -151,6 +152,33 @@ def card(
         "answered": sum(1 for item in findings if item["teacher"] != "-"),
         "disagreements": sum(1 for item in findings if item["agrees"] is False),
     }
+
+
+def _attribute(answered: bool, parser_row: pd.Series | None, target: str, min_confidence: float) -> str:
+    """Which labeller decided this cell, judged against the parser's own export.
+
+    The first version read `__model_confidence`, absent on base cells and present
+    on filled ones. That is right for an export written since the column was
+    added, and silently wrong for every earlier one: with the column missing
+    entirely the rule attributed *every* cell to the parser, including cells the
+    parser never answered. It made a merged teacher look like a pure parser
+    export, and a card built to check a join cannot afford that.
+
+    Comparing against B6's export settles it exactly instead of inferring it. If
+    the parser committed the cell, the merge preserved it and it is the parser's;
+    if the parser did not, the cell can only have come from the filler. Without a
+    parser export there is no basis to say, and the answer is that rather than a
+    guess.
+    """
+    if not answered:
+        return ""
+    if parser_row is None:
+        return "?"
+    state = _text(parser_row, f"{target}__state")
+    confidence = pd.to_numeric(
+        pd.Series([parser_row.get(f"{target}__confidence")]), errors="coerce"
+    ).fillna(0.0).iloc[0]
+    return "parser" if state in COMMITTED and confidence >= min_confidence else "filled"
 
 
 def _text(row: pd.Series | None, column: str) -> str:

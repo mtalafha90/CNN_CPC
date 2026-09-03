@@ -157,30 +157,47 @@ def test_without_the_parser_export_there_is_simply_no_clause(world):
 # --- which labeller ----------------------------------------------------------
 
 
-def test_a_cell_with_no_self_report_is_attributed_to_the_parser(tmp_path):
-    rows = [
-        {
-            "uid": "alpha",
-            "states": {"ACL": "positive", "MCL": "negated"},
-            "model": {"ACL": float("nan"), "MCL": 0.8},
-        }
-    ]
-    train = _train(tmp_path, rows)
-    teacher = _export(tmp_path, "merged.csv", rows, model=True)
+def test_a_cell_the_parser_answered_is_the_parsers(world):
+    result = card(
+        data_root=world["root"], study="alpha", teacher=world["teacher"], b6_export=world["b6"]
+    )
+    by_target = {item["target"]: item for item in result["findings"]}
+    assert by_target["ACL"]["from"] == "parser"
 
-    result = card(data_root=train.parent, study="alpha", teacher=teacher)
+
+def test_a_cell_the_parser_left_silent_is_the_fillers(tmp_path):
+    """The bug this replaced called these 'parser', which is the opposite."""
+    b6_rows = [{"uid": "alpha", "states": {"ACL": "unmentioned"}}]
+    merged_rows = [{"uid": "alpha", "states": {"ACL": "positive"}}]
+    train = _train(tmp_path, merged_rows)
+    b6 = _export(tmp_path, "b6.csv", b6_rows)
+    teacher = _export(tmp_path, "merged.csv", merged_rows)
+
+    result = card(data_root=train.parent, study="alpha", teacher=teacher, b6_export=b6)
+    by_target = {item["target"]: item for item in result["findings"]}
+    assert by_target["ACL"]["from"] == "filled"
+
+
+def test_attribution_does_not_depend_on_a_model_confidence_column(tmp_path):
+    """An export written before that column existed must still attribute correctly."""
+    b6_rows = [{"uid": "alpha", "states": {"ACL": "positive", "MCL": "unmentioned"}}]
+    merged_rows = [{"uid": "alpha", "states": {"ACL": "positive", "MCL": "negated"}}]
+    train = _train(tmp_path, merged_rows)
+    b6 = _export(tmp_path, "b6.csv", b6_rows)
+    teacher = _export(tmp_path, "old_merge.csv", merged_rows, model=False)
+
+    result = card(data_root=train.parent, study="alpha", teacher=teacher, b6_export=b6)
     by_target = {item["target"]: item for item in result["findings"]}
 
     assert by_target["ACL"]["from"] == "parser"
-    assert by_target["MCL"]["from"] == "LLM"
+    assert by_target["MCL"]["from"] == "filled"
 
 
-def test_a_raw_parser_export_attributes_everything_to_the_parser(world):
-    """It has no __model_confidence column at all, and every cell is its own."""
+def test_without_a_parser_export_the_labeller_is_unknown_not_guessed(world):
     result = card(data_root=world["root"], study="alpha", teacher=world["teacher"])
     answered = [item for item in result["findings"] if item["teacher"] != "-"]
 
-    assert answered and all(item["from"] == "parser" for item in answered)
+    assert answered and all(item["from"] == "?" for item in answered)
 
 
 def test_an_unanswered_cell_has_no_labeller(world):
