@@ -100,20 +100,67 @@ already a whole meniscus away from the centre one. In the 236 series above
 1,756 series below 2 mm, the three channels are near-duplicates and the input
 is effectively 2D with two wasted channels.
 
+## Per study, which is what a prediction is
+
+`study_geometry_rollup`, 4,407 studies, median 5 series each. A first draft of
+this document warned that the corpus might not be the input, because the model
+might read a selected handful per series. **That warning was wrong.** Since B12
+the policy is `all_repaired_anatomical_series_v1`: every series with a
+recognised plane is read, no winner picked, no cap. The corpus *is* the input,
+and the legacy six-per-study `dual` policy changes almost nothing anyway
+(66.1% against 69.1% on the headline row below).
+
+```text
+                               all      expert 58    report only
+studies                      4,407             58          4,349
+spread within a study, p50    4.97 mm        4.73 mm       4.97 mm
+spread within a study, max   14.65 mm       10.20 mm      14.65 mm
+thickest >= 2x thinnest      69.1%          67.2%         69.2%
+mixes <2 mm with >=8 mm      11.1%           8.6%         11.1%
+studies losing any frame     12.9%           6.9%         12.9%
+```
+
+**In 3,047 studies — 69.1% — the thickest triplet is at least twice the
+thinnest.** The model fuses those views into one prediction. Half of all
+studies span 4.97 mm or more inside themselves, and one spans 14.65 mm.
+
+The 58 experts are geometrically typical. Every apparent difference is inside
+the noise of 58 draws: 8.6% mixed against 11.1% has a standard error of 3.7
+points, 6.9% losing frames against 12.9% has 3.3, and 67.2% against 69.2% has
+6.2. Nothing separates them. **The veto surface is not geometrically skewed**,
+which is one confound it does not have.
+
+The loss is concentrated rather than smeared: 567 studies lose anything at all,
+and those that do lose a median 19.5% and up to 57.4% of their own frames. That
+still costs little, because all of it is the redundant interior of fine
+volumes.
+
+## The mechanism gap this exposes
+
+The model is told three things about each series, as embeddings in
+`b12_1_hierarchical`: `plane_embedding`, `fluid_embedding`, `fat_embedding`.
+Plane, fluid sensitivity, fat suppression.
+
+**It is not told the slice spacing.** So it is told what kind of sequence it is
+looking at, and not how much of the knee each input holds — the one fact that
+changes what the pixels mean.
+
+This is not the experiment that was already refused. `b12_use_physical_scale`
+is `false`, but B10 was **in-plane** normalisation: PixelSpacing and field of
+view, left to right. Its own first line says so. Through-plane geometry has
+never been normalised, and has never been given to the model either.
+
 ## What this does not establish
-
-Three limits, stated so they are not quietly stepped over.
-
-**This is the corpus, not the input.** The model reads only the series
-`select_series` picks per study and plane, not all 24,371. The distribution
-above is therefore not the distribution the model sees. The number that would
-matter is the triplet depth of the **selected** series, per study, and it has
-not been measured.
 
 **A physical gap is not free.** Making the gap depend on spacing — `gap =
 round(target / 2 / spacing)` — would widen the thin volumes and cannot narrow
 the thick ones, since a gap below 1 does not exist. So it changes the bottom of
 the range and leaves the top alone.
+
+**A measured fault is not a predicted gain.** The surface that would judge any
+fix is the 58 experts, and that surface has already been shown unable to
+resolve small per-target differences. This document records a fault in the
+input. It does not forecast a score.
 
 **This project has refused physical scaling before.** `b12_use_physical_scale`
 is `false`, and a run of mechanism changes has measured at nothing. A measured
