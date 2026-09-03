@@ -366,3 +366,53 @@ def test_loading_first_then_installing_is_clean():
 
     assert torch.all(conditioning.projection.weight == 0)
     assert "spacing_conditioning.projection.weight" in right_order.state_dict()
+
+
+# --- the lineage forks, and the mixin must follow both ------------------------
+
+
+def test_the_mixin_preserves_the_class_it_is_applied_to():
+    """B52 trains on the B42 branch, not on VariableSeriesKneeDataset."""
+    from rsna_knee.b12_variable_series import VariableSeriesKneeDataset
+    from rsna_knee.b42_constant_area_aspect_sparse_mil import (
+        B42ConstantAreaAspectDataset,
+    )
+    from rsna_knee.b54_spacing_run import with_spacing
+
+    b42 = with_spacing(B42ConstantAreaAspectDataset)
+    assert issubclass(b42, B42ConstantAreaAspectDataset)
+    assert b42.__name__ == "SpacingAwareB42ConstantAreaAspectDataset"
+
+    b12 = with_spacing(VariableSeriesKneeDataset)
+    assert issubclass(b12, VariableSeriesKneeDataset)
+    assert not issubclass(b12, B42ConstantAreaAspectDataset)
+
+
+def test_the_default_dataset_is_the_variable_series_one():
+    from rsna_knee.b12_variable_series import VariableSeriesKneeDataset
+    from rsna_knee.b54_spacing_run import B54SpacingDataset
+
+    assert issubclass(B54SpacingDataset, VariableSeriesKneeDataset)
+
+
+def test_the_mixin_adds_the_spacing_to_whatever_item_it_wraps():
+    from rsna_knee.b54_spacing_run import SpacingItemMixin
+
+    class _Base:
+        def __init__(self):
+            self.study_uids = ["a"]
+            self.series_records = {
+                "a": [{"series_uid": "s1", SPACING_KEY: 3.3}, {"series_uid": "s2"}]
+            }
+
+        def __getitem__(self, idx):
+            return {"study_uid": "a", "volumes": "untouched"}
+
+    class _Wrapped(SpacingItemMixin, _Base):
+        pass
+
+    item = _Wrapped()[0]
+
+    assert item["volumes"] == "untouched"
+    assert item["series_spacing"][0].item() == pytest.approx(3.3)
+    assert math.isnan(item["series_spacing"][1].item())

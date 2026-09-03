@@ -47,7 +47,7 @@ git pull origin main
 PYTHONPATH=developments/src python -m pytest developments/tests -q
 ```
 
-Expect 1,786 passed, 1 skipped.
+Expect 1,789 passed, 1 skipped.
 
 ## Step 1 — B6 v1.3 report labels
 
@@ -156,7 +156,11 @@ head alone or the base as well is conditioned.
 Wire, in this order:
 
 1. `attach_spacing(records, series_geometry_csv=..., data_root=...)`
-2. `B54SpacingDataset` and `collate_b54` in place of the variable-series pair
+2. `with_spacing(B42ConstantAreaAspectDataset)` in place of the dataset class
+   `b52_competition_training._build_dataset` constructs. **`collate_b42` needs
+   no change**: it is `list(items)`, so the spacing travels inside each item
+   and nothing has to pad it. `collate_b54` is only for the
+   `collate_variable_series` path.
 3. **load the pretrained base checkpoint first**
 4. *then* `install_spacing_conditioning(...)` on each module that sums metadata
 5. `spacing_metadata(module, series_meta, series_spacing)` where

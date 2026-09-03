@@ -145,11 +145,17 @@ def spacing_summary(records: dict[str, list[dict]], *, gap: int = 1) -> dict:
 # --- the dataset --------------------------------------------------------------
 
 
-class B54SpacingDataset(VariableSeriesKneeDataset):
-    """`VariableSeriesKneeDataset` plus one tensor: the spacing of each series.
+class SpacingItemMixin:
+    """Add `series_spacing` to whatever item the dataset underneath returns.
 
-    Everything else in the item is untouched, so a model that ignores
-    `series_spacing` behaves exactly as it did before.
+    A mixin rather than a fixed subclass, because the lineage forks. B52 trains
+    on `B42ConstantAreaAspectDataset`, which descends from
+    `B37HighResSparseDataset`, which descends from `VariableSeriesKneeDataset`.
+    Subclassing the ancestor directly would silently drop the native crop, the
+    448 resize and the rectangular series that the B42 branch adds.
+
+    Every dataset in that chain returns a dict keyed the same way and iterates
+    the same `series_records`, so one mixin serves all of them.
     """
 
     def __getitem__(self, idx):
@@ -162,12 +168,39 @@ class B54SpacingDataset(VariableSeriesKneeDataset):
         return item
 
 
+def with_spacing(dataset_class: type) -> type:
+    """Return `dataset_class` with the spacing tensor added to its items.
+
+    ```python
+    Dataset = with_spacing(B42ConstantAreaAspectDataset)   # the B52 lineage
+    Dataset = with_spacing(VariableSeriesKneeDataset)      # the B12 lineage
+    ```
+
+    The result is a subclass, so `isinstance` checks and every frozen contract
+    that tests for the original type still hold.
+    """
+    return type(
+        f"SpacingAware{dataset_class.__name__}",
+        (SpacingItemMixin, dataset_class),
+        {"__doc__": f"{dataset_class.__name__} plus the slice spacing per series."},
+    )
+
+
+#: The B12 lineage. For B52 use ``with_spacing(B42ConstantAreaAspectDataset)``.
+B54SpacingDataset = with_spacing(VariableSeriesKneeDataset)
+
+
 def collate_b54(batch: list[dict]) -> dict:
     """`collate_variable_series`, padding the spacing with `nan`.
 
     `nan` rather than zero so a padded slot is unmistakably "no series" rather
     than "a series of zero thickness". Both contribute nothing, but only one of
     them says so.
+
+    **The B42 branch needs no collate change at all.** `collate_b42` is
+    `list(items)` — it keeps studies ragged rather than padding heterogeneous
+    rectangles — so the spacing travels inside each item and nothing has to
+    pad it. Use this only where `collate_variable_series` is used.
     """
     out = collate_variable_series(batch)
     if not batch or "series_spacing" not in batch[0]:
