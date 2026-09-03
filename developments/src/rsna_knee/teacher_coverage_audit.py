@@ -493,12 +493,20 @@ def main() -> None:
         "Measure a teacher's coverage, and what the translation rescue would add"
     )
     parser.add_argument(
-        "--export", required=True, help="teacher export directory or labels CSV"
+        "--export", help="teacher export directory or labels CSV"
     )
     parser.add_argument(
         "--phase7-root",
         default=None,
         help="Phase-7 rescue directory, or its recovered_cells.csv",
+    )
+    # Every other audit in this family takes --teacher. This one took --export
+    # alone, which is a needless way to lose a command; both are accepted and
+    # --export stays because a runbook already records it.
+    parser.add_argument(
+        "--teacher",
+        dest="export",
+        help="a teacher structured_labels.csv; the same thing as --export",
     )
     parser.add_argument(
         "--b6-export",
@@ -511,6 +519,8 @@ def main() -> None:
     parser.add_argument("--min-confidence", type=float, default=MIN_CONFIDENCE)
     parser.add_argument("--out-json", default=None)
     args = parser.parse_args()
+    if not args.export:
+        parser.error("one of --teacher or --export is required")
 
     result = audit(
         export=args.export,

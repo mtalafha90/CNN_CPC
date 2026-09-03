@@ -405,3 +405,22 @@ def test_the_audit_reports_provenance_when_a_parser_export_is_given(tmp_path):
 def test_the_audit_omits_provenance_without_one(tmp_path):
     teacher = _write(tmp_path, _export(["a"], {"ACL": ["positive"]}), "teacher.csv")
     assert "provenance" not in audit(export=teacher)
+
+
+def test_the_cli_accepts_teacher_as_well_as_export(tmp_path, monkeypatch, capsys):
+    """Every sibling audit takes --teacher; losing a command to that is needless."""
+    from rsna_knee.teacher_coverage_audit import main
+
+    path = _write(tmp_path, _export(["a"], {"ACL": ["positive"]}), "teacher.csv")
+    for flag in ("--teacher", "--export"):
+        monkeypatch.setattr("sys.argv", ["coverage", flag, str(path)])
+        main()
+        assert "cells it does answer" in capsys.readouterr().out
+
+
+def test_the_cli_says_which_flags_it_wants_when_given_neither(monkeypatch):
+    from rsna_knee.teacher_coverage_audit import main
+
+    monkeypatch.setattr("sys.argv", ["coverage"])
+    with pytest.raises(SystemExit):
+        main()
