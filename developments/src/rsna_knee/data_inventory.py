@@ -20,6 +20,14 @@ typical study loses almost nothing, and the average conceals the tail: the
 question is not the mean but how much of the corpus sits in series long enough
 to be truncated.
 
+**The slice loss reported here is an upper bound, and a loose one.** It counts
+one frame per centre, which is right for a plain volume and wrong for the 2.5D
+path this project runs: each centre pulls three frames, and on a long series
+those triplets do not overlap. Measured across the corpus, one frame per centre
+says 134,361 frames are lost where the triplets say 52,014 — 16.4% against
+6.4%. `slice_geometry_scan` computes the exact figure, and the physical
+geometry the loss sits in. Prefer it.
+
 ## What it costs to run
 
 Slice counts come from counting files in a series folder, which needs no DICOM
@@ -164,10 +172,15 @@ def _report(result: dict) -> None:
     print()
     print(f"  slices, taking {slices['centres_taken_per_series']} centres per series")
     print(f"    frames present                 {slices['frames_total']:>10,}")
-    print(f"    frames the loader reads        {slices['frames_read']:>10,}")
+    print(f"    frames read, one per centre    {slices['frames_read']:>10,}")
     print(
         f"    frames never read              {slices['frames_never_read']:>10,}"
         f"   {slices['fraction_never_read'] * 100:5.1f}%"
+    )
+    print(
+        "      An upper bound. The 2.5D path pulls three frames per centre, so a\n"
+        "      long series is read far more thoroughly than one frame per centre\n"
+        "      implies. `slice_geometry_scan` has the exact figure."
     )
     print(f"    series longer than {slices['centres_taken_per_series']:<3}         {slices['series_longer_than_centres']:>10,}")
     print(f"    series shorter than {slices['centres_taken_per_series']:<3}        {slices['series_shorter_than_centres']:>10,}")
