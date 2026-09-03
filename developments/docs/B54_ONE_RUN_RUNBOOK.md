@@ -2,8 +2,17 @@
 
 ## Status
 
-**BUILT. NOT RUN.** Every command below is real and tested; none has been
-executed against the corpus.
+**COMPONENTS BUILT AND TESTED. ONE WIRING STEP OUTSTANDING. NOT RUN.**
+
+Steps 0 to 5 and 7 to 8 are runnable commands today. **Step 6 is not yet
+code.** The spacing has to enter the forward pass, and that pass lives in
+`b37_highres_sparse_mil._base_logits_from_global`, which every experiment from
+B37 to B52 shares. Threading `series_spacing` through it means a subclass that
+overrides `_base_logits_from_global` and `forward` — about forty lines copied
+from frozen logic, which deserves its own pass with a model-construction test
+rather than being appended to a long session. Everything it needs
+(`spacing_metadata`, `install_spacing_conditioning`, `with_spacing`,
+`training_resume`) exists and is tested; only that subclass is missing.
 
 ## What is in it
 
