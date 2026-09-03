@@ -33,6 +33,19 @@ around the disease term are the vocabulary the patterns are missing.
 It does not guess at what to add. It counts what is there, in the corpus, in
 whatever language the radiologist wrote, and leaves the reading to a person.
 
+## What it is blind to
+
+The window only exists where `OA_DISEASE_RE` already matched. A report whose
+*disease* vocabulary is missing produces no window at all, so its compartment
+words are never counted and never appear as candidates.
+
+That is not hypothetical. `condropatia`, `condromalacia`, `lesion condral` and
+`osteofitos` are all absent from the disease pattern, so a Spanish report using
+them is invisible here however clearly it names the compartment -- which is
+exactly why `troclea` places nothing in this scan despite a read study turning on
+it. **The Spanish gap is on the disease side, and this tool cannot see it.**
+Measuring that needs a separate scan over reports with no disease match at all.
+
 ## Why this is safe to do now
 
 It changes nothing. No label moves, no export is written, no threshold is
@@ -190,6 +203,52 @@ CANDIDATE_PATTERNS: dict[str, tuple[str, ...]] = {
         r"\bplatillo tibial lateral\b",
     ),
 }
+
+
+def pattern_examples(
+    reports: pd.Series,
+    target: str,
+    pattern: str,
+    *,
+    window: int = WINDOW,
+    limit: int = 25,
+) -> pd.DataFrame:
+    """The windows one proposed pattern would place or widen, for reading.
+
+    A count cannot say whether widening is right. `\bpatellar\b` beside a
+    cartilage term is the patellofemoral joint; beside "patellar tendon" it is a
+    tendon and the widen is wrong. Only the text settles it.
+    """
+    regex = re.compile(pattern, re.I)
+    rows: list[dict] = []
+    for uid, text in reports.items():
+        norm = normalize_report(str(text or ""))
+        if not norm:
+            continue
+        for match in OA_DISEASE_RE.finditer(norm):
+            low = max(0, match.start() - window)
+            high = min(len(norm), match.end() + window)
+            around = norm[low:high]
+            if not regex.search(around):
+                continue
+            current = {t for t, r in OA_ALL_CONTEXT_REGEX if r.search(around)}
+            if target in current:
+                continue
+            rows.append(
+                {
+                    "StudyInstanceUID": str(uid),
+                    "effect": "places" if not current else "widens",
+                    "already": ", ".join(sorted(current)),
+                    "disease_term": match.group(0),
+                    "window": around,
+                }
+            )
+            if len(rows) >= limit:
+                return pd.DataFrame(rows)
+    return pd.DataFrame(
+        rows,
+        columns=["StudyInstanceUID", "effect", "already", "disease_term", "window"],
+    )
 
 
 def simulate(
@@ -363,7 +422,32 @@ def main() -> None:
     parser.add_argument("--window", type=int, default=WINDOW)
     parser.add_argument("--top", type=int, default=40)
     parser.add_argument("--out-root", default=None)
+    parser.add_argument(
+        "--show",
+        nargs=2,
+        metavar=("TARGET", "PATTERN"),
+        default=None,
+        help="print the windows one proposed pattern would place or widen",
+    )
+    parser.add_argument("--limit", type=int, default=25)
     args = parser.parse_args()
+
+    if args.show:
+        train = load_train_csv(Path(args.data_root) / "train.csv")
+        reports = pd.Series(
+            train["Report"].fillna("").astype(str).to_numpy(),
+            index=train["StudyInstanceUID"].astype(str),
+        )
+        frame = pattern_examples(
+            reports, args.show[0], args.show[1], window=args.window, limit=args.limit
+        )
+        print()
+        for row in frame.itertuples(index=False):
+            print(f"  [{row.effect}{(' after ' + row.already) if row.already else ''}]  {row.disease_term}")
+            print(f"    {row.window}")
+            print()
+        print(f"  {len(frame)} shown. Report text -- local only.")
+        return
 
     _report(
         scan(

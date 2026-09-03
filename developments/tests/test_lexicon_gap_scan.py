@@ -340,3 +340,71 @@ def test_studies_are_counted_once_however_many_mentions_they_carry():
         {"PF OA": (r"\bpatella\b",)},
     )
     assert result["patterns"][0]["newly_places_studies"] == 1
+
+
+# --- reading the windows a pattern would affect -------------------------------
+
+
+def test_examples_separate_places_from_widens():
+    from rsna_knee.lexicon_gap_scan import pattern_examples
+
+    frame = pattern_examples(
+        _reports(
+            {
+                "a": "chondromalacia patella",
+                "b": "medial compartment osteoarthritis with patellar chondrosis",
+            }
+        ),
+        "PF OA",
+        r"\bpatell\w*\b",
+    )
+    by_uid = dict(zip(frame["StudyInstanceUID"], frame["effect"]))
+
+    assert by_uid["a"] == "places"
+    assert by_uid["b"] == "widens"
+
+
+def test_a_widen_names_what_was_already_placed():
+    from rsna_knee.lexicon_gap_scan import pattern_examples
+
+    frame = pattern_examples(
+        _reports({"b": "medial compartment osteoarthritis with patellar chondrosis"}),
+        "PF OA",
+        r"\bpatell\w*\b",
+    )
+    assert frame["already"].iloc[0] == "Medial OA"
+
+
+def test_a_window_where_the_target_is_already_placed_is_not_shown():
+    """It changes nothing there, so it is not evidence for or against."""
+    from rsna_knee.lexicon_gap_scan import pattern_examples
+
+    frame = pattern_examples(
+        _reports({"a": "patellofemoral chondrosis and patella"}), "PF OA", r"\bpatella\b"
+    )
+    assert frame.empty
+
+
+def test_the_tendon_case_is_visible_which_is_the_point():
+    """A count cannot tell a cartilage patella from a tendon one; the text can."""
+    from rsna_knee.lexicon_gap_scan import pattern_examples
+
+    frame = pattern_examples(
+        _reports({"a": "medial compartment osteoarthritis, patellar tendon thickening"}),
+        "PF OA",
+        r"\bpatellar\b",
+    )
+    assert frame["effect"].iloc[0] == "widens"
+    assert "tendon" in frame["window"].iloc[0]
+
+
+def test_the_limit_is_respected():
+    from rsna_knee.lexicon_gap_scan import pattern_examples
+
+    frame = pattern_examples(
+        _reports({str(i): "chondromalacia patella" for i in range(30)}),
+        "PF OA",
+        r"\bpatella\b",
+        limit=4,
+    )
+    assert len(frame) == 4
