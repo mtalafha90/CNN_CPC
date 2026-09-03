@@ -59,7 +59,11 @@ import pandas as pd
 
 from .constants import TARGETS
 
-AUDIT_VERSION = "teacher_coverage_v1"
+AUDIT_VERSION = "teacher_coverage_v2"
+
+# What B6 writes into __evidence when the legacy OA path decides a cell:
+# a marker naming the rule, not a quotation from the report.
+OA_CONTEXT_MARKER = "oa_context_parser"
 
 COMMITTED_STATES = ("positive", "negated")
 MIN_CONFIDENCE = 0.75
@@ -139,6 +143,80 @@ def read_recovered_cells(phase7_root: str | Path) -> pd.DataFrame:
     if unknown:
         raise ValueError(f"{path} contains unknown target(s): {unknown}")
     return recovered
+
+
+def provenance(
+    teacher: pd.DataFrame,
+    parser: pd.DataFrame,
+    *,
+    min_confidence: float = MIN_CONFIDENCE,
+) -> dict:
+    """For every cell the teacher answers, who decided it and what backs it.
+
+    Three kinds of answered cell, and they are not equally accountable:
+
+    ```text
+    parser, quoted     the rule matched text, and the clause is recorded
+    parser, unquoted   the legacy OA path decided it and wrote a rule name
+                       where a quotation would go
+    filled             the parser was silent, so the filler answered and there
+                       is no clause to record
+    ```
+
+    Attribution is exact rather than inferred: the merge preserves every parser
+    call and writes only where the parser was silent, so a cell the parser
+    committed is the parser's and any other answered cell is the filler's.
+    """
+    is_gold = (
+        teacher["is_gold"].astype(bool)
+        if "is_gold" in teacher.columns
+        else pd.Series(False, index=teacher.index)
+    )
+    rows = teacher.loc[~is_gold].set_index("StudyInstanceUID")
+    parser_rows = parser.set_index("StudyInstanceUID").reindex(rows.index)
+
+    per_target: dict[str, dict] = {}
+    reasons: dict[str, int] = {}
+    for target in TARGETS:
+        answered = _committed(rows, target, min_confidence=min_confidence)
+        by_parser = _committed(parser_rows, target, min_confidence=min_confidence).fillna(False)
+
+        evidence = (
+            parser_rows[f"{target}__evidence"].fillna("").astype(str)
+            if f"{target}__evidence" in parser_rows.columns
+            else pd.Series("", index=rows.index)
+        )
+        quoted = evidence.str.strip().ne("") & evidence.ne(OA_CONTEXT_MARKER)
+
+        from_parser = answered & by_parser
+        per_target[target] = {
+            "answered": int(answered.sum()),
+            "parser_quoted": int((from_parser & quoted).sum()),
+            "parser_unquoted": int((from_parser & ~quoted).sum()),
+            "filled": int((answered & ~by_parser).sum()),
+        }
+        if f"{target}__reason" in parser_rows.columns:
+            reason = parser_rows[f"{target}__reason"].fillna("").astype(str)
+            for name, count in reason.loc[from_parser & ~quoted].value_counts().items():
+                reasons[str(name)] = reasons.get(str(name), 0) + int(count)
+
+    total = {
+        key: sum(item[key] for item in per_target.values())
+        for key in ("answered", "parser_quoted", "parser_unquoted", "filled")
+    }
+    answered = total["answered"]
+    return {
+        **total,
+        "no_clause": total["parser_unquoted"] + total["filled"],
+        "no_clause_fraction": (
+            (total["parser_unquoted"] + total["filled"]) / answered if answered else 0.0
+        ),
+        "unquoted_parser_reasons": dict(
+            sorted(reasons.items(), key=lambda pair: -pair[1])
+        ),
+        "per_target": per_target,
+        "min_confidence": float(min_confidence),
+    }
 
 
 def coverage(frame: pd.DataFrame, *, min_confidence: float = MIN_CONFIDENCE) -> dict:
@@ -287,6 +365,47 @@ def _report(result: dict) -> None:
             "   (excluded from every count above)"
         )
 
+    kinds = result.get("provenance")
+    if kinds:
+        print()
+        print("  Where each answered cell came from, and what backs it")
+        print(
+            f"    parser, clause recorded    {kinds['parser_quoted']:>8,}"
+            f"{kinds['parser_quoted'] / kinds['answered'] * 100:>7.1f}%"
+        )
+        print(
+            f"    parser, no clause         {kinds['parser_unquoted']:>8,}"
+            f"{kinds['parser_unquoted'] / kinds['answered'] * 100:>7.1f}%"
+        )
+        print(
+            f"    filled, no clause exists  {kinds['filled']:>8,}"
+            f"{kinds['filled'] / kinds['answered'] * 100:>7.1f}%"
+        )
+        print(
+            f"    -------------------------------------------\n"
+            f"    no clause at all          {kinds['no_clause']:>8,}"
+            f"{kinds['no_clause_fraction'] * 100:>7.1f}%"
+        )
+        if kinds["unquoted_parser_reasons"]:
+            print()
+            print("    the parser's unquoted calls, by rule")
+            for name, count in kinds["unquoted_parser_reasons"].items():
+                print(f"      {name:<38}{count:>8,}")
+        print()
+        print(f"  {'target':<20}{'answered':>10}{'quoted':>9}{'unquoted':>10}{'filled':>9}")
+        for target, item in sorted(
+            kinds["per_target"].items(), key=lambda pair: -pair[1]["filled"]
+        ):
+            print(
+                f"  {target:<20}{item['answered']:>10,}{item['parser_quoted']:>9,}"
+                f"{item['parser_unquoted']:>10,}{item['filled']:>9,}"
+            )
+        print(
+            "\n  A filled cell has no clause by construction: the filler was asked\n"
+            "  precisely because the parser found nothing. An unquoted parser cell\n"
+            "  is different -- the parser committed without recording why."
+        )
+
     headroom = result.get("rescue_headroom")
     if not headroom:
         print()
@@ -341,6 +460,7 @@ def audit(
     *,
     export: str | Path,
     phase7_root: str | Path | None = None,
+    b6_export: str | Path | None = None,
     min_confidence: float = MIN_CONFIDENCE,
     out_json: str | Path | None = None,
 ) -> dict:
@@ -350,6 +470,11 @@ def audit(
         "export": str(export),
         "coverage": coverage(frame, min_confidence=min_confidence),
     }
+    if b6_export is not None:
+        result["b6_export"] = str(b6_export)
+        result["provenance"] = provenance(
+            frame, read_teacher(b6_export), min_confidence=min_confidence
+        )
     if phase7_root is not None:
         recovered = read_recovered_cells(phase7_root)
         result["phase7_root"] = str(phase7_root)
@@ -375,6 +500,14 @@ def main() -> None:
         default=None,
         help="Phase-7 rescue directory, or its recovered_cells.csv",
     )
+    parser.add_argument(
+        "--b6-export",
+        default=None,
+        help=(
+            "B6's structured_labels.csv, to say which cells the parser decided "
+            "and which of those recorded a clause"
+        ),
+    )
     parser.add_argument("--min-confidence", type=float, default=MIN_CONFIDENCE)
     parser.add_argument("--out-json", default=None)
     args = parser.parse_args()
@@ -382,6 +515,7 @@ def main() -> None:
     result = audit(
         export=args.export,
         phase7_root=args.phase7_root,
+        b6_export=args.b6_export,
         min_confidence=args.min_confidence,
         out_json=args.out_json,
     )

@@ -17,6 +17,7 @@ from rsna_knee.constants import TARGETS
 from rsna_knee.teacher_coverage_audit import (
     audit,
     coverage,
+    provenance,
     read_recovered_cells,
     read_teacher,
     rescue_headroom,
@@ -297,3 +298,110 @@ def test_audit_without_the_rescue_reports_coverage_only(tmp_path):
     result = audit(export=path)
     assert "rescue_headroom" not in result
     assert result["coverage"]["answered_cells"] == 1
+
+
+# --- who decided each cell, and what backs it --------------------------------
+#
+# The study card's first version inferred this from __model_confidence and got
+# it exactly backwards on an export written before that column existed. Here it
+# is settled by comparing against the parser's own export instead.
+
+
+def _write(tmp_path, frame, name):
+    path = tmp_path / name
+    frame.to_csv(path, index=False)
+    return path
+
+
+def _parser(uids, states, *, evidence=None, reasons=None):
+    frame = _export(uids, states)
+    for target in TARGETS:
+        frame[f"{target}__evidence"] = (evidence or {}).get(target, [""] * len(uids))
+        frame[f"{target}__reason"] = (reasons or {}).get(
+            target, ["no_target_evidence"] * len(uids)
+        )
+    return frame
+
+
+def test_a_parser_cell_with_a_clause_is_counted_as_quoted():
+    teacher = _export(["a"], {"ACL": ["positive"]})
+    parser = _parser(["a"], {"ACL": ["positive"]}, evidence={"ACL": ["complete acl tear"]})
+    result = provenance(teacher, parser)
+
+    assert result["parser_quoted"] == 1
+    assert result["parser_unquoted"] == 0
+    assert result["filled"] == 0
+
+
+def test_a_cell_the_parser_never_answered_is_counted_as_filled():
+    teacher = _export(["a"], {"ACL": ["positive"]})
+    parser = _parser(["a"], {"ACL": ["unmentioned"]})
+    result = provenance(teacher, parser)
+
+    assert result["filled"] == 1
+    assert result["parser_quoted"] == 0
+    assert result["no_clause"] == 1
+
+
+def test_the_oa_marker_is_not_a_quotation():
+    """B6 writes a rule name there where a clause would go."""
+    teacher = _export(["a"], {"Medial OA": ["positive"]})
+    parser = _parser(
+        ["a"],
+        {"Medial OA": ["positive"]},
+        evidence={"Medial OA": ["oa_context_parser"]},
+        reasons={"Medial OA": ["compartment_aware_oa_context"]},
+    )
+    result = provenance(teacher, parser)
+
+    assert result["parser_unquoted"] == 1
+    assert result["parser_quoted"] == 0
+    assert result["unquoted_parser_reasons"]["compartment_aware_oa_context"] == 1
+
+
+def test_an_empty_clause_is_not_a_quotation_either():
+    teacher = _export(["a"], {"ACL": ["negated"]})
+    parser = _parser(["a"], {"ACL": ["negated"]}, evidence={"ACL": ["   "]})
+    assert provenance(teacher, parser)["parser_unquoted"] == 1
+
+
+def test_the_three_kinds_sum_to_the_answered_cells():
+    teacher = _export(
+        ["a"], {"ACL": ["positive"], "MCL": ["negated"], "Medial OA": ["positive"]}
+    )
+    parser = _parser(
+        ["a"],
+        {"ACL": ["positive"], "MCL": ["unmentioned"], "Medial OA": ["positive"]},
+        evidence={"ACL": ["a clause"], "Medial OA": ["oa_context_parser"]},
+    )
+    result = provenance(teacher, parser)
+
+    assert result["answered"] == 3
+    assert result["parser_quoted"] + result["parser_unquoted"] + result["filled"] == 3
+    assert result["no_clause"] == result["parser_unquoted"] + result["filled"]
+
+
+def test_gold_studies_are_excluded_from_provenance():
+    teacher = _export(["a", "g"], {"ACL": ["positive", "positive"]}, gold=[False, True])
+    parser = _parser(["a", "g"], {"ACL": ["positive", "positive"]})
+    assert provenance(teacher, parser)["answered"] == 1
+
+
+def test_a_study_absent_from_the_parser_export_counts_as_filled():
+    """Reindex leaves NaN there; treating it as a parser call would be a lie."""
+    teacher = _export(["a"], {"ACL": ["positive"]})
+    parser = _parser(["z"], {"ACL": ["positive"]})
+    assert provenance(teacher, parser)["filled"] == 1
+
+
+def test_the_audit_reports_provenance_when_a_parser_export_is_given(tmp_path):
+    teacher = _write(tmp_path, _export(["a"], {"ACL": ["positive"]}), "teacher.csv")
+    parser = _write(tmp_path, _parser(["a"], {"ACL": ["unmentioned"]}), "b6.csv")
+
+    result = audit(export=teacher, b6_export=parser)
+    assert result["provenance"]["filled"] == 1
+
+
+def test_the_audit_omits_provenance_without_one(tmp_path):
+    teacher = _write(tmp_path, _export(["a"], {"ACL": ["positive"]}), "teacher.csv")
+    assert "provenance" not in audit(export=teacher)
