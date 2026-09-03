@@ -35,6 +35,14 @@ Measured on the corpus before being written, with counts as
 \btrochleas\b               16 /  1     kept
 ```
 
+**Only the first number of each pair is now reachable.** The precedence rule
+in `predict_target_b6_v13` consults the new vocabulary only where the aliases
+found nothing, so a pattern can place a cell but can no longer widen one the
+aliases already answered. That was measured as 53 widens against 242
+placements, and giving them up is the price of the rule — see the docstring
+there for the downgrade it prevents, which is worth far more than 53 widened
+evidence strings.
+
 The guard exists because thirty read windows showed `patellar` attaching to
 tendon, bursa and retinaculum far more often than to the joint. Guarding cost
 30 of 148 placements and removed 11 of 42 widens — worse on both counts than
