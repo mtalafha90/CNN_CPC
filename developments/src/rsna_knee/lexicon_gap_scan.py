@@ -172,23 +172,43 @@ def pattern_coverage(reports: pd.Series) -> dict:
 # Patterns proposed for a B6 v1.3, each traceable to something the corpus shows.
 # Declared here so a change is argued from counts rather than written straight
 # into the parser. Nothing imports these; only `simulate` reads them.
+# What "patellar" must not be followed by. Reading thirty windows, every wrong
+# placement was this and nothing else: the adjective attached to a structure
+# that is not cartilage.
+#
+#   "patellar bursitis"        beside generic knee osteoarthritis
+#   "patellar plicae"          beside generic knee osteoarthritis
+#   "patellar tendons: mild tendinosis"
+#   "patellar enthesopathy"
+#
+# The guard is a lookahead on the match rather than a filter on the window,
+# because several *correct* placements mention a patellar tendon in the same
+# sentence -- "moderate chondromalacia patella. mild patellar tendinosis" is a
+# patellofemoral finding whatever else the sentence says.
+NOT_CARTILAGE = r"(?!\s+(?:tendon|tendin|enthesop|bursit|plica|ligament|retinacul))"
+
 CANDIDATE_PATTERNS: dict[str, tuple[str, ...]] = {
     # "chondromalacia patella" is the standard English phrase for patellofemoral
-    # cartilage damage and matches nothing: PF OA wants "patellar cartilage",
-    # "patellar facet" or "patellofemoral". Bare patella/patellar appear beside
-    # 148 and 108 unplaceable mentions.
+    # cartilage damage and matches nothing today: PF OA wants "patellofemoral",
+    # "patellar cartilage", "patellar facet" or "trochlea". Bare patella and
+    # patellar sit beside 108 and 148 unplaceable mentions.
     "PF OA": (
         r"\bpatella\b",
-        r"\bpatellar\b",
+        r"\bpatellar\b" + NOT_CARTILAGE,
         r"\bpatellae\b",
-        # Romance and Turkish forms of the same anatomy.
+        # \btrochlea\b cannot match the plural, and reports write "medial and
+        # lateral trochleas".
+        r"\btrochleas\b",
+        r"\btrochlear\b",
+        # Romance and Turkish forms of the same anatomy. These place nothing in
+        # this scan, because the reports using them fail the *disease* pattern
+        # and so never produce a window at all.
         r"\brotulian\w*\b",
         r"\brotula\b",
         r"\btroclea\w*\b",
-        r"\bpatellofemoral\w*\b",
     ),
     # "medial and lateral compartment(s)" defeats \bmedial compartment\b, which
-    # currently yields Lateral positive and Medial silent on the same sentence.
+    # currently yields Lateral positive and Medial silent on one sentence.
     "Medial OA": (
         r"\bmedial(?: and lateral)? compartments?\b",
         r"\bmedial(?:e|es|en)? femorotibial\w*\b",

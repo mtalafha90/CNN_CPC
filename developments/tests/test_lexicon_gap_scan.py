@@ -408,3 +408,85 @@ def test_the_limit_is_respected():
         limit=4,
     )
     assert len(frame) == 4
+
+
+# --- the guard, derived by reading thirty windows -----------------------------
+#
+# Every wrong placement in that reading was "patellar" attached to something
+# that is not cartilage. These twelve cases are the reading itself, written down
+# so the guard cannot drift away from what it was justified by.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "grade 2 patellar chondromalacia",
+        "patellar apex",
+        "patellar kikirdakta kondromalazi",
+        "patellar ridge",
+        "medial and lateral patellar facets",
+        "patellar articular cartilage degeneration",
+        "severe chondromalacia patella at the patellar apex",
+    ],
+)
+def test_the_guard_keeps_a_cartilage_patellar(text):
+    import re
+
+    from rsna_knee.lexicon_gap_scan import NOT_CARTILAGE
+
+    assert re.search(r"\bpatellar\b" + NOT_CARTILAGE, text, re.I)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "patellar bursitis",
+        "patellar plicae",
+        "quadriceps and patellar tendons",
+        "mild patellar tendinosis",
+        "patellar enthesopathy",
+        "patellar ligament",
+        "patellar retinaculum",
+    ],
+)
+def test_the_guard_rejects_a_patellar_that_is_not_cartilage(text):
+    import re
+
+    from rsna_knee.lexicon_gap_scan import NOT_CARTILAGE
+
+    assert not re.search(r"\bpatellar\b" + NOT_CARTILAGE, text, re.I)
+
+
+def test_prepatellar_was_never_a_match_to_begin_with():
+    """The word boundary already excludes it; recorded so nobody adds a guard for it."""
+    import re
+
+    from rsna_knee.lexicon_gap_scan import NOT_CARTILAGE
+
+    assert not re.search(r"\bpatellar\b" + NOT_CARTILAGE, "prepatellar region", re.I)
+
+
+def test_the_guard_survives_a_tendon_elsewhere_in_the_sentence():
+    """Several correct placements name a patellar tendon in the same sentence."""
+    import re
+
+    from rsna_knee.lexicon_gap_scan import NOT_CARTILAGE
+
+    text = "moderate chondromalacia patella. mild patellar tendinosis with edema."
+    assert re.search(r"\bpatella\b", text, re.I)
+    # The adjective here really is the tendon, and the bone carries the finding.
+    assert not re.search(r"\bpatellar\b" + NOT_CARTILAGE, text, re.I)
+
+
+def test_the_plural_trochleas_is_now_reachable():
+    """Reports write "medial and lateral trochleas"; \\btrochlea\\b cannot match it."""
+    import re
+
+    from rsna_knee.lexicon_gap_scan import CANDIDATE_PATTERNS
+    from rsna_knee.report_labels import OA_CONTEXT_REGEX
+
+    text = "chondrosis along medial and lateral trochleas"
+    assert not any(r.search(text) for r in OA_CONTEXT_REGEX["PF OA"])
+    assert any(
+        re.search(p, text, re.I) for p in CANDIDATE_PATTERNS["PF OA"]
+    )
