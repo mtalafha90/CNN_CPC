@@ -254,3 +254,89 @@ def test_arthrosis_is_the_one_disease_family_spanish_already_reaches():
 
     for term in ("artrosis", "gonartrosis", "artrose"):
         assert OA_DISEASE_RE.search(normalize_report(term)), term
+
+
+# --- sizing a proposed v1.3 ---------------------------------------------------
+#
+# "places" and "widens" are not the same risk. Places reaches a mention nothing
+# could reach, which is a repair. Widens adds a compartment to a mention already
+# placed, which changes a label the model has trained on. Confusing them would
+# make a risky change look like a safe one.
+
+
+def test_a_pattern_that_reaches_an_unplaced_mention_places_it():
+    from rsna_knee.lexicon_gap_scan import simulate
+
+    result = simulate(
+        _reports({"a": "chondromalacia patella"}), {"PF OA": (r"\bpatella\b",)}
+    )
+    row = result["patterns"][0]
+
+    assert row["newly_places_studies"] == 1
+    assert row["widens_studies"] == 0
+    assert result["studies_newly_placed"] == 1
+
+
+def test_a_pattern_that_adds_a_target_to_an_already_placed_mention_widens_it():
+    from rsna_knee.lexicon_gap_scan import simulate
+
+    # The mention is already placed in Medial OA; the pattern would add PF OA.
+    result = simulate(
+        _reports({"a": "medial compartment osteoarthritis and patella"}),
+        {"PF OA": (r"\bpatella\b",)},
+    )
+    row = result["patterns"][0]
+
+    assert row["newly_places_studies"] == 0
+    assert row["widens_studies"] == 1
+
+
+def test_a_pattern_matching_a_target_already_placed_does_neither():
+    from rsna_knee.lexicon_gap_scan import simulate
+
+    result = simulate(
+        _reports({"a": "medial compartment osteoarthritis"}),
+        {"Medial OA": (r"\bmedial compartments?\b",)},
+    )
+    row = result["patterns"][0]
+
+    assert row["newly_places_studies"] == 0
+    assert row["widens_studies"] == 0
+
+
+def test_a_pattern_matching_nothing_scores_zero():
+    from rsna_knee.lexicon_gap_scan import simulate
+
+    result = simulate(_reports({"a": "osteoarthritis"}), {"PF OA": (r"\bzebra\b",)})
+    assert result["patterns"][0]["newly_places_studies"] == 0
+
+
+def test_the_conjoined_compartment_pattern_catches_what_the_frozen_one_misses():
+    """Today this sentence gives Lateral positive and Medial silence."""
+    from rsna_knee.lexicon_gap_scan import simulate
+
+    text = "osteoarthritis of the medial and lateral compartments"
+    assert unplaced_mentions(_reports({"a": text}))[1]["unplaced"] == 1
+
+    result = simulate(
+        _reports({"a": text}),
+        {"Medial OA": (r"\bmedial(?: and lateral)? compartments?\b",)},
+    )
+    assert result["patterns"][0]["newly_places_studies"] == 1
+
+
+def test_the_default_candidates_are_used_when_none_are_given():
+    from rsna_knee.lexicon_gap_scan import CANDIDATE_PATTERNS, simulate
+
+    result = simulate(_reports({"a": "chondromalacia patella"}))
+    assert len(result["patterns"]) == sum(len(v) for v in CANDIDATE_PATTERNS.values())
+
+
+def test_studies_are_counted_once_however_many_mentions_they_carry():
+    from rsna_knee.lexicon_gap_scan import simulate
+
+    result = simulate(
+        _reports({"a": "chondromalacia patella. " + ("z " * 80) + "chondrosis patella."}),
+        {"PF OA": (r"\bpatella\b",)},
+    )
+    assert result["patterns"][0]["newly_places_studies"] == 1

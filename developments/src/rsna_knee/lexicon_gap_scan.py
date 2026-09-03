@@ -156,6 +156,112 @@ def pattern_coverage(reports: pd.Series) -> dict:
     return result
 
 
+# Patterns proposed for a B6 v1.3, each traceable to something the corpus shows.
+# Declared here so a change is argued from counts rather than written straight
+# into the parser. Nothing imports these; only `simulate` reads them.
+CANDIDATE_PATTERNS: dict[str, tuple[str, ...]] = {
+    # "chondromalacia patella" is the standard English phrase for patellofemoral
+    # cartilage damage and matches nothing: PF OA wants "patellar cartilage",
+    # "patellar facet" or "patellofemoral". Bare patella/patellar appear beside
+    # 148 and 108 unplaceable mentions.
+    "PF OA": (
+        r"\bpatella\b",
+        r"\bpatellar\b",
+        r"\bpatellae\b",
+        # Romance and Turkish forms of the same anatomy.
+        r"\brotulian\w*\b",
+        r"\brotula\b",
+        r"\btroclea\w*\b",
+        r"\bpatellofemoral\w*\b",
+    ),
+    # "medial and lateral compartment(s)" defeats \bmedial compartment\b, which
+    # currently yields Lateral positive and Medial silent on the same sentence.
+    "Medial OA": (
+        r"\bmedial(?: and lateral)? compartments?\b",
+        r"\bmedial(?:e|es|en)? femorotibial\w*\b",
+        r"\bmediyal\b",
+        r"\bcondilo femoral medial\b",
+        r"\bplatillo tibial medial\b",
+    ),
+    "Lateral OA": (
+        r"\b(?:medial and )?lateral compartments?\b",
+        r"\blateral(?:e|es|en)? femorotibial\w*\b",
+        r"\bcondilo femoral lateral\b",
+        r"\bplatillo tibial lateral\b",
+    ),
+}
+
+
+def simulate(
+    reports: pd.Series,
+    additions: dict[str, tuple[str, ...]] | None = None,
+    *,
+    window: int = WINDOW,
+) -> dict:
+    """What each proposed pattern would newly place, and what it would disturb.
+
+    Two numbers per pattern, and the second is the one that decides:
+
+    ```text
+    newly places   a disease mention no compartment could reach before
+    widens         a mention already placed, which now gains another compartment
+    ```
+
+    A pattern that only places is a repair. A pattern that mostly widens is
+    changing existing calls, which is a different and much riskier proposition:
+    those cells already carry a label the model has trained on.
+
+    Counted per study, so a verbose report cannot carry a pattern on its own.
+    """
+    additions = CANDIDATE_PATTERNS if additions is None else additions
+    compiled = {
+        (target, pattern): re.compile(pattern, re.I)
+        for target, patterns in additions.items()
+        for pattern in patterns
+    }
+
+    places: dict[tuple[str, str], set[str]] = {key: set() for key in compiled}
+    widens: dict[tuple[str, str], set[str]] = {key: set() for key in compiled}
+    newly_placed_studies: set[str] = set()
+
+    for uid, text in reports.items():
+        norm = normalize_report(str(text or ""))
+        if not norm:
+            continue
+        for match in OA_DISEASE_RE.finditer(norm):
+            low = max(0, match.start() - window)
+            high = min(len(norm), match.end() + window)
+            around = norm[low:high]
+            current = {
+                target
+                for target, regex in OA_ALL_CONTEXT_REGEX
+                if regex.search(around)
+            }
+            for (target, pattern), regex in compiled.items():
+                if not regex.search(around):
+                    continue
+                if not current:
+                    places[(target, pattern)].add(str(uid))
+                    newly_placed_studies.add(str(uid))
+                elif target not in current:
+                    widens[(target, pattern)].add(str(uid))
+
+    rows = [
+        {
+            "target": target,
+            "pattern": pattern,
+            "newly_places_studies": len(places[(target, pattern)]),
+            "widens_studies": len(widens[(target, pattern)]),
+        }
+        for (target, pattern) in compiled
+    ]
+    return {
+        "patterns": sorted(rows, key=lambda row: -row["newly_places_studies"]),
+        "studies_newly_placed": len(newly_placed_studies),
+        "window": int(window),
+    }
+
+
 def scan(
     *,
     data_root: str | Path,
@@ -176,6 +282,7 @@ def scan(
         **summary,
         "candidate_vocabulary": candidate_vocabulary(frame, top=top),
         "pattern_coverage": pattern_coverage(reports),
+        "proposed": simulate(reports, window=window),
     }
     if out_root is not None:
         out = Path(out_root)
@@ -216,6 +323,27 @@ def _report(result: dict) -> None:
         print(f"    {target:<14}{pattern}")
     if not dead:
         print("    (none -- every pattern matches something)")
+
+    proposed = result.get("proposed")
+    if proposed:
+        print()
+        print(
+            f"  What the proposed v1.3 patterns would do "
+            f"({proposed['studies_newly_placed']:,} studies newly placed)"
+        )
+        print(f"    {'target':<12}{'pattern':<44}{'places':>8}{'widens':>8}")
+        for row in proposed["patterns"]:
+            if not row["newly_places_studies"] and not row["widens_studies"]:
+                continue
+            print(
+                f"    {row['target']:<12}{row['pattern'][:42]:<44}"
+                f"{row['newly_places_studies']:>8,}{row['widens_studies']:>8,}"
+            )
+        print(
+            "\n    places = reached a mention nothing could reach, a repair.\n"
+            "    widens = added a compartment to a mention already placed, which\n"
+            "             changes a label the model has already trained on."
+        )
 
     print()
     print(
