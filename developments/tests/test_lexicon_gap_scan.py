@@ -490,3 +490,65 @@ def test_the_plural_trochleas_is_now_reachable():
     assert any(
         re.search(p, text, re.I) for p in CANDIDATE_PATTERNS["PF OA"]
     )
+
+
+# --- the mirror scan: compartment named, disease unrecognised -----------------
+#
+# unplaced_mentions can only see reports whose disease vocabulary already
+# matches, which is why the Spanish reports vanished from it. This looks from
+# the other side.
+
+
+def test_a_compartment_with_an_unknown_disease_word_makes_a_window():
+    from rsna_knee.lexicon_gap_scan import unnamed_disease
+
+    result = unnamed_disease(_reports({"a": "lesion condral en el compartimento medial"}))
+
+    assert result["windows"] == 1
+    assert "condral" in {w["word"] for w in result["candidate_disease_words"]}
+
+
+def test_a_compartment_with_a_known_disease_word_does_not():
+    from rsna_knee.lexicon_gap_scan import unnamed_disease
+
+    assert unnamed_disease(_reports({"a": "medial compartment osteoarthritis"}))["windows"] == 0
+
+
+def test_a_report_naming_no_compartment_makes_no_window():
+    """Which is the limit of this scan, as unplaced_mentions has its own."""
+    from rsna_knee.lexicon_gap_scan import unnamed_disease
+
+    assert unnamed_disease(_reports({"a": "condropatia focal grado 4"}))["windows"] == 0
+
+
+def test_overlapping_patterns_count_one_window_not_several():
+    """"medial compartment" and "medial tibiofemoral" in one sentence is one window."""
+    from rsna_knee.lexicon_gap_scan import unnamed_disease
+
+    result = unnamed_disease(
+        _reports({"a": "medial compartment and medial tibiofemoral surfaces are smooth"}),
+        window=200,
+    )
+    assert result["windows"] == 1
+
+
+def test_words_are_counted_by_study():
+    from rsna_knee.lexicon_gap_scan import unnamed_disease
+
+    result = unnamed_disease(
+        _reports(
+            {
+                "a": "condral compartimento medial",
+                "b": "condral compartimento medial",
+            }
+        )
+    )
+    words = {w["word"]: w["studies"] for w in result["candidate_disease_words"]}
+    assert words["condral"] == 2
+
+
+def test_short_words_are_not_offered_as_disease_terms():
+    from rsna_knee.lexicon_gap_scan import unnamed_disease
+
+    result = unnamed_disease(_reports({"a": "abcd compartimento medial"}))
+    assert "abcd" not in {w["word"] for w in result["candidate_disease_words"]}

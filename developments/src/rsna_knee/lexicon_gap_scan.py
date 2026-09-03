@@ -225,6 +225,60 @@ CANDIDATE_PATTERNS: dict[str, tuple[str, ...]] = {
 }
 
 
+def unnamed_disease(
+    reports: pd.Series, *, window: int = WINDOW, top: int = 40
+) -> dict:
+    """The mirror scan: a compartment named, and no disease term B6 knows.
+
+    `unplaced_mentions` can only see reports whose disease vocabulary already
+    matches, so a Spanish report saying "condropatia de la troclea" produces no
+    window at all and is invisible to it. This looks from the other side: where a
+    compartment *is* named, what words sit beside it that `OA_DISEASE_RE` does
+    not recognise?
+
+    A compartment is named in most knee reports, so the raw window count means
+    little on its own. What matters is which words recur across many studies
+    without ever being a disease term the parser knows.
+    """
+    per_word: dict[str, set[str]] = {}
+    windows = 0
+    studies: set[str] = set()
+    for uid, text in reports.items():
+        norm = normalize_report(str(text or ""))
+        if not norm:
+            continue
+        # Several patterns can match the same phrase -- "medial compartment" and
+        # "medial tibiofemoral" in one sentence -- so spans are deduplicated
+        # rather than counted once per pattern.
+        spans: set[tuple[int, int]] = set()
+        for _target, regex in OA_ALL_CONTEXT_REGEX:
+            for match in regex.finditer(norm):
+                spans.add(
+                    (
+                        max(0, match.start() - window),
+                        min(len(norm), match.end() + window),
+                    )
+                )
+        for low, high in sorted(spans):
+            around = norm[low:high]
+            if OA_DISEASE_RE.search(around):
+                continue
+            windows += 1
+            studies.add(str(uid))
+            for word in re.findall(r"[a-z]{5,}", around):
+                if word in STOPWORDS:
+                    continue
+                per_word.setdefault(word, set()).add(str(uid))
+    counted = Counter({word: len(uids) for word, uids in per_word.items()})
+    return {
+        "windows": windows,
+        "studies": len(studies),
+        "candidate_disease_words": [
+            {"word": word, "studies": count} for word, count in counted.most_common(top)
+        ],
+    }
+
+
 def pattern_examples(
     reports: pd.Series,
     target: str,
@@ -362,6 +416,7 @@ def scan(
         "candidate_vocabulary": candidate_vocabulary(frame, top=top),
         "pattern_coverage": pattern_coverage(reports),
         "proposed": simulate(reports, window=window),
+        "unnamed_disease": unnamed_disease(reports, window=window, top=top),
     }
     if out_root is not None:
         out = Path(out_root)
@@ -423,6 +478,16 @@ def _report(result: dict) -> None:
             "    widens = added a compartment to a mention already placed, which\n"
             "             changes a label the model has already trained on."
         )
+
+    mirror = result.get("unnamed_disease")
+    if mirror:
+        print()
+        print(
+            f"  The mirror: a compartment named, no disease term recognised\n"
+            f"    {mirror['windows']:,} windows across {mirror['studies']:,} studies"
+        )
+        for item in mirror["candidate_disease_words"][:25]:
+            print(f"      {item['word']:<28}{item['studies']:>7,}")
 
     print()
     print(
