@@ -224,7 +224,11 @@ def spacing_metadata(
     conditioning = getattr(module, "spacing_conditioning", None)
     if conditioning is None or series_spacing is None:
         return metadata
-    return metadata + conditioning(series_spacing.to(metadata.device))
+    # Cast back to the metadata dtype. The projection weight stays float32, so
+    # under autocast an uncast result would silently promote the whole sum out
+    # of half precision and change what the rest of the model runs in.
+    contribution = conditioning(series_spacing.to(metadata.device))
+    return metadata + contribution.to(metadata.dtype)
 
 
 def set_spacing_enabled(model: torch.nn.Module, enabled: bool) -> int:

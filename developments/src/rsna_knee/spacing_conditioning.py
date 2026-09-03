@@ -146,18 +146,18 @@ class SpacingConditioning(nn.Module):
 
     def forward(self, spacing_mm: torch.Tensor) -> torch.Tensor:
         """`spacing_mm` is [...]; the result is [..., d_model]."""
-        basis = spacing_basis(spacing_mm)
         if not self.enabled:
+            # Return before building the basis: when ablating a checkpoint this
+            # runs on every batch and none of that work is used.
             return torch.zeros(
                 (*spacing_mm.shape, self.d_model),
                 device=spacing_mm.device,
                 dtype=self.projection.weight.dtype,
             )
-        usable = (torch.isfinite(spacing_mm) & (spacing_mm > 0)).to(
-            self.projection.weight.dtype
-        )
-        projected = self.projection(basis.to(self.projection.weight.dtype))
-        return projected * usable.unsqueeze(-1)
+        weight_dtype = self.projection.weight.dtype
+        basis = spacing_basis(spacing_mm).to(weight_dtype)
+        usable = (torch.isfinite(spacing_mm) & (spacing_mm > 0)).to(weight_dtype)
+        return self.projection(basis) * usable.unsqueeze(-1)
 
 
 # --- where the number comes from ---------------------------------------------

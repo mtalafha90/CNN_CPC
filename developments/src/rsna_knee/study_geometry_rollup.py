@@ -52,7 +52,12 @@ import numpy as np
 import pandas as pd
 
 from .constants import TARGETS
-from .data import build_series_index, load_series_csv, load_train_csv
+from .data import (
+    backfill_series_metadata,
+    build_series_index,
+    load_series_csv,
+    load_train_csv,
+)
 
 ROLLUP_VERSION = "study_geometry_rollup_v1"
 
@@ -121,13 +126,21 @@ def study_table(frame: pd.DataFrame) -> pd.DataFrame:
     return table
 
 
-def dual_subset(series_csv_frame: pd.DataFrame, data_root: str | Path) -> set[str]:
+def dual_subset(
+    series_csv_frame: pd.DataFrame, data_root: str | Path, *, split: str = "train"
+) -> set[str]:
     """The series the legacy `mode="dual"` policy would have selected.
 
     Kept for comparison only. B12 and everything after it read all of them.
+
+    The metadata is repaired from the headers first, because the selection
+    keys on plane, fluid and fat flags and `slice_geometry_scan` measured the
+    repaired population. Skipping the repair here would compare two different
+    series sets and blame the difference on the policy.
     """
     root = Path(data_root)
     series = load_series_csv(root / "train_series.csv")
+    series, _ = backfill_series_metadata(series, root, split=split)
     train = load_train_csv(root / "train.csv")
     index = build_series_index(series, train["StudyInstanceUID"].astype(str), mode="dual")
     chosen = {str(uid) for picks in index.values() for uid in picks.values() if uid}

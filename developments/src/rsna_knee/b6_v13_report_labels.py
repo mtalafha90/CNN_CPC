@@ -164,35 +164,51 @@ def is_list_negated(text: str, stop: int, *, width: int = 40) -> bool:
     return bool(LIST_NEGATION_AFTER.match(text[stop : stop + int(width)]))
 
 
-def _observations(norm: str, target: str, *, use_v13: bool) -> list[tuple[str, str, str]]:
-    """Every mention of the target, as (state, clause, reason).
-
-    The literal aliases run exactly as v1.2.1 runs them. The v1.3 patterns run
-    afterwards and can only add mentions, never remove one.
-    """
+def _collect(
+    norm: str,
+    target: str,
+    spans,
+    *,
+    guard: bool,
+    reason_suffix: str = "",
+) -> list[tuple[str, str, str]]:
+    """Turn `(start, stop, phrase)` spans into (state, clause, reason) triples."""
     observations: list[tuple[str, str, str]] = []
     seen: set[tuple[str, str, str]] = set()
-
-    def record(start: int, stop: int, phrase: str, reason_suffix: str = "") -> None:
+    for start, stop, phrase in spans:
         clause = _clause(norm, start, stop)
         state, reason = _classify_mention(target, clause, phrase)
-        if use_v13 and state == STATE_POSITIVE and is_list_negated(norm, stop):
+        if guard and state == STATE_POSITIVE and is_list_negated(norm, stop):
             state, reason = STATE_NEGATED, "list_negation_guard"
         item = (state, clause[:360], reason + reason_suffix)
         if item not in seen:
             observations.append(item)
             seen.add(item)
+    return observations
 
+
+def _alias_spans(norm: str, target: str):
     for phrase in _aliases(target):
         for match in re.finditer(re.escape(phrase), norm, re.I):
-            record(match.start(), match.end(), phrase)
+            yield match.start(), match.end(), phrase
 
-    if use_v13:
-        for pattern in COMPILED_V13_PATTERNS.get(target, ()):
-            for match in pattern.finditer(norm):
-                record(match.start(), match.end(), match.group(0), "_v13")
 
-    return observations
+def _v13_spans(norm: str, target: str):
+    for pattern in COMPILED_V13_PATTERNS.get(target, ()):
+        for match in pattern.finditer(norm):
+            yield match.start(), match.end(), match.group(0)
+
+
+def alias_observations(norm: str, target: str, *, guard: bool) -> list[tuple[str, str, str]]:
+    """What v1.2.1 sees, optionally with the list-negation guard applied."""
+    return _collect(norm, target, _alias_spans(norm, target), guard=guard)
+
+
+def v13_observations(norm: str, target: str) -> list[tuple[str, str, str]]:
+    """What the new vocabulary sees. Consulted only where the aliases are silent."""
+    return _collect(
+        norm, target, _v13_spans(norm, target), guard=True, reason_suffix="_v13"
+    )
 
 
 def _resolve(observations: list[tuple[str, str, str]], target: str) -> B6Prediction:
@@ -245,15 +261,38 @@ def _resolve(observations: list[tuple[str, str, str]], target: str) -> B6Predict
 def predict_target_b6_v13(text: str, target: str, *, use_v13: bool = True) -> B6Prediction:
     """One report, one target. `use_v13=False` reproduces v1.2.1 exactly.
 
-    The evidence-free OA fallback is retained but now runs last, so it only
-    fires where the new vocabulary also found nothing — which is the point of
-    adding the vocabulary.
+    ## The precedence, and why it is strict
+
+    The new vocabulary answers **only where the aliases are silent**. It is not
+    merged into their evidence, and it cannot overturn what they concluded.
+
+    That rule was added after the review found the merge could downgrade a
+    confident call. "Patella: normal. Patellofemoral osteoarthritis is
+    present." resolves positive under v1.2.1 — one clause, one disease phrase.
+    Merging a v1.3 `\\bpatella\\b` match adds a *negated* observation from the
+    other clause, the two conflict, and the cell falls to `uncertain` with
+    confidence 0.25 instead of 0.90.
+
+    That is backwards. The v1.3 patterns are deliberately broad anatomy words,
+    chosen to place cells that had nothing at all; a bare anatomy word calling
+    something normal is far weaker evidence than a named disease, and must not
+    be allowed to veto it. Letting it would also quietly shrink supervision on
+    the three OA targets, which already have the worst coverage of the twelve.
+
+    So the order is: the aliases, then the new vocabulary, then the
+    evidence-free fallback — each consulted only if the one before it found
+    nothing. The fallback is retained, not deleted; it simply now runs last.
     """
     norm = normalize_report(text)
     if not norm:
         return B6Prediction(0.50, 0.0, False, STATE_UNMENTIONED, "", "empty_report")
 
-    observations = _observations(norm, target, use_v13=use_v13)
+    observations = alias_observations(norm, target, guard=use_v13)
+    if observations:
+        return _resolve(observations, target)
+
+    if use_v13:
+        observations = v13_observations(norm, target)
 
     if not observations and target in OA_TARGETS:
         legacy = legacy_predict_target(norm, target)
@@ -317,6 +356,10 @@ def change_summary(frozen: pd.DataFrame, updated: pd.DataFrame) -> dict:
             "fallback_cells_now_quoted": 0,
             "cells_flipped_by_list_negation_guard": 0,
             "cells_silenced": 0,
+            # A committed call falling to `uncertain` drops its confidence from
+            # 0.90 to 0.25. The strict precedence should make this impossible;
+            # it is counted so that "should" is checked rather than trusted.
+            "cells_weakened_to_uncertain": 0,
         },
     }
     for target in TARGETS:
@@ -338,6 +381,12 @@ def change_summary(frozen: pd.DataFrame, updated: pd.DataFrame) -> dict:
         )
         flipped = int(new_reason.eq("list_negation_guard").sum())
         silenced = int((~was_silent & is_silent).sum())
+        weakened = int(
+            (
+                old_state.isin([STATE_POSITIVE, STATE_NEGATED])
+                & new_state.eq(STATE_UNCERTAIN)
+            ).sum()
+        )
 
         summary["targets"][target] = {
             "cells_newly_answered": newly,
@@ -345,6 +394,7 @@ def change_summary(frozen: pd.DataFrame, updated: pd.DataFrame) -> dict:
             "fallback_cells_now_quoted": requoted,
             "cells_flipped_by_list_negation_guard": flipped,
             "cells_silenced": silenced,
+            "cells_weakened_to_uncertain": weakened,
         }
         for key, value in summary["targets"][target].items():
             summary["totals"][key] += value

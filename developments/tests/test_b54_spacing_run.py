@@ -338,3 +338,31 @@ def test_the_state_records_that_the_weights_are_still_zero():
             if isinstance(child, SpacingConditioning)
         ).projection.weight.normal_()
     assert b54_state(module)["conditioning_is_still_zero"] == [False]
+
+
+# --- the order of operations on the day ---------------------------------------
+
+
+def test_installing_before_loading_a_pretrained_base_breaks_the_load():
+    """A trap worth an hour on the day, so it is executable rather than prose.
+
+    Installing the conditioning adds keys to the state dict. A pretrained
+    checkpoint from before B54 does not have them, so a strict load fails.
+    """
+    pretrained = _MetaModule().state_dict()
+
+    wrong_order = _MetaModule()
+    install_spacing_conditioning(wrong_order)
+    with pytest.raises(RuntimeError, match="Unexpected|Missing"):
+        wrong_order.load_state_dict(pretrained, strict=True)
+
+
+def test_loading_first_then_installing_is_clean():
+    pretrained = _MetaModule().state_dict()
+
+    right_order = _MetaModule()
+    right_order.load_state_dict(pretrained, strict=True)
+    conditioning = install_spacing_conditioning(right_order)
+
+    assert torch.all(conditioning.projection.weight == 0)
+    assert "spacing_conditioning.projection.weight" in right_order.state_dict()

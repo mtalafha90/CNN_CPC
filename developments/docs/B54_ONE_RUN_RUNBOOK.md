@@ -47,7 +47,7 @@ git pull origin main
 PYTHONPATH=developments/src python -m pytest developments/tests -q
 ```
 
-Expect 1,765 passed, 1 skipped.
+Expect 1,786 passed, 1 skipped.
 
 ## Step 1 — B6 v1.3 report labels
 
@@ -64,10 +64,17 @@ cells_newly_answered                 expect roughly 220 studies' worth
 fallback_cells_now_quoted            expect this to be most of the movement
 cells_flipped_by_list_negation_guard expect around 83
 cells_silenced                       must be 0
+cells_weakened_to_uncertain          must be 0
 ```
 
-If `cells_silenced` is not zero, stop — v1.3 is removing calls, which it is not
-allowed to do, and the run should not proceed.
+Both zeros are hard stops. `cells_silenced` above zero means v1.3 is removing
+calls, which it is not allowed to do. `cells_weakened_to_uncertain` above zero
+means the precedence rule has failed: the new vocabulary is broad anatomy, and
+a bare anatomy word must never overturn a named disease into `uncertain`,
+which would drop the cell's confidence from 0.90 to 0.25 on exactly the three
+targets with the worst coverage. That failure was real in the first draft and
+is now blocked in code, but the counter exists so "blocked" is checked rather
+than trusted.
 
 ## Step 2 — fill the silent cells, on the v1.3 base
 
@@ -150,11 +157,19 @@ Wire, in this order:
 
 1. `attach_spacing(records, series_geometry_csv=..., data_root=...)`
 2. `B54SpacingDataset` and `collate_b54` in place of the variable-series pair
-3. `install_spacing_conditioning(...)` on each module that sums metadata
-4. `spacing_metadata(module, series_meta, series_spacing)` where
+3. **load the pretrained base checkpoint first**
+4. *then* `install_spacing_conditioning(...)` on each module that sums metadata
+5. `spacing_metadata(module, series_meta, series_spacing)` where
    `plane + fluid + fat` is computed today
-5. `training_resume.resume(...)` before the loop, `save_checkpoint(...)` after
+6. `training_resume.resume(...)` before the loop, `save_checkpoint(...)` after
    every epoch
+
+**Steps 3 and 4 are in that order for a reason.** Installing the conditioning
+adds `spacing_conditioning.projection.weight` to the state dict. A pretrained
+checkpoint from before B54 does not have that key, so loading it strictly into
+an already-installed model raises. Load first, install second, and the load is
+clean and the new module starts at zero. Two tests in
+`test_b54_spacing_run.py` pin both halves of this.
 
 The resume is not optional here. Runs are already nineteen hours and this one
 is longer; a crash without it costs the whole attempt.

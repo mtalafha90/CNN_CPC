@@ -320,3 +320,74 @@ def test_a_bad_confidence_is_refused(tmp_path):
 
     with pytest.raises(ValueError, match="min_confidence"):
         run_b6_v13_export(_train_csv(tmp_path), out_root=tmp_path / "x", min_confidence=2.0)
+
+
+# --- the precedence found by the review ---------------------------------------
+
+DOWNGRADE_CASE = "Patella: normal. Patellofemoral osteoarthritis is present."
+
+
+def test_the_new_vocabulary_cannot_overturn_a_confident_alias_call():
+    """The defect the review caught.
+
+    Merging a broad `patella` match into a clause resolved by a named disease
+    made the two conflict and dropped the cell to `uncertain`, confidence 0.25
+    instead of 0.90. A bare anatomy word must not veto a named disease.
+    """
+    frozen = predict_target_b6(DOWNGRADE_CASE, "PF OA")
+    updated = predict_target_b6_v13(DOWNGRADE_CASE, "PF OA")
+
+    assert frozen.state == STATE_POSITIVE
+    assert updated.state == STATE_POSITIVE
+    assert updated.confidence == pytest.approx(frozen.confidence)
+
+
+def test_the_new_vocabulary_answers_only_where_the_aliases_are_silent():
+    from rsna_knee.b6_v13_report_labels import alias_observations, v13_observations
+    from rsna_knee.data import normalize_report
+
+    norm = normalize_report(DOWNGRADE_CASE)
+    assert alias_observations(norm, "PF OA", guard=True)  # aliases speak
+    assert v13_observations(norm, "PF OA")  # and so would v1.3
+    # but the alias answer is the one that survives
+    assert predict_target_b6_v13(DOWNGRADE_CASE, "PF OA").reason == (
+        predict_target_b6(DOWNGRADE_CASE, "PF OA").reason
+    )
+
+
+def test_it_still_places_a_cell_the_aliases_missed():
+    """The precedence must not cost the placements v1.3 exists for."""
+    text = "Severe patella cartilage loss with subchondral cysts."
+    assert predict_target_b6(text, "PF OA").state == STATE_UNMENTIONED
+    assert predict_target_b6_v13(text, "PF OA").state == STATE_POSITIVE
+
+
+def test_no_committed_call_is_ever_weakened_to_uncertain():
+    from rsna_knee.report_labels import STATE_UNCERTAIN
+
+    committed = {STATE_POSITIVE, STATE_NEGATED}
+    for text in list(REPORTS) + [DOWNGRADE_CASE]:
+        for target in TARGETS:
+            old = predict_target_b6_v13(text, target, use_v13=False)
+            new = predict_target_b6_v13(text, target, use_v13=True)
+            if old.state in committed:
+                assert new.state != STATE_UNCERTAIN, (text, target)
+
+
+def test_the_change_summary_counts_any_weakening(tmp_path):
+    from rsna_knee.b6_v13_report_labels import build_b6_v13_frame, change_summary
+    from rsna_knee.data import load_train_csv
+
+    df = load_train_csv(_train_csv(tmp_path))
+    summary = change_summary(
+        build_b6_v13_frame(df, use_v13=False), build_b6_v13_frame(df, use_v13=True)
+    )
+
+    assert "cells_weakened_to_uncertain" in summary["totals"]
+    assert summary["totals"]["cells_weakened_to_uncertain"] == 0
+
+
+def test_the_list_negation_guard_survives_the_precedence():
+    """It acts on the alias pass, so strict precedence must not disable it."""
+    text = "Findings: ACL: intact. Medial meniscus: tear."
+    assert predict_target_b6_v13(text, "ACL").state == STATE_NEGATED
