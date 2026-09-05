@@ -273,3 +273,42 @@ def conditioning_has_moved(model: torch.nn.Module) -> bool:
     return bool(parameters) and any(
         bool(torch.any(p != 0)) for p in parameters
     )
+
+
+def move_study_with_spacing(item: dict, device) -> tuple:
+    """`_move_study`, plus the spacing, as a seven-tuple.
+
+    B42's `_move_study` returns six tensors and `_losses` unpacks exactly six,
+    so the spacing needs its own pair rather than an extra element bolted onto
+    the frozen ones. A study whose item carries no spacing yields `None`, which
+    the model treats as "not conditioned" without a branch at the call site.
+    """
+    from .b42_constant_area_aspect_sparse_training import _move_study
+
+    spacing = item.get("series_spacing")
+    if spacing is not None:
+        spacing = spacing.to(device, non_blocking=True).unsqueeze(0)
+    return (*_move_study(item, device), spacing)
+
+
+def losses_with_spacing(model, runtime, tensors, multiplier_t, aux_weight: float):
+    """`_losses`, passing the spacing to the model.
+
+    Mirrors `b42_constant_area_aspect_sparse_training._losses` exactly, with
+    one extra argument on the forward call. Kept beside the model rather than
+    edited into the frozen trainer, so B52's own loss path is untouched.
+    """
+    from .b7_weak_supervision import target_balanced_weak_bce
+    from .runtime import autocast
+
+    volumes, position, present, meta, target, weight, spacing = tensors
+    with autocast(runtime):
+        out = model(volumes, present, meta, position, spacing)
+        combined = target_balanced_weak_bce(
+            out.logits, target, weight, multiplier_t
+        )
+        local = target_balanced_weak_bce(
+            out.local_logits, target, weight, multiplier_t
+        )
+        total = combined + float(aux_weight) * local
+    return out, total, combined, local

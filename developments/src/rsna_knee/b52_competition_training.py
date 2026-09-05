@@ -101,6 +101,20 @@ from .b48_global_conditioned_sparse_training import (
     b48_fill_artifacts,
 )
 from .b50_adapted_hierarchy_mil import B50AdaptedHierarchySparseMILResidual
+from .b54_spacing_conditioned_mil import (
+    B54SpacingConditionedMIL,
+    assert_conditioning_will_train,
+    conditioning_has_moved,
+    losses_with_spacing,
+    move_study_with_spacing,
+)
+from .b54_spacing_run import (
+    attach_spacing,
+    install_spacing_conditioning,
+    preflight,
+    spacing_summary,
+    with_spacing,
+)
 from .b50_adapted_hierarchy_training import load_b50_selection_gate
 from .b50_ordered_slice_selection_split import (
     B50_SPLIT_EXCLUDED,
@@ -114,6 +128,7 @@ from .encoder_finetune import MAX_TRAINABLE_STAGES
 from .evaluation import fast_auc
 from .phase9_matched_supervision_training import load_phase9_checkpoint
 from .runtime import make_scaler, resolve_runtime
+from .training_resume import resume, save_checkpoint
 
 B52_EXPERIMENT = "B52_COMPETITION_FULL_FINETUNE"
 B52_VERSION = "b52_competition_full_finetune_v1"
@@ -258,7 +273,15 @@ def macro_auc(target: np.ndarray, weight: np.ndarray, prediction: np.ndarray) ->
 
 
 @torch.no_grad()
-def evaluate_split(model, runtime, loader, multiplier_t, aux_weight: float) -> dict:
+def evaluate_split(
+    model,
+    runtime,
+    loader,
+    multiplier_t,
+    aux_weight: float,
+    move=_move_study,
+    losses=_losses,
+) -> dict:
     """Score one split without touching gradients or the training mode flag."""
     was_training = model.training
     model.eval()
@@ -269,8 +292,8 @@ def evaluate_split(model, runtime, loader, multiplier_t, aux_weight: float) -> d
 
     for items in loader:
         for item in items:
-            tensors = _move_study(item, runtime.device)
-            out, total, _combined, _local = _losses(
+            tensors = move(item, runtime.device)
+            out, total, _combined, _local = losses(
                 model, runtime, tensors, multiplier_t, aux_weight
             )
             predictions.append(
@@ -290,8 +313,15 @@ def evaluate_split(model, runtime, loader, multiplier_t, aux_weight: float) -> d
     return scores
 
 
-def _build_dataset(uids, index, dataset_config, crop_policy, targets, weights):
-    return B42ConstantAreaAspectDataset(
+def _build_dataset(
+    uids, index, dataset_config, crop_policy, targets, weights, spacing: bool = False
+):
+    # `with_spacing` returns a subclass, so every frozen contract that tests
+    # for B42ConstantAreaAspectDataset still holds.
+    cls = with_spacing(B42ConstantAreaAspectDataset) if spacing else (
+        B42ConstantAreaAspectDataset
+    )
+    return cls(
         uids,
         index,
         dataset_config,
@@ -318,6 +348,7 @@ def train_b52(
     train_splits: tuple = (B52_TRAIN_SPLIT,),
     gradient_checkpointing: bool = True,
     seed: int = B52_SEED,
+    spacing_geometry_csv: str | Path | None = None,
     out_root: str | Path = B52_RUN_ROOT,
     preflight_only: bool = False,
 ) -> Path | None:
@@ -413,11 +444,44 @@ def train_b52(
     valid_config = make_b7_dataset_config(settings, root, train=False)
     valid_config.tta_center_offsets = ()
 
+    # B54: attach the measured slice spacing to every series record before the
+    # datasets are built. Absent `--spacing-geometry-csv` this is skipped and
+    # B52 runs exactly as it always has.
+    use_spacing = spacing_geometry_csv is not None
+    spacing_state: dict = {"enabled": False}
+    if use_spacing:
+        for index in (train_index, valid_index):
+            stats = attach_spacing(
+                index,
+                series_geometry_csv=spacing_geometry_csv,
+                data_root=root,
+                split="train",
+            )
+            print(f"[B54] spacing {stats}", flush=True)
+        spacing_state = {
+            "enabled": True,
+            "series_geometry_csv": str(spacing_geometry_csv),
+            "train": spacing_summary(train_index),
+            "validation": spacing_summary(valid_index),
+        }
+
     train_dataset = _build_dataset(
-        train_uids, train_index, train_config, crop_policy, train_targets, train_weights
+        train_uids,
+        train_index,
+        train_config,
+        crop_policy,
+        train_targets,
+        train_weights,
+        spacing=use_spacing,
     )
     valid_dataset = _build_dataset(
-        valid_uids, valid_index, valid_config, crop_policy, valid_targets, valid_weights
+        valid_uids,
+        valid_index,
+        valid_config,
+        crop_policy,
+        valid_targets,
+        valid_weights,
+        spacing=use_spacing,
     )
     batch_size = int(settings.get("b42_effective_batch", 2))
     train_loader = DataLoader(
@@ -437,7 +501,10 @@ def train_b52(
         **runtime.loader_kwargs(seed=int(seed) + B52_LOADER_SEED_OFFSET),
     )
 
-    model = B50AdaptedHierarchySparseMILResidual(
+    residual_class = (
+        B54SpacingConditionedMIL if use_spacing else B50AdaptedHierarchySparseMILResidual
+    )
+    model = residual_class(
         base_model,
         grid_size=int(settings["b37_grid_size"]),
         top_k=int(settings["b37_top_k"]),
@@ -450,6 +517,15 @@ def train_b52(
     # memory. With five stages this run peaks near 1.4 GiB of a 16 GiB card, so
     # the memory it buys is not needed and the recompute is pure time.
     model.gradient_checkpointing = bool(gradient_checkpointing)
+    # The conditioning is installed *after* base_model arrived with its
+    # pretrained weights, which is the only safe order: installing first adds a
+    # state-dict key the checkpoint does not have.
+    if use_spacing:
+        install_spacing_conditioning(model.base)
+        gate = preflight(train_index, model=model)
+        print(f"[B54] preflight {gate['passed']}", flush=True)
+        if not gate["passed"]:
+            raise RuntimeError(f"B54 preflight failed: {gate['problems']}")
     model.train()
 
     trainable = model.trainable_parameter_summary()
@@ -472,6 +548,11 @@ def train_b52(
     optimizer = torch.optim.AdamW(
         groups, weight_decay=float(settings.get("b37_weight_decay", B37_WEIGHT_DECAY))
     )
+    # Without this the conditioning could sit in no optimiser group at all,
+    # stay at its zero initialisation for the whole run, and make the ablation
+    # report no effect from a model never trained to use the spacing.
+    if use_spacing:
+        spacing_state["optimiser"] = assert_conditioning_will_train(model, optimizer)
     # T_max equals the epochs actually run, so the cosine completes. The frozen
     # contract used T_max=5 with a two-epoch endpoint, which stopped at 90.5%
     # of peak having never trained at a reduced rate.
@@ -519,7 +600,42 @@ def train_b52(
     best_macro = -float("inf")
     best_epoch = 0
 
-    for epoch in range(1, int(epochs) + 1):
+    def _check_spacing_learned() -> None:
+        """The conditioning starts at exactly zero, so it must not end there.
+
+        `assert_conditioning_will_train` makes this near-impossible, and it is
+        kept anyway because the failure it guards is silent: a finished run
+        whose ablation reports no effect because the term was never learned.
+        Mirrors B49's encoder-fingerprint check.
+        """
+        if not use_spacing:
+            return
+        moved = conditioning_has_moved(model)
+        spacing_state["conditioning_moved"] = bool(moved)
+        if not moved:
+            raise RuntimeError(
+                "B54 spacing conditioning is still exactly zero after training; "
+                "the run did not test what it claims to"
+            )
+
+    move_study = move_study_with_spacing if use_spacing else _move_study
+    compute_losses = losses_with_spacing if use_spacing else _losses
+
+    # Resume before the loop. Runs here are already nineteen hours and B54 is
+    # longer; without this a crash costs the whole attempt.
+    resumed = resume(
+        out,
+        model=model,
+        version=B52_VERSION,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        scaler=scaler,
+    )
+    print(f"[B52] {resumed.describe()}", flush=True)
+    if resumed.restored:
+        history = list(resumed.history)
+
+    for epoch in range(resumed.start_epoch, int(epochs) + 1):
         started = time.monotonic()
         if runtime.device.type == "cuda" and torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(runtime.device)
@@ -532,8 +648,8 @@ def train_b52(
             scales = _batch_scales(items, multiplier_cpu)
             batch_total = 0.0
             for item, scale in zip(items, scales):
-                tensors = _move_study(item, runtime.device)
-                _out, total, _combined, _local = _losses(
+                tensors = move_study(item, runtime.device)
+                _out, total, _combined, _local = compute_losses(
                     model, runtime, tensors, multiplier_t, aux_weight
                 )
                 scaler.scale(total * float(scale)).backward()
@@ -547,7 +663,15 @@ def train_b52(
             _trim_host_memory()
 
         scheduler.step()
-        scores = evaluate_split(model, runtime, valid_loader, multiplier_t, aux_weight)
+        scores = evaluate_split(
+            model,
+            runtime,
+            valid_loader,
+            multiplier_t,
+            aux_weight,
+            move=move_study,
+            losses=compute_losses,
+        )
         row = {
             "epoch": epoch,
             "train_loss": total_sum / max(batches, 1),
@@ -559,6 +683,19 @@ def train_b52(
             "epoch_minutes": round((time.monotonic() - started) / 60.0, 1),
         }
         history.append(row)
+        # Atomic, and complete: weights, optimiser, schedule, loss scale and
+        # every generator. An epoch boundary is the only safe place to stop.
+        save_checkpoint(
+            out,
+            epoch=epoch,
+            model=model,
+            version=B52_VERSION,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            history=history,
+            extra={"spacing": spacing_state},
+        )
         print(
             f"[B52] E{epoch:>2} train={row['train_loss']:.6f} "
             f"val={row['validation_loss']:.6f} "
@@ -570,6 +707,7 @@ def train_b52(
         if np.isfinite(row["validation_macro_auc"]) and row["validation_macro_auc"] > best_macro:
             best_macro = float(row["validation_macro_auc"])
             best_epoch = epoch
+            _check_spacing_learned()
             payload = {
                 "experiment": B52_EXPERIMENT,
                 "version": B52_VERSION,
@@ -600,6 +738,7 @@ def train_b52(
                 "model_state": model.state(),
                 "encoder_sha256_initial": encoder_initial_sha,
                 "encoder_sha256_final": encoder_state_sha256(model.base.encoder),
+                "spacing": spacing_state,
                 "training_studies": len(train_uids),
                 "validation_studies": len(valid_uids),
                 "training_uids_sha256": _uid_sha256(train_uids),
@@ -670,6 +809,15 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=B52_SEED)
     parser.add_argument("--out-root", default=B52_RUN_ROOT)
     parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument(
+        "--spacing-geometry-csv",
+        default=None,
+        help=(
+            "B54: series_geometry.csv from rsna_knee.slice_geometry_scan. Given "
+            "it, the study hierarchy is conditioned on each series' measured "
+            "slice spacing. Omitted, this runs exactly as B52 always has"
+        ),
+    )
     args = parser.parse_args()
 
     train_b52(
@@ -688,6 +836,7 @@ def main() -> None:
         gradient_checkpointing=not args.no_gradient_checkpointing,
         seed=args.seed,
         out_root=args.out_root,
+        spacing_geometry_csv=args.spacing_geometry_csv,
         preflight_only=args.preflight_only,
     )
 

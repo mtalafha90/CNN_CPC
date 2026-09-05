@@ -2,12 +2,11 @@
 
 ## Status
 
-**BUILT AND TESTED. NOT RUN.**
+**BUILT, WIRED AND TESTED. NOT RUN.**
 
-The label half is done and on disk: `runs/085_B54/teacher_final`. The model
-half is code: `B54SpacingConditionedMIL` conditions the study hierarchy on the
-measured slice spacing, and `training_resume` makes a long run survivable.
-Nothing has been trained.
+The teacher is on disk at `runs/085_B54/teacher_final`. The model is wired into
+B52's trainer behind `--spacing-geometry-csv`, with resume, a preflight, an
+optimiser check and a post-run backstop. Nothing has been trained.
 
 ## What is in it
 
@@ -51,7 +50,7 @@ git pull origin main
 PYTHONPATH=developments/src python -m pytest developments/tests -q
 ```
 
-Expect 1,812 passed, 1 skipped.
+Expect 1,847 passed, 1 skipped.
 
 ## Step 1 — B6 v1.3 report labels
 
@@ -175,42 +174,57 @@ head alone or the base as well is conditioned.
 
 ## Step 6 — train
 
-The model is `B54SpacingConditionedMIL`, a subclass of the B42 residual B52
-already trains. It overrides two methods and copies none of the hierarchy: the
-spacing term is added to `global_feature` before `super()` runs, which lands in
-`plane + fluid + fat` exactly, and a test checks that equivalence against a
-direct reproduction of the parent's expression.
+The five edits are made. `b52_competition_training` now takes
+`--spacing-geometry-csv`, and **every B54 branch is behind it** — omit the flag
+and B52 runs exactly as it always has. 26 tests hold that gate shut.
 
-Only the study base is conditioned. The sparse MIL head sums the same three
-embeddings and could take the term too; it deliberately does not, because the
-base is where series are fused into one prediction and the head enters through
-a learned gate as a residual. `b54_state` records the choice.
+```bash
+cd /media/talafha/Disk_1/CNN_CPC
 
-In `b52_competition_training`, five changes:
+PYTHONPATH=developments/src python -m rsna_knee.b52_competition_training \
+  --data-root /media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection \
+  --labels-root runs/085_B54/teacher_final \
+  --series-policy <the series policy B52 used> \
+  --base-checkpoint <the Phase-9 llm_fill checkpoint B52 used> \
+  --domain-split <the split B52 used> \
+  --spacing-geometry-csv runs/slice_geometry_scan/series_geometry.csv \
+  --out-root runs/085_B54/train
+```
 
-1. `attach_spacing(records, series_geometry_csv=..., data_root=...)` after the
-   series records are assembled. Read its report: `unresolved` should be 0.
-2. `with_spacing(B42ConstantAreaAspectDataset)` in `_build_dataset`.
-   **`collate_b42` needs no change** — it is `list(items)`, so the spacing
-   travels inside each item.
-3. Build `B54SpacingConditionedMIL` instead of the B42 residual, **load the
-   pretrained base checkpoint**, and only *then* call
-   `install_spacing_conditioning(model.base)`. That order matters: installing
-   first adds a state-dict key the checkpoint does not have, and a strict load
-   raises. Two tests pin both halves.
-4. In the training step, `spacing_from_batch(batch)` and pass the result as
-   `series_spacing=` to the model. It accepts the ragged B42 batch or a padded
-   one, and returns `None` when there is no spacing, so an unconditioned run
-   needs no branch of its own.
-5. `training_resume.resume(...)` before the epoch loop and `save_checkpoint(...)`
-   after every epoch.
+Recover the three unchanged paths from B52's own audit:
 
-Call `preflight(records, model=model)` before the first epoch and abort on
-`passed: False`. It refuses the two ways this run could be silently pointless:
-a spacing that failed to resolve, and a conditioning that was never installed.
+```bash
+python -c "
+import json; a=json.load(open('runs/086_Experiment_B52_competition_full_finetune/training_audit.json'))
+print({k:a.get(k) for k in ('series_policy','base_checkpoint','domain_split')})"
+```
 
-The resume is not optional. Runs are already nineteen hours and this one is
-longer; a crash without it costs the whole attempt.
+### Three guards, in the order they fire
+
+**Preflight, before the first epoch.** Refuses a spacing that failed to resolve
+for most series, and a conditioning that was never installed. Expect
+`resolved_fraction` 1.000 — the scan measured a usable spacing for all 24,371.
+
+**The optimiser check, once the groups are built.** This is the one that
+matters. `b52_parameter_groups` builds three groups from the encoder,
+`hierarchy_parameters()` and the head, and B50 fixes its hierarchy names in
+`__init__` — before the conditioning exists. Left alone the conditioning would
+reach no group, never update, stay at zero all run, and the ablation would
+report no effect from a model never trained to use the spacing.
+`B54SpacingConditionedMIL.hierarchy_parameters` includes it and
+`assert_conditioning_will_train` checks the finished optimiser rather than
+trusting that.
+
+**The backstop, before the payload is written.** The conditioning starts at
+exactly zero, so if it is still zero the run raises rather than reporting a
+number that means nothing. Mirrors B49's encoder-fingerprint check.
+
+### Resume
+
+`recovery_latest.pt` is written to `--out-root` after every epoch — weights,
+optimiser, schedule, loss scale and every generator, atomically. Re-running the
+same command picks up at the next epoch and says so. It refuses a checkpoint
+written by a different version, so move it aside if you deliberately restart.
 
 ## Step 7 — evaluate twice, from one checkpoint
 
