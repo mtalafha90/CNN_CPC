@@ -349,6 +349,7 @@ def train_b52(
     gradient_checkpointing: bool = True,
     seed: int = B52_SEED,
     spacing_geometry_csv: str | Path | None = None,
+    expected_supervision_cells: int | None = None,
     out_root: str | Path = B52_RUN_ROOT,
     preflight_only: bool = False,
 ) -> Path | None:
@@ -407,6 +408,7 @@ def train_b52(
         config=settings,
         domain_rows=domain_rows,
         base_payload=base_payload,
+        expected_cells=expected_supervision_cells,
     )
 
     train_indices, valid_indices, train_uids, valid_uids = select_train_and_validation(
@@ -815,6 +817,18 @@ def main() -> None:
     parser.add_argument("--out-root", default=B52_RUN_ROOT)
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument(
+        "--expected-supervision-cells",
+        type=int,
+        default=None,
+        help=(
+            "the number of usable teacher cells this run expects. Defaults to "
+            "B35_EXPECTED_CELLS, the 34,010 every run from B35 to B52 trained "
+            "on. A deliberately rebuilt teacher must state its own count here; "
+            "the check stays a hard equality either way, so a wrong "
+            "--labels-root still fails"
+        ),
+    )
+    parser.add_argument(
         "--spacing-geometry-csv",
         default=None,
         help=(
@@ -842,6 +856,7 @@ def main() -> None:
         seed=args.seed,
         out_root=args.out_root,
         spacing_geometry_csv=args.spacing_geometry_csv,
+        expected_supervision_cells=args.expected_supervision_cells,
         preflight_only=args.preflight_only,
     )
 

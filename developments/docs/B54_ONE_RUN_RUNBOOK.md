@@ -50,7 +50,7 @@ git pull origin main
 PYTHONPATH=developments/src python -m pytest developments/tests -q
 ```
 
-Expect 1,847 passed, 1 skipped.
+Expect 1,857 passed, 1 skipped.
 
 ## Step 1 — B6 v1.3 report labels
 
@@ -188,9 +188,29 @@ PYTHONPATH=developments/src python -m rsna_knee.b52_competition_training \
   --base-checkpoint runs/067_Experiment_LLM_FILL_ALL_b6_preserved_llm_fill_all_targets/b6_plus_llm_fill_all_ft1/train/llm-filled/model.pt \
   --domain-split runs/083_Experiment_B50_selection_gate/b50_ordered_slice_selection_split \
   --spacing-geometry-csv runs/slice_geometry_scan/series_geometry.csv \
+  --expected-supervision-cells 34842 \
+  --epochs 6 \
   --out-root runs/085_B54/train \
   2>&1 | tee runs/085_B54/b54_train.log
 ```
+
+### Two arguments that are not optional
+
+**`--expected-supervision-cells 34842`.** `_report_only_surface` asserts the
+teacher has exactly `B35_EXPECTED_CELLS` = 34,010 usable cells — the surface
+every run from B35 to B52 trained on. Our teacher has 34,842, so the run stops
+before the first epoch with "B48 weak supervision surface changed". That guard
+is right: it exists to catch a teacher that moved without anyone meaning it to.
+Declaring the new count satisfies it without weakening it — the check is still
+a hard equality, so a wrong `--labels-root` or a half-finished merge fails just
+as it did. The number used is written into the checkpoint under
+`supervision.expected_usable_cells`.
+
+**`--epochs 6`.** The default is 12; B52 ran 6 (`epochs_planned` in its
+checkpoint, selecting epoch 5). Leaving the default would double the GPU time
+*and* change the recipe being compared.
+
+Expect 1,857 passed, 1 skipped.
 
 ### The four paths, and why they were nearly lost
 

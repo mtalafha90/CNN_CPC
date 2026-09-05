@@ -183,8 +183,22 @@ def _report_only_surface(
     config: dict,
     domain_rows: pd.DataFrame,
     base_payload: dict,
+    expected_cells: int | None = None,
 ) -> tuple:
-    """Return the split-aligned B48 weak-label surface without any gold rows."""
+    """Return the split-aligned B48 weak-label surface without any gold rows.
+
+    `expected_cells` defaults to `B35_EXPECTED_CELLS`, the 34,010 of the teacher
+    B35 through B52 all trained on. The check exists to catch a teacher that
+    changed without anyone meaning it to, which is why it is a hard equality and
+    not a range.
+
+    A caller that has *deliberately* rebuilt the teacher must say so by passing
+    the new count. That keeps the guard doing its job -- a wrong `--labels-root`
+    or a half-finished merge still fails, because the number would not match the
+    one declared -- while allowing a stated, auditable change. The value used is
+    returned in `supervision` so the checkpoint records which surface was
+    trained on rather than leaving it to be inferred.
+    """
     train = load_train_csv(data_root / config.get("train_csv", "train.csv"))
     if len(train) != 4407:
         raise ValueError("B48 requires the complete 4,407-study training release")
@@ -195,8 +209,14 @@ def _report_only_surface(
     all_uids = [str(uid) for uid in all_uids]
     if len(all_uids) != REPORT_ONLY_STUDIES:
         raise ValueError("B48 requires all 4,349 report-only studies before the split")
-    if int((all_weights > 0).sum()) != B35_EXPECTED_CELLS:
-        raise ValueError("B48 weak supervision surface changed")
+    wanted = B35_EXPECTED_CELLS if expected_cells is None else int(expected_cells)
+    found = int((all_weights > 0).sum())
+    if found != wanted:
+        raise ValueError(
+            f"B48 weak supervision surface changed: {found:,} usable cells, "
+            f"expected {wanted:,}. If the teacher was rebuilt on purpose, pass "
+            "the new count explicitly rather than loosening this check."
+        )
     if set(all_uids).intersection(gold_uids):
         raise RuntimeError("B48 report-only supervision includes an official gold study")
     if int(fill_audit.get("base_cells_overridden", -1)) != 0:
@@ -221,6 +241,10 @@ def _report_only_surface(
         ):
             raise ValueError(f"B48 label confidence mismatch for {key}")
     lookup = {uid: index for index, uid in enumerate(all_uids)}
+    # Record which surface was trained on, so the checkpoint says it outright.
+    supervision = dict(supervision)
+    supervision["expected_usable_cells"] = int(wanted)
+    supervision["expected_usable_cells_is_frozen_default"] = expected_cells is None
     return (
         train,
         all_uids,

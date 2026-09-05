@@ -285,3 +285,70 @@ def test_the_guard_stands_down_when_a_recovery_point_is_present(tmp_path):
     (tmp_path / trainer.B52_CHECKPOINT_NAME).write_bytes(b"best so far")
     save_checkpoint(tmp_path, epoch=2, model=_Base(), version=trainer.B52_VERSION)
     assert load_checkpoint(tmp_path) is not None
+
+
+# --- the frozen supervision-surface guard -------------------------------------
+
+
+def test_the_expected_cell_count_defaults_to_the_frozen_one():
+    """B52's own path must still assert 34,010, unchanged."""
+    from rsna_knee.b48_global_conditioned_sparse_training import _report_only_surface
+
+    assert (
+        inspect.signature(_report_only_surface).parameters["expected_cells"].default
+        is None
+    )
+    assert (
+        inspect.signature(trainer.train_b52)
+        .parameters["expected_supervision_cells"]
+        .default
+        is None
+    )
+
+
+def test_the_frozen_default_is_still_b35s_number():
+    from rsna_knee.b35_training import B35_EXPECTED_CELLS
+
+    assert B35_EXPECTED_CELLS == 34010
+
+
+def test_the_check_stays_a_hard_equality():
+    """Loosening it to a range would defeat the point: a wrong --labels-root
+    must still fail, whether or not a new count was declared."""
+    from rsna_knee.b48_global_conditioned_sparse_training import _report_only_surface
+
+    source = inspect.getsource(_report_only_surface)
+    assert "if found != wanted:" in source
+    for loose in (">=", "<=", "abs(", "tolerance"):
+        assert loose not in source.split("if found != wanted:")[1][:200], loose
+
+
+def test_the_error_names_both_numbers():
+    from rsna_knee.b48_global_conditioned_sparse_training import _report_only_surface
+
+    source = inspect.getsource(_report_only_surface)
+    assert "usable cells, " in source
+    assert "expected {wanted:,}" in source
+
+
+def test_the_count_reaches_the_surface_from_the_trainer():
+    source = inspect.getsource(trainer.train_b52)
+    assert "expected_cells=expected_supervision_cells" in source
+
+
+def test_the_flag_exists_and_defaults_to_none():
+    source = inspect.getsource(trainer.main)
+    assert "--expected-supervision-cells" in source
+    block = source.split("--expected-supervision-cells", 1)[1].split(
+        "parser.add_argument", 1
+    )[0]
+    assert "default=None" in block
+
+
+def test_the_surface_records_which_count_it_used():
+    """So the checkpoint states the teacher rather than leaving it inferred."""
+    from rsna_knee.b48_global_conditioned_sparse_training import _report_only_surface
+
+    source = inspect.getsource(_report_only_surface)
+    assert 'supervision["expected_usable_cells"]' in source
+    assert 'supervision["expected_usable_cells_is_frozen_default"]' in source
