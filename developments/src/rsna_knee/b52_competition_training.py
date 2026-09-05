@@ -128,7 +128,7 @@ from .encoder_finetune import MAX_TRAINABLE_STAGES
 from .evaluation import fast_auc
 from .phase9_matched_supervision_training import load_phase9_checkpoint
 from .runtime import make_scaler, resolve_runtime
-from .training_resume import resume, save_checkpoint
+from .training_resume import load_checkpoint, resume, save_checkpoint
 
 B52_EXPERIMENT = "B52_COMPETITION_FULL_FINETUNE"
 B52_VERSION = "b52_competition_full_finetune_v1"
@@ -593,7 +593,12 @@ def train_b52(
     out = Path(out_root)
     out.mkdir(parents=True, exist_ok=True)
     checkpoint_path = out / B52_CHECKPOINT_NAME
-    if checkpoint_path.exists():
+    # The guard exists so a fresh run cannot quietly overwrite a finished one.
+    # A resume is the one case where the best checkpoint legitimately already
+    # exists: the run was interrupted after an epoch improved on it. Allow it
+    # only when there is a recovery point beside it to resume from, so the
+    # guard still catches an accidental re-run into a finished directory.
+    if checkpoint_path.exists() and load_checkpoint(out) is None:
         raise FileExistsError(f"B52 will not overwrite {checkpoint_path}")
 
     history: list[dict] = []

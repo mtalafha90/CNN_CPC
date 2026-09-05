@@ -259,3 +259,29 @@ def test_parameter_groups_would_carry_the_conditioning():
     optimizer = torch.optim.AdamW(conditioning_parameters(base), lr=1e-3)
 
     assert assert_conditioning_will_train(base, optimizer)["all_reach_the_optimiser"]
+
+
+# --- resume and the overwrite guard must not fight ----------------------------
+
+
+def test_the_overwrite_guard_allows_a_resume():
+    """The guard stops a fresh run clobbering a finished one. A resume is the
+    one case where the best checkpoint legitimately already exists."""
+    source = inspect.getsource(trainer.train_b52)
+    assert "checkpoint_path.exists() and load_checkpoint(out) is None" in source
+
+
+def test_the_guard_still_refuses_a_rerun_into_a_finished_directory(tmp_path):
+    """No recovery point beside it means the run finished; refuse."""
+    from rsna_knee.training_resume import load_checkpoint
+
+    (tmp_path / trainer.B52_CHECKPOINT_NAME).write_bytes(b"finished")
+    assert load_checkpoint(tmp_path) is None
+
+
+def test_the_guard_stands_down_when_a_recovery_point_is_present(tmp_path):
+    from rsna_knee.training_resume import load_checkpoint, save_checkpoint
+
+    (tmp_path / trainer.B52_CHECKPOINT_NAME).write_bytes(b"best so far")
+    save_checkpoint(tmp_path, epoch=2, model=_Base(), version=trainer.B52_VERSION)
+    assert load_checkpoint(tmp_path) is not None
