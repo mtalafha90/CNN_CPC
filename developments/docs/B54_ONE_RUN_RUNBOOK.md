@@ -2,17 +2,12 @@
 
 ## Status
 
-**COMPONENTS BUILT AND TESTED. ONE WIRING STEP OUTSTANDING. NOT RUN.**
+**BUILT AND TESTED. NOT RUN.**
 
-Steps 0 to 5 and 7 to 8 are runnable commands today. **Step 6 is not yet
-code.** The spacing has to enter the forward pass, and that pass lives in
-`b37_highres_sparse_mil._base_logits_from_global`, which every experiment from
-B37 to B52 shares. Threading `series_spacing` through it means a subclass that
-overrides `_base_logits_from_global` and `forward` — about forty lines copied
-from frozen logic, which deserves its own pass with a model-construction test
-rather than being appended to a long session. Everything it needs
-(`spacing_metadata`, `install_spacing_conditioning`, `with_spacing`,
-`training_resume`) exists and is tested; only that subclass is missing.
+The label half is done and on disk: `runs/085_B54/teacher_final`. The model
+half is code: `B54SpacingConditionedMIL` conditions the study hierarchy on the
+measured slice spacing, and `training_resume` makes a long run survivable.
+Nothing has been trained.
 
 ## What is in it
 
@@ -56,7 +51,7 @@ git pull origin main
 PYTHONPATH=developments/src python -m pytest developments/tests -q
 ```
 
-Expect 1,793 passed, 1 skipped.
+Expect 1,812 passed, 1 skipped.
 
 ## Step 1 — B6 v1.3 report labels
 
@@ -180,30 +175,42 @@ head alone or the base as well is conditioned.
 
 ## Step 6 — train
 
-Wire, in this order:
+The model is `B54SpacingConditionedMIL`, a subclass of the B42 residual B52
+already trains. It overrides two methods and copies none of the hierarchy: the
+spacing term is added to `global_feature` before `super()` runs, which lands in
+`plane + fluid + fat` exactly, and a test checks that equivalence against a
+direct reproduction of the parent's expression.
 
-1. `attach_spacing(records, series_geometry_csv=..., data_root=...)`
-2. `with_spacing(B42ConstantAreaAspectDataset)` in place of the dataset class
-   `b52_competition_training._build_dataset` constructs. **`collate_b42` needs
-   no change**: it is `list(items)`, so the spacing travels inside each item
-   and nothing has to pad it. `collate_b54` is only for the
-   `collate_variable_series` path.
-3. **load the pretrained base checkpoint first**
-4. *then* `install_spacing_conditioning(...)` on each module that sums metadata
-5. `spacing_metadata(module, series_meta, series_spacing)` where
-   `plane + fluid + fat` is computed today
-6. `training_resume.resume(...)` before the loop, `save_checkpoint(...)` after
-   every epoch
+Only the study base is conditioned. The sparse MIL head sums the same three
+embeddings and could take the term too; it deliberately does not, because the
+base is where series are fused into one prediction and the head enters through
+a learned gate as a residual. `b54_state` records the choice.
 
-**Steps 3 and 4 are in that order for a reason.** Installing the conditioning
-adds `spacing_conditioning.projection.weight` to the state dict. A pretrained
-checkpoint from before B54 does not have that key, so loading it strictly into
-an already-installed model raises. Load first, install second, and the load is
-clean and the new module starts at zero. Two tests in
-`test_b54_spacing_run.py` pin both halves of this.
+In `b52_competition_training`, five changes:
 
-The resume is not optional here. Runs are already nineteen hours and this one
-is longer; a crash without it costs the whole attempt.
+1. `attach_spacing(records, series_geometry_csv=..., data_root=...)` after the
+   series records are assembled. Read its report: `unresolved` should be 0.
+2. `with_spacing(B42ConstantAreaAspectDataset)` in `_build_dataset`.
+   **`collate_b42` needs no change** — it is `list(items)`, so the spacing
+   travels inside each item.
+3. Build `B54SpacingConditionedMIL` instead of the B42 residual, **load the
+   pretrained base checkpoint**, and only *then* call
+   `install_spacing_conditioning(model.base)`. That order matters: installing
+   first adds a state-dict key the checkpoint does not have, and a strict load
+   raises. Two tests pin both halves.
+4. In the training step, `spacing_from_batch(batch)` and pass the result as
+   `series_spacing=` to the model. It accepts the ragged B42 batch or a padded
+   one, and returns `None` when there is no spacing, so an unconditioned run
+   needs no branch of its own.
+5. `training_resume.resume(...)` before the epoch loop and `save_checkpoint(...)`
+   after every epoch.
+
+Call `preflight(records, model=model)` before the first epoch and abort on
+`passed: False`. It refuses the two ways this run could be silently pointless:
+a spacing that failed to resolve, and a conditioning that was never installed.
+
+The resume is not optional. Runs are already nineteen hours and this one is
+longer; a crash without it costs the whole attempt.
 
 ## Step 7 — evaluate twice, from one checkpoint
 
