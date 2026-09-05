@@ -56,7 +56,7 @@ git pull origin main
 PYTHONPATH=developments/src python -m pytest developments/tests -q
 ```
 
-Expect 1,789 passed, 1 skipped.
+Expect 1,793 passed, 1 skipped.
 
 ## Step 1 — B6 v1.3 report labels
 
@@ -72,18 +72,30 @@ PYTHONPATH=developments/src python -m rsna_knee.b6_v13_report_labels \
 cells_newly_answered                 expect roughly 220 studies' worth
 fallback_cells_now_quoted            expect this to be most of the movement
 cells_flipped_by_list_negation_guard expect around 83
-cells_silenced                       must be 0
-cells_weakened_to_uncertain          must be 0
+cells_silenced                            must be 0
+cells_weakened_by_new_vocabulary          must be 0
+cells_weakened_after_list_negation_guard  expect a handful
 ```
 
-Both zeros are hard stops. `cells_silenced` above zero means v1.3 is removing
-calls, which it is not allowed to do. `cells_weakened_to_uncertain` above zero
-means the precedence rule has failed: the new vocabulary is broad anatomy, and
-a bare anatomy word must never overturn a named disease into `uncertain`,
-which would drop the cell's confidence from 0.90 to 0.25 on exactly the three
-targets with the worst coverage. That failure was real in the first draft and
-is now blocked in code, but the counter exists so "blocked" is checked rather
-than trusted.
+`cells_silenced` above zero means v1.3 is removing calls, which it is not
+allowed to do.
+
+`cells_weakened_by_new_vocabulary` above zero is a hard stop. These are broad
+anatomy words, validated for *placing* a cell and never for arbitrating one,
+so they answer only with a committed state. A bare anatomy word must not turn
+a confident call into `uncertain`, which drops its confidence from 0.90 to
+0.25 on exactly the three targets with the worst coverage already.
+
+**This gate has already fired once, on the real corpus, at 360 cells** — 338
+of them PF OA. v1.3.0 protected calls the *aliases* made and not calls the
+*fallback* made, and the OA targets live almost entirely on the fallback.
+v1.3.1 fixes it. The counter stays so the fix is checked rather than trusted.
+
+`cells_weakened_after_list_negation_guard` is a different thing and a small
+number is expected. When the guard correctly reads "ACL: intact" as a negation
+and the report also describes a tear, the contradiction is real; v1.2.1 only
+looked confident there because it misread the list entry. It appears only on
+targets that also show guard flips.
 
 ## Step 2 — fill the silent cells, on the v1.3 base
 

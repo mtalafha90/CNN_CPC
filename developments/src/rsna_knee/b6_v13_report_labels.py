@@ -98,7 +98,10 @@ from .report_labels import (
     predict_target as legacy_predict_target,
 )
 
-B6_V13_VERSION = "1.3.0"
+B6_V13_VERSION = "1.3.1"
+
+#: The two states that carry full confidence. `uncertain` does not.
+COMMITTED_STATES = (STATE_POSITIVE, STATE_NEGATED)
 
 # `patellar` and `trochlear` attach to soft tissue far more often than to the
 # joint. Without this, the patellar tendon becomes patellofemoral arthritis.
@@ -239,13 +242,20 @@ def _resolve(observations: list[tuple[str, str, str]], target: str) -> B6Predict
                 "positive_with_component_limited_normality",
             )
         probability, confidence = _state_to_values(STATE_UNCERTAIN, conflict=True)
+        # Name the guard when it is what created the disagreement, so the two
+        # very different causes of an `uncertain` can be counted apart.
+        caused_by_guard = any(
+            item[2] == "list_negation_guard" for item in global_negative
+        )
         return B6Prediction(
             probability,
             confidence,
             True,
             STATE_UNCERTAIN,
             " || ".join(item[1] for item in observations[:3]),
-            "conflicting_definite_evidence",
+            "conflicting_after_list_negation_guard"
+            if caused_by_guard
+            else "conflicting_definite_evidence",
         )
 
     for group, state in ((positive, STATE_POSITIVE), (negative, STATE_NEGATED)):
@@ -300,7 +310,16 @@ def predict_target_b6_v13(text: str, target: str, *, use_v13: bool = True) -> B6
         return _resolve(observations, target)
 
     if use_v13:
-        observations = v13_observations(norm, target)
+        candidate = v13_observations(norm, target)
+        if candidate:
+            resolved = _resolve(candidate, target)
+            if resolved.state in COMMITTED_STATES:
+                return resolved
+            # The new vocabulary found the anatomy but could not commit --
+            # its matches disagreed, or the sentence was hedged. These are
+            # broad anatomy words, validated for *placing* a cell and not for
+            # arbitrating one, so a non-committed answer from them must not
+            # displace the fallback's confident call. Treat it as silence.
 
     if not observations and target in OA_TARGETS:
         legacy = legacy_predict_target(norm, target)
@@ -365,9 +384,17 @@ def change_summary(frozen: pd.DataFrame, updated: pd.DataFrame) -> dict:
             "cells_flipped_by_list_negation_guard": 0,
             "cells_silenced": 0,
             # A committed call falling to `uncertain` drops its confidence from
-            # 0.90 to 0.25. The strict precedence should make this impossible;
-            # it is counted so that "should" is checked rather than trusted.
-            "cells_weakened_to_uncertain": 0,
+            # 0.90 to 0.25. Two very different causes, counted apart.
+            #
+            # The new vocabulary must never do it: these are broad anatomy
+            # words validated for placing a cell, not for arbitrating one, so
+            # they answer only with a committed state. This must be 0.
+            "cells_weakened_by_new_vocabulary": 0,
+            # The guard may. When it correctly reads "ACL: intact" as a
+            # negation and the report also describes a tear, the contradiction
+            # is real and was previously hidden by misreading the list entry.
+            # Expect a handful, only on targets that have guard flips.
+            "cells_weakened_after_list_negation_guard": 0,
         },
     }
     for target in TARGETS:
@@ -389,12 +416,11 @@ def change_summary(frozen: pd.DataFrame, updated: pd.DataFrame) -> dict:
         )
         flipped = int(new_reason.eq("list_negation_guard").sum())
         silenced = int((~was_silent & is_silent).sum())
-        weakened = int(
-            (
-                old_state.isin([STATE_POSITIVE, STATE_NEGATED])
-                & new_state.eq(STATE_UNCERTAIN)
-            ).sum()
+        fell = old_state.isin(COMMITTED_STATES) & new_state.eq(STATE_UNCERTAIN)
+        by_guard = int(
+            (fell & new_reason.eq("conflicting_after_list_negation_guard")).sum()
         )
+        by_vocabulary = int(fell.sum()) - by_guard
 
         summary["targets"][target] = {
             "cells_newly_answered": newly,
@@ -402,7 +428,8 @@ def change_summary(frozen: pd.DataFrame, updated: pd.DataFrame) -> dict:
             "fallback_cells_now_quoted": requoted,
             "cells_flipped_by_list_negation_guard": flipped,
             "cells_silenced": silenced,
-            "cells_weakened_to_uncertain": weakened,
+            "cells_weakened_by_new_vocabulary": by_vocabulary,
+            "cells_weakened_after_list_negation_guard": by_guard,
         }
         for key, value in summary["targets"][target].items():
             summary["totals"][key] += value

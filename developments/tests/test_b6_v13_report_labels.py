@@ -62,7 +62,7 @@ def test_v121_is_reproduced_exactly(text, target):
 
 
 def test_the_version_is_declared():
-    assert B6_V13_VERSION == "1.3.0"
+    assert B6_V13_VERSION == "1.3.1"
 
 
 # --- the new vocabulary -------------------------------------------------------
@@ -299,9 +299,9 @@ def test_the_export_writes_the_files_the_merge_needs(tmp_path):
     ):
         assert (out / name).is_file(), name
 
-    assert audit["b6_version"] == "1.3.0"
+    assert audit["b6_version"] == "1.3.1"
     assert audit["supersedes"] == "1.2.1"
-    assert _json.loads((out / "v13_changes.json").read_text())["version"] == "1.3.0"
+    assert _json.loads((out / "v13_changes.json").read_text())["version"] == "1.3.1"
 
 
 def test_the_export_keeps_gold_out_of_the_training_targets(tmp_path):
@@ -383,11 +383,91 @@ def test_the_change_summary_counts_any_weakening(tmp_path):
         build_b6_v13_frame(df, use_v13=False), build_b6_v13_frame(df, use_v13=True)
     )
 
-    assert "cells_weakened_to_uncertain" in summary["totals"]
-    assert summary["totals"]["cells_weakened_to_uncertain"] == 0
+    assert summary["totals"]["cells_weakened_by_new_vocabulary"] == 0
+    assert "cells_weakened_after_list_negation_guard" in summary["totals"]
 
 
 def test_the_list_negation_guard_survives_the_precedence():
     """It acts on the alias pass, so strict precedence must not disable it."""
     text = "Findings: ACL: intact. Medial meniscus: tear."
     assert predict_target_b6_v13(text, "ACL").state == STATE_NEGATED
+
+
+# --- the second weakening path, found by running it on the real corpus --------
+
+
+def test_the_new_vocabulary_answers_only_with_a_committed_state():
+    """The gate failure at 360 cells, reduced to a rule.
+
+    The precedence rule protected calls the *aliases* made. It did not protect
+    calls the *fallback* made, and the OA targets live almost entirely on the
+    fallback. A broad anatomy match that resolved to `uncertain` -- because its
+    own matches disagreed, or the sentence was hedged -- replaced a confident
+    fallback positive and dropped the cell from 0.90 to 0.25.
+    """
+    from rsna_knee.b6_v13_report_labels import COMMITTED_STATES, v13_observations
+    from rsna_knee.data import normalize_report
+    from rsna_knee.report_labels import STATE_UNCERTAIN
+
+    for text in list(REPORTS) + [DOWNGRADE_CASE]:
+        for target in OA_TARGETS:
+            norm = normalize_report(text)
+            if not norm:
+                continue
+            candidate = v13_observations(norm, target)
+            result = predict_target_b6_v13(text, target)
+            if candidate and result.reason.endswith("_v13"):
+                assert result.state in COMMITTED_STATES, (text, target)
+            assert not (
+                predict_target_b6(text, target).state in COMMITTED_STATES
+                and result.state == STATE_UNCERTAIN
+                and result.reason.endswith("_v13")
+            ), (text, target)
+
+
+def test_a_fallback_call_is_not_displaced_by_an_uncommitted_match():
+    """The exact shape of the 338 PF OA cells."""
+    from rsna_knee.report_labels import STATE_UNCERTAIN
+
+    for text in REPORTS:
+        for target in OA_TARGETS:
+            old = predict_target_b6(text, target)
+            new = predict_target_b6_v13(text, target)
+            if old.reason == "compartment_aware_oa_context":
+                assert new.state != STATE_UNCERTAIN, (text, target)
+
+
+def test_a_guard_created_conflict_is_named_so_it_can_be_counted_apart():
+    """Its `uncertain` is honest: the contradiction is real and was hidden.
+
+    Driven through `_resolve` directly. Building it from report text would
+    only test whether `_classify_mention` happens to need the guard for that
+    sentence, which is not what this asserts.
+    """
+    from rsna_knee.b6_v13_report_labels import _resolve
+    from rsna_knee.report_labels import STATE_UNCERTAIN
+
+    guarded = _resolve(
+        [
+            (STATE_POSITIVE, "complete acl tear", "explicit_structural_abnormality"),
+            (STATE_NEGATED, "acl: intact", "list_negation_guard"),
+        ],
+        "ACL",
+    )
+    assert guarded.state == STATE_UNCERTAIN
+    assert guarded.reason == "conflicting_after_list_negation_guard"
+
+
+def test_a_conflict_the_guard_did_not_cause_keeps_its_old_name():
+    from rsna_knee.b6_v13_report_labels import _resolve
+    from rsna_knee.report_labels import STATE_UNCERTAIN
+
+    plain = _resolve(
+        [
+            (STATE_POSITIVE, "complete acl tear", "explicit_structural_abnormality"),
+            (STATE_NEGATED, "acl is intact", "explicit_normal_or_negated"),
+        ],
+        "ACL",
+    )
+    assert plain.state == STATE_UNCERTAIN
+    assert plain.reason == "conflicting_definite_evidence"
