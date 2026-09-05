@@ -18,7 +18,7 @@ rather than being appended to a long session. Everything it needs
 
 ```text
 1  spacing conditioning   the model is told how much knee each input holds
-2  rebuilt teacher        B52's base, not 091's, plus the rescued cells
+2  rebuilt teacher        B52's fill rule on a v1.3.1 base, not 091's
 3  B6 v1.3                an OA vocabulary, and the list-negation guard
 4  B47 native grid        the head stops pooling 196 cells onto 36
 ```
@@ -42,9 +42,9 @@ negated-only teacher. 091's teacher is the one already measured: the teacher
 swap scored 0.638317 against B52's 0.678247, a loss of 0.0399 — twice the veto
 threshold, worse on 9 of 12 targets.
 
-The rescue is good; it took blank studies from 321 to 93. The base underneath
-it is not. Steps 2 and 3 below reapply the same rescued cells to B52's teacher
-instead.
+Step 2 below rebuilds it with B52's own fill rule on a v1.3.1 parser base. The
+rescued cells were then measured against that teacher and turned out to be
+spent — see step 3.
 
 ---
 
