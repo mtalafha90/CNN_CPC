@@ -121,35 +121,38 @@ PYTHONPATH=developments/src python -m rsna_knee.b23_fill_merge \
 `--fill-states both` is B52's rule and is deliberate. `negated` is the rule
 that produced the −0.0399 teacher; do not use it.
 
-## Step 3 — add the rescued cells
+## Step 3 — add the rescued cells: MEASURED AND DROPPED
+
+Do not run this. It was measured against the step-2 teacher and offers **one
+cell in one study**; blank studies would go 48 to 47. Its other 203 cells need
+the policy Phase 8 refused — filling studies the filler already reached.
+
+`translation_rescue_supervision_merge` also refuses a v1.3.1 base by design
+(`REQUIRED_B6_VERSION = "1.2.1"`, `EXPECTED_ORIGINAL_USABLE = 14123`), and the
+measurement shows that refusal cost nothing.
+
+**`runs/085_B54/teacher_step2` is the final teacher.** Promote it so the paths
+below hold:
 
 ```bash
-find runs -path '*translation_rescue*' -name structured_labels.csv | head
+cp -r runs/085_B54/teacher_step2 runs/085_B54/teacher_final
 ```
 
-```bash
-PYTHONPATH=developments/src python -m rsna_knee.b23_fill_merge \
-  --base runs/085_B54/teacher_step2 \
-  --filler <the Phase-7 rescue export from the find above> \
-  --only-silent-studies \
-  --out-root runs/085_B54/teacher_final
+See `THE_B54_TEACHER_AND_A_SPENT_RESCUE.md` for the full numbers.
+
+### What step 2 produced, against B52
+
+```text
+                             B52 teacher   B54 teacher    change
+cells answered                    34,010        34,842      +832
+studies with no answer                57            48        -9
+parser, clause recorded           11,491        15,004    +3,513
+parser, no clause                  2,632           896    -1,736
+no clause at all                   66.2%         56.9%
 ```
 
-`--only-silent-studies` is the frozen Phase-8 policy: filling a study the base
-says nothing whatever about. Filling one the base has already reached is a new
-and unmeasured policy.
-
-**Gate.** The final teacher should have *more* answered cells than B52's 34,010
-and *fewer* blank studies than its 57. If either moved the wrong way, stop.
-
-```bash
-PYTHONPATH=developments/src python -m rsna_knee.teacher_coverage_audit \
-  --teacher runs/085_B54/teacher_final \
-  --b6-export runs/085_B54/b6_v13
-```
-
-This also reports provenance. Expect the quoted share to rise above 33.8%,
-because v1.3 converts evidence-free OA calls into quoted ones.
+Every gate passed. The evidence-free osteoarthritis calls fell by two thirds,
+which is what B6 v1.3 was built for.
 
 ## Step 4 — the geometry table
 
