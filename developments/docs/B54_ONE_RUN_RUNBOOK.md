@@ -184,20 +184,47 @@ cd /media/talafha/Disk_1/CNN_CPC
 PYTHONPATH=developments/src python -m rsna_knee.b52_competition_training \
   --data-root /media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection \
   --labels-root runs/085_B54/teacher_final \
-  --series-policy <the series policy B52 used> \
-  --base-checkpoint <the Phase-9 llm_fill checkpoint B52 used> \
-  --domain-split <the split B52 used> \
+  --series-policy runs/020_Experiment_B12_variable_series/b12_variable_series/audit/series_policy.json \
+  --base-checkpoint runs/067_Experiment_LLM_FILL_ALL_b6_preserved_llm_fill_all_targets/b6_plus_llm_fill_all_ft1/train/llm-filled/model.pt \
+  --domain-split runs/083_Experiment_B50_selection_gate/b50_ordered_slice_selection_split \
   --spacing-geometry-csv runs/slice_geometry_scan/series_geometry.csv \
-  --out-root runs/085_B54/train
+  --out-root runs/085_B54/train \
+  2>&1 | tee runs/085_B54/b54_train.log
 ```
 
-Recover the three unchanged paths from B52's own audit:
+### The four paths, and why they were nearly lost
 
-```bash
-python -c "
-import json; a=json.load(open('runs/086_Experiment_B52_competition_full_finetune/training_audit.json'))
-print({k:a.get(k) for k in ('series_policy','base_checkpoint','domain_split')})"
+B52 recorded fingerprints, not paths, and its log did not keep the command
+line. Recovering these took an hour of archaeology, so they are written down
+here — and the `tee` above means this run will not repeat the problem.
+
+```text
+--series-policy    runs/020_Experiment_B12_variable_series/
+                     b12_variable_series/audit/series_policy.json
+                   matched by its series_signature_sha256, 5c4bb1c5...
+
+--base-checkpoint  runs/067_Experiment_LLM_FILL_ALL_.../
+                     b6_plus_llm_fill_all_ft1/train/llm-filled/model.pt
+                   the only path B52's checkpoint stored verbatim
+
+--domain-split     runs/083_Experiment_B50_selection_gate/
+                     b50_ordered_slice_selection_split
+                   sha256 fa8eb88f... of its b50_selection_split.json
 ```
+
+**`--domain-split` does not take a `domain_shift_split` output.** It takes a
+B50 *selection gate*, whose file is `b50_selection_split.json`, loaded by
+`load_b50_selection_gate` — "the fresh B50 gate, not the split B48 and B49
+already spent". The gate is built only from the parent split's former `train`
+rows with every B48/B49 validation row excluded, which is how 4,349 report
+studies become 1,447 training and 548 validation. Searching for
+`domain_split.json` finds nothing, and regenerating one produces a valid but
+completely different artefact that the loader would reject.
+
+Related, and worth knowing separately: `domain_shift_split` no longer
+reproduces B48/B49's split either. Commit `8bd5f80`, "Fix B48 seen-scanner
+comparator allocation", changed which studies land in the seen-scanner group.
+The old artefacts are therefore not regenerable, only preserved.
 
 ### Three guards, in the order they fire
 
