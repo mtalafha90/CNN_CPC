@@ -416,3 +416,41 @@ def test_the_mixin_adds_the_spacing_to_whatever_item_it_wraps():
     assert item["volumes"] == "untouched"
     assert item["series_spacing"][0].item() == pytest.approx(3.3)
     assert math.isnan(item["series_spacing"][1].item())
+
+
+# --- it must land where the model already is -----------------------------------
+
+
+def test_it_is_created_on_the_embeddings_device():
+    """It is installed after the model has been moved to the GPU -- it has to
+    be, because it must follow the pretrained checkpoint load -- so a module
+    constructed on the CPU would fail on the first forward."""
+    module = _MetaModule()
+    conditioning = install_spacing_conditioning(module)
+
+    assert conditioning.projection.weight.device == module.plane_embedding.weight.device
+
+
+def test_it_is_created_in_the_embeddings_dtype():
+    module = _MetaModule().half()
+    conditioning = install_spacing_conditioning(module)
+
+    assert conditioning.projection.weight.dtype == module.plane_embedding.weight.dtype
+
+
+def test_it_still_starts_at_zero_after_being_placed():
+    """Moving it must not disturb the zero initialisation."""
+    module = _MetaModule().half()
+    conditioning = install_spacing_conditioning(module)
+
+    assert torch.all(conditioning.projection.weight == 0)
+
+
+def test_a_forward_runs_when_the_module_was_moved_before_installing():
+    """The exact shape of the failure: model.to(...) then install."""
+    module = _MetaModule().to(torch.float64)
+    install_spacing_conditioning(module)
+    meta = _meta(batch=1, series=2)
+
+    out = spacing_metadata(module, meta, torch.tensor([[3.3, 0.6]]))
+    assert out.dtype == module.plane_embedding.weight.dtype

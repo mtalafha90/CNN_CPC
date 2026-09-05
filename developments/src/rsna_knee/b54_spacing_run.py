@@ -232,9 +232,15 @@ def install_spacing_conditioning(
             "of the modules that sums series metadata, so spacing has nothing "
             "to be added to"
         )
+    # Take the device and dtype from the embeddings this will be added to.
+    # The conditioning is installed *after* the model has been moved to the GPU
+    # -- it has to be, because it must come after the pretrained checkpoint is
+    # loaded -- so a freshly constructed module would otherwise sit on the CPU
+    # and fail on the first forward with a device mismatch.
+    anchor = module.plane_embedding.weight
     conditioning = SpacingConditioning(
         int(module.plane_embedding.embedding_dim), enabled=enabled
-    )
+    ).to(device=anchor.device, dtype=anchor.dtype)
     module.spacing_conditioning = conditioning
     return conditioning
 
