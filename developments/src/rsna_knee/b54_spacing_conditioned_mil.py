@@ -1,4 +1,4 @@
-"""B54's model: B42, plus the one thing it was never told.
+"""B54's model: B52's, plus the one thing it was never told.
 
 `b54_spacing_run` gets the measured slice spacing as far as the batch.
 This is the last step — into the sum the study hierarchy computes over each
@@ -45,9 +45,24 @@ conditioning` can add the head later without touching anything here.
 `b54_state` reports `conditioning_sites`, so any run records which choice it
 made rather than leaving it to be inferred.
 
+## The conditioning has to reach the optimiser
+
+`b52_parameter_groups` builds exactly three groups — the encoder,
+`hierarchy_parameters()`, and the head — and B50 fixes `hierarchy_names` in
+`__init__`, before the conditioning is installed. Left alone, the conditioning
+would appear in none of the three: never updated, permanently zero, and the
+ablation would report no effect from a model that had never been trained to
+use the spacing. A silent no-op that still produces a number is the worst
+failure this experiment could have.
+
+`hierarchy_parameters` is therefore overridden to include it, and
+`assert_conditioning_will_train` checks the finished optimiser rather than
+trusting that. `conditioning_has_moved` checks the same thing from the other
+end after the run.
+
 ## What it is at initialisation
 
-Numerically identical to B42. The conditioning is zero-initialised, and with no
+Numerically identical to B52. The conditioning is zero-initialised, and with no
 conditioning installed, or no spacing supplied, `condition_global_feature`
 returns its input unchanged.
 """
@@ -55,10 +70,8 @@ from __future__ import annotations
 
 import torch
 
-from .b42_constant_area_aspect_sparse_mil import (
-    B42ConstantAreaAspectSparseMILResidual,
-)
 from .b37_highres_sparse_mil import B37Forward
+from .b50_adapted_hierarchy_mil import B50AdaptedHierarchySparseMILResidual
 from .b54_spacing_run import B54_VERSION, b54_state
 from .spacing_conditioning import SpacingConditioning
 
@@ -84,13 +97,36 @@ def condition_global_feature(
     return global_feature + contribution[:, :, None, :].to(global_feature.dtype)
 
 
-class B54SpacingConditionedMIL(B42ConstantAreaAspectSparseMILResidual):
-    """B42, told how thick each series is.
+class B54SpacingConditionedMIL(B50AdaptedHierarchySparseMILResidual):
+    """B52's model, told how thick each series is.
 
-    Construct it exactly as B42, load the pretrained checkpoint, and only then
-    call `install_spacing_conditioning(model.base)`. Installing first adds a
-    state-dict key the checkpoint does not have and a strict load will raise.
+    The base class is B50's adapted hierarchy, **not** B42's residual. B52
+    builds `B50AdaptedHierarchySparseMILResidual`, and `b52_parameter_groups`
+    calls `model.hierarchy_parameters()`; a B42 subclass has no such method and
+    would fail at optimiser construction.
+
+    Construct it exactly as B52 does, load the pretrained checkpoint, and only
+    then call `install_spacing_conditioning(model.base)`. Installing first adds
+    a state-dict key the checkpoint does not have and a strict load will raise.
     """
+
+    def hierarchy_parameters(self) -> list[torch.nn.Parameter]:
+        """B50's list, plus the conditioning -- which would otherwise not train.
+
+        This is the sharp edge of the whole feature. `b52_parameter_groups`
+        builds exactly three groups: the encoder, `hierarchy_parameters()`, and
+        the head. `hierarchy_names` is computed in `__init__`, *before* the
+        conditioning is installed, so the conditioning appears in none of the
+        three. The optimiser would never receive it, its zero-initialised
+        weights would stay zero for the whole run, and the ablation would
+        report no difference -- from a model that had never been trained to use
+        the spacing at all.
+
+        A silent no-op that still produces a number is the worst failure this
+        experiment could have, so the parameters are added here, in the study
+        hierarchy group, which is also the right learning rate for them.
+        """
+        return list(super().hierarchy_parameters()) + conditioning_parameters(self)
 
     def _base_logits_from_global(
         self,
@@ -177,3 +213,63 @@ def spacing_from_batch(batch: list[dict] | dict) -> torch.Tensor | None:
 def requires_spacing(model: torch.nn.Module) -> bool:
     """Whether this model would actually use a spacing if given one."""
     return any(isinstance(m, SpacingConditioning) for m in model.modules())
+
+
+def conditioning_parameters(model: torch.nn.Module) -> list[torch.nn.Parameter]:
+    """Every parameter belonging to an installed spacing conditioning."""
+    return [
+        parameter
+        for module in model.modules()
+        if isinstance(module, SpacingConditioning)
+        for parameter in module.parameters()
+    ]
+
+
+def assert_conditioning_will_train(model: torch.nn.Module, optimizer) -> dict:
+    """Refuse to start a run whose conditioning cannot learn anything.
+
+    Call it once, after the optimiser is built. Three ways the run would
+    silently measure nothing: no conditioning installed, its parameters frozen,
+    or -- the one that actually happened here -- its parameters simply absent
+    from every optimiser group.
+    """
+    parameters = conditioning_parameters(model)
+    if not parameters:
+        raise RuntimeError(
+            "B54 has no SpacingConditioning installed, so the run would be a "
+            "plain re-run under a new name"
+        )
+    frozen = [p for p in parameters if not p.requires_grad]
+    if frozen:
+        raise RuntimeError(
+            f"B54: {len(frozen)} of {len(parameters)} conditioning parameters do "
+            "not require gradients"
+        )
+    reachable = {
+        id(p) for group in optimizer.param_groups for p in group["params"]
+    }
+    missing = [p for p in parameters if id(p) not in reachable]
+    if missing:
+        raise RuntimeError(
+            f"B54: {len(missing)} of {len(parameters)} conditioning parameters "
+            "never reach the optimiser. They would stay at their zero "
+            "initialisation for the whole run and the ablation would report no "
+            "effect from a model that was never trained to use the spacing."
+        )
+    return {
+        "conditioning_parameters": len(parameters),
+        "all_reach_the_optimiser": True,
+        "all_require_grad": True,
+    }
+
+
+def conditioning_has_moved(model: torch.nn.Module) -> bool:
+    """Whether training actually changed the conditioning. Check after the run.
+
+    It starts at exactly zero, so any movement is unambiguous. Still zero at
+    the end means the run did not test what it claims to.
+    """
+    parameters = conditioning_parameters(model)
+    return bool(parameters) and any(
+        bool(torch.any(p != 0)) for p in parameters
+    )

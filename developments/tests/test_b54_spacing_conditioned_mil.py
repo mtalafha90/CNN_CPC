@@ -21,9 +21,13 @@ from torch import nn
 from rsna_knee.b42_constant_area_aspect_sparse_mil import (
     B42ConstantAreaAspectSparseMILResidual,
 )
+from rsna_knee.b50_adapted_hierarchy_mil import B50AdaptedHierarchySparseMILResidual
 from rsna_knee.b54_spacing_conditioned_mil import (
     B54SpacingConditionedMIL,
+    assert_conditioning_will_train,
     condition_global_feature,
+    conditioning_has_moved,
+    conditioning_parameters,
     requires_spacing,
     spacing_from_batch,
 )
@@ -187,8 +191,37 @@ def test_the_feature_dtype_is_preserved():
 # --- the subclass itself ------------------------------------------------------
 
 
-def test_it_is_a_b42_model():
+def test_it_subclasses_the_model_b52_actually_builds():
+    """B52 builds B50AdaptedHierarchySparseMILResidual, not the B42 residual.
+
+    A B42 subclass has no `hierarchy_parameters`, which `b52_parameter_groups`
+    calls, so it would fail at optimiser construction. B50 is itself a B42, so
+    both hold.
+    """
+    assert issubclass(B54SpacingConditionedMIL, B50AdaptedHierarchySparseMILResidual)
     assert issubclass(B54SpacingConditionedMIL, B42ConstantAreaAspectSparseMILResidual)
+
+
+def test_it_keeps_b50s_hierarchy_interface():
+    from rsna_knee.b52_competition_training import b52_parameter_groups
+
+    for name in ("hierarchy_parameters", "trainable_parameter_summary"):
+        assert hasattr(B54SpacingConditionedMIL, name), name
+    assert "hierarchy_parameters" in inspect.getsource(b52_parameter_groups)
+
+
+def test_the_conditioning_is_added_to_the_hierarchy_group():
+    """The failure that would have been silent.
+
+    b52_parameter_groups builds three groups from the encoder,
+    hierarchy_parameters() and the head. hierarchy_names is fixed in __init__,
+    before the conditioning is installed, so without this override the
+    conditioning reaches no group at all: its zero weights would never move and
+    the ablation would report no effect from a model never trained to use it.
+    """
+    source = inspect.getsource(B54SpacingConditionedMIL.hierarchy_parameters)
+    assert "super().hierarchy_parameters()" in source
+    assert "conditioning_parameters" in source
 
 
 def test_the_spacing_is_optional_on_both_overridden_methods():
@@ -289,3 +322,70 @@ def test_a_model_with_conditioning_does():
     base = _Base()
     install_spacing_conditioning(base)
     assert requires_spacing(base) is True
+
+
+# --- the conditioning must actually be able to learn --------------------------
+
+
+class _FakeOptimizer:
+    def __init__(self, groups):
+        self.param_groups = [{"params": list(g)} for g in groups]
+
+
+def test_it_refuses_a_model_with_no_conditioning():
+    with pytest.raises(RuntimeError, match="no SpacingConditioning"):
+        assert_conditioning_will_train(_Base(), _FakeOptimizer([[]]))
+
+
+def test_it_refuses_conditioning_the_optimiser_never_sees():
+    """The exact shape of the bug: installed, trainable, and unreachable."""
+    base = _Base()
+    install_spacing_conditioning(base)
+    optimizer = _FakeOptimizer([[base.slice_position]])
+
+    with pytest.raises(RuntimeError, match="never reach the optimiser"):
+        assert_conditioning_will_train(base, optimizer)
+
+
+def test_it_refuses_frozen_conditioning():
+    base = _Base()
+    conditioning = install_spacing_conditioning(base)
+    conditioning.projection.weight.requires_grad_(False)
+    optimizer = _FakeOptimizer([conditioning_parameters(base)])
+
+    with pytest.raises(RuntimeError, match="do not require gradients"):
+        assert_conditioning_will_train(base, optimizer)
+
+
+def test_it_passes_when_the_conditioning_is_in_a_group():
+    base = _Base()
+    install_spacing_conditioning(base)
+    optimizer = _FakeOptimizer([conditioning_parameters(base)])
+
+    report = assert_conditioning_will_train(base, optimizer)
+    assert report["all_reach_the_optimiser"] is True
+    assert report["conditioning_parameters"] == 1
+
+
+def test_conditioning_parameters_finds_every_site():
+    model = nn.Module()
+    model.base, model.head = _Base(), _Base()
+    install_spacing_conditioning(model.base)
+    install_spacing_conditioning(model.head)
+
+    assert len(conditioning_parameters(model)) == 2
+
+
+def test_a_run_that_never_moved_the_conditioning_is_detectable():
+    """It starts at exactly zero, so movement is unambiguous."""
+    base = _Base()
+    conditioning = install_spacing_conditioning(base)
+    assert conditioning_has_moved(base) is False
+
+    with torch.no_grad():
+        conditioning.projection.weight.normal_()
+    assert conditioning_has_moved(base) is True
+
+
+def test_a_model_with_no_conditioning_has_not_moved_either():
+    assert conditioning_has_moved(_Base()) is False
