@@ -69,13 +69,16 @@ PYTHONPATH=developments/src python -m rsna_knee.b6_v13_report_labels \
 **Gate.** Read `runs/085_B54/b6_v13/v13_changes.json` before going on:
 
 ```text
-cells_newly_answered                 expect roughly 220 studies' worth
-fallback_cells_now_quoted            expect this to be most of the movement
-cells_flipped_by_list_negation_guard expect around 83
+cells_newly_answered                      1,814 at v1.3.0
+fallback_cells_now_quoted                 2,093 at v1.3.0
+cells_flipped_by_list_negation_guard         26 at v1.3.0
 cells_silenced                            must be 0
 cells_weakened_by_new_vocabulary          must be 0
 cells_weakened_after_list_negation_guard  expect a handful
 ```
+
+The first three should barely move at v1.3.1: the fix only suppresses answers
+the vocabulary could not commit to, so placements and re-quotings stay.
 
 `cells_silenced` above zero means v1.3 is removing calls, which it is not
 allowed to do.
