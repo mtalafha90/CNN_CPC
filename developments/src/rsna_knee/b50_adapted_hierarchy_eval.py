@@ -168,11 +168,23 @@ def _score_split(
     series_index: dict,
     crop_policy: dict,
     label: str,
+    spacing: bool = False,
 ) -> dict:
-    """Return combined, base and local probabilities for every study."""
+    """Return combined, base and local probabilities for every study.
+
+    `spacing` is B54's switch. Off, this is byte-for-byte B50's evaluation. On,
+    the dataset carries each series' measured slice spacing and the model is
+    given it — which requires `series_index` to have been through
+    `b54_spacing_run.attach_spacing` first.
+    """
     cfg = make_b7_dataset_config(config, root, train=False)
     cfg.tta_center_offsets = ()
-    dataset = B42ConstantAreaAspectDataset(
+    dataset_class = B42ConstantAreaAspectDataset
+    if spacing:
+        from .b54_spacing_run import with_spacing
+
+        dataset_class = with_spacing(B42ConstantAreaAspectDataset)
+    dataset = dataset_class(
         uids,
         series_index,
         cfg,
@@ -214,7 +226,16 @@ def _score_split(
                     for series_tensor in item["volumes"]
                 ]
                 with autocast(runtime):
-                    out = model(volumes, present, meta, position_all[:, view])
+                    if spacing:
+                        out = model(
+                            volumes,
+                            present,
+                            meta,
+                            position_all[:, view],
+                            item["series_spacing"].to(runtime.device),
+                        )
+                    else:
+                        out = model(volumes, present, meta, position_all[:, view])
                 combined_views.append(torch.sigmoid(out.logits.float()))
                 base_views.append(torch.sigmoid(out.base_logits.float()))
                 local_views.append(torch.sigmoid(out.local_logits.float()))

@@ -50,7 +50,7 @@ git pull origin main
 PYTHONPATH=developments/src python -m pytest developments/tests -q
 ```
 
-Expect 1,857 passed, 1 skipped.
+Expect 1,883 passed, 1 skipped.
 
 ## Step 1 — B6 v1.3 report labels
 
@@ -210,7 +210,7 @@ as it did. The number used is written into the checkpoint under
 checkpoint, selecting epoch 5). Leaving the default would double the GPU time
 *and* change the recipe being compared.
 
-Expect 1,857 passed, 1 skipped.
+Expect 1,883 passed, 1 skipped.
 
 ### The four paths, and why they were nearly lost
 
@@ -275,13 +275,36 @@ written by a different version, so move it aside if you deliberately restart.
 
 ## Step 7 — evaluate twice, from one checkpoint
 
-```python
-set_spacing_enabled(model, True)    # the arm
-set_spacing_enabled(model, False)   # its own control
+```bash
+cd /media/talafha/Disk_1/CNN_CPC
+
+PYTHONPATH=developments/src python -m rsna_knee.b54_expert58_eval \
+  --data-root /media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection \
+  --checkpoint runs/085_B54/train/b52_best_model.pt \
+  --base-checkpoint runs/067_Experiment_LLM_FILL_ALL_b6_preserved_llm_fill_all_targets/b6_plus_llm_fill_all_ft1/train/llm-filled/model.pt \
+  --spacing-geometry-csv runs/slice_geometry_scan/series_geometry.csv \
+  --out-root runs/085_B54/expert58 \
+  2>&1 | tee runs/085_B54/b54_expert58.log
 ```
 
-Run the Expert-58 audit on both. The difference is the spacing effect, free of
-any second training run.
+One load, two scoring passes: `spacing_on` and `spacing_off`. Same weights,
+same 58 studies, same crops, same three centre offsets — differing only in
+whether one learned vector is added to each series' metadata. That makes the
+delta between them far tighter than any two-run comparison on this surface.
+
+### The loading order inverts here
+
+At training the conditioning is installed **after** the checkpoint load, because
+the pretrained checkpoint does not carry its key. At evaluation it must be
+installed **before**, because now the checkpoint does. Both are correct and they
+are opposite; a test pins each.
+
+### Three refusals before it scores anything
+
+- a checkpoint whose `spacing.enabled` is false — there would be no ablation
+- a conditioning still at exactly zero — it would compare a thing to itself
+- any expert-surface series whose spacing did not resolve — the ablation would
+  be partly silent
 
 ## Step 8 — read it against the right threshold
 
