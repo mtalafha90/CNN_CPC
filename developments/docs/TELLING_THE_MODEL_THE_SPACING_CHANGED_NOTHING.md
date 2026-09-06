@@ -2,7 +2,11 @@
 
 ## Status
 
-**COMPLETE. MEASURED. A NULL RESULT, AND A CLEAN ONE.**
+**THE MECHANISM WAS NOT TESTED. The null is real and it measures nothing.**
+
+The probe settled it: the learned term is **0.07% of the sum it was added to**.
+The ablation compared a model against itself. See "Why the null means nothing"
+below — the original reading, that this refuted the idea, was wrong.
 
 ## The measurement
 
@@ -73,14 +77,64 @@ is that a teacher with 832 more cells, 3,513 more quoted ones and two thirds
 fewer evidence-free osteoarthritis calls did **not** make the model worse — which
 is more than the last teacher change managed, at −0.0399.
 
-## What is worth doing next, and what is not
+## Why the null means nothing
 
-**Not worth doing:** re-running with a higher learning rate on the conditioning
-until the delta moves. That is fitting to the endpoint, and this project's own
-governance forbids it.
+`spacing_conditioning_probe` on the trained checkpoint:
 
-**Worth doing, and cheap:** read the learned weight out of the checkpoint and
-compare the size of the spacing contribution against the `plane + fluid + fat`
-sum it joins. The backstop proved the weight left zero, but not that it grew to
-a magnitude capable of influencing anything. Those are different failures with
-the same symptom, and one file answers it without any GPU time.
+```text
+weight norm                    0.026101
+largest single value           0.000946
+spread, 0.80 to 5.00 mm        0.059062
+typical plane + fluid + fat   83.272083
+ratio                          0.0007
+```
+
+**0.07%.** Fourteen times below even the "small but present" band, a hundred and
+forty below "a real term". The two arms of the ablation differed by a rounding
+error, so of course they scored the same. Nothing about the idea was tested.
+
+## The reasoning error, which was mine
+
+The conditioning was put in the `study_hierarchy` parameter group, at
+`hierarchy_lr_scale` 0.05 of the head rate — **5e-6**. The justification written
+at the time was that it is part of the study hierarchy, which is true and
+irrelevant. The hierarchy rate is low *because those weights are pretrained*
+and a large step destroys them. The conditioning is freshly initialised, like
+the sparse head, and the head gets **1e-4** for exactly that reason.
+
+So a fresh parameter was given the pretrained-fine-tuning rate. Twenty times too
+small, on a term that had to travel from zero.
+
+## But the rate alone does not explain it
+
+Adam's per-parameter step is bounded by roughly the learning rate, so over
+1,447 studies at batch 2 for 6 epochs — 4,341 steps — the most any weight could
+move is `5e-6 x 4341 = 0.0217`. The largest value actually learned is
+`0.000946`, **4.4% of that budget**.
+
+The rate was therefore not the binding constraint. The gradients were small and
+inconsistent, which is what a term contributing 0.07% of its own sum produces:
+it cannot influence the loss enough to generate a signal telling it to grow.
+Zero initialisation plus a free scale is a parameterisation that has to earn its
+way to relevance, and at this budget it cannot.
+
+Raising the rate alone would not fix it. Twenty times the rate at the same 4.4%
+utilisation lands at a ratio near 0.014 — the bottom edge of "present", still
+not a test.
+
+## What an actual test would need
+
+Declared here, before any re-run, so it cannot be tuned to an endpoint:
+
+**Scale the contribution so that a weight of norm 1 produces a spread equal to
+the metadata norm.** Then the learned weight's norm *is* the ratio, directly
+interpretable, and the term starts within reach of mattering instead of having
+to travel four orders of magnitude to get there. Zero initialisation survives —
+the model still begins numerically identical to B52.
+
+Give it its own parameter group at the head rate, because it is a fresh
+parameter and that is what fresh parameters get here.
+
+That is a 12-hour run. The alternative is to stop, and record the mechanism as
+**untested** rather than refuted — which is the honest label either way, and is
+what this document now says.
