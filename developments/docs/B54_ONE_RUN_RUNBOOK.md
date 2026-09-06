@@ -50,7 +50,7 @@ git pull origin main
 PYTHONPATH=developments/src python -m pytest developments/tests -q
 ```
 
-Expect 1,883 passed, 1 skipped.
+Expect 1,925 passed, 1 skipped.
 
 ## Step 1 — B6 v1.3 report labels
 
@@ -210,7 +210,7 @@ as it did. The number used is written into the checkpoint under
 checkpoint, selecting epoch 5). Leaving the default would double the GPU time
 *and* change the recipe being compared.
 
-Expect 1,883 passed, 1 skipped.
+Expect 1,925 passed, 1 skipped.
 
 ### The four paths, and why they were nearly lost
 
@@ -245,6 +245,35 @@ Related, and worth knowing separately: `domain_shift_split` no longer
 reproduces B48/B49's split either. Commit `8bd5f80`, "Fix B48 seen-scanner
 comparator allocation", changed which studies land in the seen-scanner group.
 The old artefacts are therefore not regenerable, only preserved.
+
+### What changed for the second run
+
+The first B54 run trained the conditioning to 0.07% of the sum it was added to,
+so its ablation measured nothing. Two corrections, both declared before the
+re-run and neither chosen by looking at a score:
+
+**The term is scaled to where it can matter.** `install_spacing_conditioning`
+now sets `scale = reference_scale(metadata_norm(module))`, the size at which a
+weight of Frobenius norm 1 produces a p05-to-p95 spread equal to the
+`plane + fluid + fat` sum. The weight no longer has to travel four orders of
+magnitude to be relevant, and its learned norm now reads directly as the
+fraction of the metadata scale it reached. Zero initialisation survives, so the
+model still starts numerically identical to B52.
+
+**It gets its own parameter group at the head rate.** It was in
+`study_hierarchy` at 5e-6 — the rate that exists because those weights are
+pretrained and a large step destroys them. The conditioning is fresh, like the
+sparse head, which gets 1e-4 for exactly that reason. Watch for a fourth group
+in the log:
+
+```text
+[B52]   spacing_conditioning  lr=1.000e-04  params=...
+```
+
+The scale used is printed and written into the checkpoint as
+`spacing.conditioning_scale`, so this run can be reproduced and the first one
+still means what it meant: a checkpoint with no recorded scale is read back at
+1.0, which is what it trained with.
 
 ### Three guards, in the order they fire
 

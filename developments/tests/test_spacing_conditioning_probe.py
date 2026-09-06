@@ -59,10 +59,42 @@ def _checkpoint(tmp_path, weight, *, embedding_scale: float = 1.0, name: str = "
 
 def test_it_reads_the_trained_weight(tmp_path):
     weight = torch.randn(D_MODEL, SPACING_BASIS)
-    loaded, state = load_conditioning(_checkpoint(tmp_path, weight))
+    loaded, state, scale = load_conditioning(_checkpoint(tmp_path, weight))
 
     assert torch.allclose(loaded, weight)
     assert "plane_embedding.weight" in state
+    assert scale == 1.0, "a checkpoint with no recorded scale was trained at 1.0"
+
+
+def test_the_recorded_scale_is_read_back(tmp_path):
+    """It is not in the state dict, so it has to come from the audit."""
+    path = tmp_path / "scaled.pt"
+    torch.save(
+        {
+            "base_state": _base_state(torch.zeros(D_MODEL, SPACING_BASIS)),
+            "spacing": {"conditioning_scale": 90.5},
+        },
+        path,
+    )
+    assert load_conditioning(path)[2] == pytest.approx(90.5)
+
+
+def test_the_probe_applies_the_recorded_scale(tmp_path):
+    """The ratio only means what it claims if the scale is included."""
+    weight = torch.zeros(D_MODEL, SPACING_BASIS)
+    weight[:, 0] = 0.001
+
+    plain = tmp_path / "plain.pt"
+    torch.save({"base_state": _base_state(weight)}, plain)
+    scaled = tmp_path / "scaled.pt"
+    torch.save(
+        {"base_state": _base_state(weight), "spacing": {"conditioning_scale": 100.0}},
+        scaled,
+    )
+
+    assert probe(scaled)["spread_p05_to_p95"] == pytest.approx(
+        probe(plain)["spread_p05_to_p95"] * 100.0, rel=1e-5
+    )
 
 
 def test_a_checkpoint_without_the_conditioning_is_refused(tmp_path):

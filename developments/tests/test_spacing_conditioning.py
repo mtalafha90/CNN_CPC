@@ -235,3 +235,72 @@ def test_the_resolved_value_flows_through_to_a_zero_contribution():
     spacing = torch.tensor([resolve_spacing("a", "s1")], dtype=torch.float32)
     assert torch.all(module(spacing) == 0.0)
     assert np.isnan(spacing.item())
+
+
+# --- the scale, which the first B54 run did not have --------------------------
+
+
+def test_the_default_scale_reproduces_the_first_run():
+    """1.0 is what B54 v1 trained at, so an old checkpoint still means itself."""
+    assert SpacingConditioning(8).scale == 1.0
+
+
+def test_a_non_positive_scale_is_refused():
+    with pytest.raises(ValueError, match="scale must be positive"):
+        SpacingConditioning(8, scale=0.0)
+
+
+def test_the_scale_multiplies_the_contribution():
+    module = SpacingConditioning(8, scale=10.0)
+    with torch.no_grad():
+        module.projection.weight.fill_(0.01)
+    plain = SpacingConditioning(8, scale=1.0)
+    with torch.no_grad():
+        plain.projection.weight.fill_(0.01)
+
+    spacing = torch.tensor([3.3])
+    assert torch.allclose(module(spacing), plain(spacing) * 10.0)
+
+
+def test_the_scale_does_not_disturb_the_zero_start():
+    """However large the scale, zero times anything is still zero."""
+    module = SpacingConditioning(8, scale=1000.0)
+    assert torch.all(module(torch.tensor([0.6, 3.3, 8.0])) == 0.0)
+
+
+def test_the_reference_scale_makes_a_unit_weight_reach_the_metadata_norm():
+    """The property the scale is defined by, checked rather than asserted.
+
+    In expectation over random unit-Frobenius weights, the p05-to-p95 spread
+    should come out at the metadata norm it was given.
+    """
+    from rsna_knee.spacing_conditioning import (
+        SPREAD_ENDPOINTS_MM,
+        reference_scale,
+        spacing_basis,
+    )
+
+    target_norm = 83.272083
+    scale = reference_scale(target_norm)
+    thin, thick = spacing_basis(torch.tensor(list(SPREAD_ENDPOINTS_MM)))
+
+    torch.manual_seed(0)
+    spreads = []
+    for _ in range(200):
+        weight = torch.randn(64, SPACING_BASIS)
+        weight = weight / weight.norm()
+        spreads.append(float((scale * (weight @ (thin - thick))).norm()))
+
+    assert float(np.mean(spreads)) == pytest.approx(target_norm, rel=0.05)
+
+
+def test_the_reference_scale_grows_with_the_yardstick():
+    from rsna_knee.spacing_conditioning import reference_scale
+
+    assert reference_scale(200.0) == pytest.approx(reference_scale(100.0) * 2.0)
+
+
+def test_the_endpoints_are_the_measured_corpus_range():
+    from rsna_knee.spacing_conditioning import SPREAD_ENDPOINTS_MM
+
+    assert SPREAD_ENDPOINTS_MM == (0.80, 5.00)

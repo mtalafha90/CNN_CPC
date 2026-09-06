@@ -473,3 +473,41 @@ def test_the_model_training_flag_is_restored():
         ),
     )
     assert model.training is True
+
+
+# --- the conditioning's own parameter group ------------------------------------
+
+
+def test_the_conditioning_has_its_own_group_at_the_head_rate():
+    """The correction after B54 v1 left the term at 0.07% of its own sum.
+
+    The hierarchy rate is low because those weights are pretrained. The
+    conditioning is fresh, like the sparse head, and takes the head rate.
+    """
+    source = inspect.getsource(trainer.b52_parameter_groups)
+    block = source.split("conditioning_parameters(model)", 1)[1]
+
+    assert '"name": "spacing_conditioning"' in block
+    assert '"lr": float(head_lr),' in block
+    assert 'float(hierarchy_lr_scale)' not in block
+
+
+def test_b52s_own_path_still_has_three_groups():
+    from rsna_knee.b50_adapted_hierarchy_mil import hierarchy_parameter_names
+
+    assert callable(hierarchy_parameter_names)
+    source = inspect.getsource(trainer.b52_parameter_groups)
+    assert "if conditioning:" in source
+
+
+def test_no_parameter_can_reach_the_optimiser_twice():
+    """The conditioning left hierarchy_parameters when it gained its own group;
+    if it had stayed, b52_parameter_groups' own duplicate check would fire."""
+    source = inspect.getsource(trainer.b52_parameter_groups)
+    assert "a parameter reached the optimiser twice" in source
+
+
+def test_the_scale_is_recorded_so_the_run_can_be_reproduced():
+    source = inspect.getsource(trainer.train_b52)
+    assert 'spacing_state["conditioning_scale"]' in source
+    assert "conditioning = install_spacing_conditioning(model.base)" in source

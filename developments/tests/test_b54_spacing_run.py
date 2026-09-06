@@ -454,3 +454,45 @@ def test_a_forward_runs_when_the_module_was_moved_before_installing():
 
     out = spacing_metadata(module, meta, torch.tensor([[3.3, 0.6]]))
     assert out.dtype == module.plane_embedding.weight.dtype
+
+
+# --- the scale is taken from the host, and is recordable ----------------------
+
+
+def test_the_installed_scale_defaults_to_the_reference():
+    from rsna_knee.b54_spacing_run import metadata_norm
+    from rsna_knee.spacing_conditioning import reference_scale
+
+    module = _MetaModule()
+    conditioning = install_spacing_conditioning(module)
+
+    assert conditioning.scale == pytest.approx(reference_scale(metadata_norm(module)))
+    assert conditioning.scale > 1.0
+
+
+def test_an_explicit_scale_reproduces_an_earlier_run():
+    """1.0 is B54 v1; passing it back must give that behaviour exactly."""
+    module = _MetaModule()
+    assert install_spacing_conditioning(module, scale=1.0).scale == 1.0
+
+
+def test_the_metadata_norm_skips_the_padding_row():
+    from rsna_knee.b54_spacing_run import metadata_norm
+
+    module = _MetaModule()
+    with torch.no_grad():
+        module.plane_embedding.weight[0].fill_(1000.0)
+
+    plane = module.plane_embedding.weight.detach()
+    assert metadata_norm(module) < float(plane.norm(dim=-1).mean()) * 3
+
+
+def test_the_scale_still_leaves_the_model_identical_at_the_start():
+    """A large scale times a zero weight is still zero."""
+    module, meta = _MetaModule(), _meta()
+    before = spacing_metadata(module, meta)
+    install_spacing_conditioning(module)
+
+    assert torch.allclose(
+        spacing_metadata(module, meta, torch.full((2, 3), 3.3)), before
+    )

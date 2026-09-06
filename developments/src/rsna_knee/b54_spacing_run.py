@@ -46,6 +46,7 @@ from .spacing_conditioning import (
     CONDITIONING_VERSION,
     MISSING_SPACING,
     SpacingConditioning,
+    reference_scale,
     resolve_spacing,
     spacing_lookup,
     triplet_depth_mm,
@@ -217,13 +218,36 @@ def collate_b54(batch: list[dict]) -> dict:
 # --- the model side -----------------------------------------------------------
 
 
+def metadata_norm(module: torch.nn.Module) -> float:
+    """How big the `plane + fluid + fat` sum this module computes typically is.
+
+    The mean row norm of each embedding, summed. Row 0 is `padding_idx` and
+    permanently zero, so it is left out rather than dragging the mean down.
+    """
+    total = 0.0
+    for name in EMBEDDING_NAMES:
+        rows = getattr(module, name).weight.detach().float()
+        live = rows[1:] if rows.shape[0] > 1 else rows
+        total += float(live.norm(dim=-1).mean())
+    return total
+
+
 def install_spacing_conditioning(
-    module: torch.nn.Module, *, enabled: bool = True
+    module: torch.nn.Module,
+    *,
+    enabled: bool = True,
+    scale: float | None = None,
 ) -> SpacingConditioning:
     """Attach the conditioning to any module that already sums plane/fluid/fat.
 
     The width is taken from `plane_embedding`, so it cannot disagree with the
     features it will be added to.
+
+    `scale` defaults to `reference_scale(metadata_norm(module))`: the size at
+    which a unit-norm weight produces a spread comparable to the sum it joins.
+    The first B54 run left it at 1.0 and the term never reached 0.1% of that
+    sum, so the ablation measured nothing. Pass `1.0` explicitly to reproduce
+    that run; pass a recorded value to reproduce any other.
     """
     missing = [name for name in EMBEDDING_NAMES if not hasattr(module, name)]
     if missing:
@@ -238,8 +262,10 @@ def install_spacing_conditioning(
     # loaded -- so a freshly constructed module would otherwise sit on the CPU
     # and fail on the first forward with a device mismatch.
     anchor = module.plane_embedding.weight
+    if scale is None:
+        scale = reference_scale(metadata_norm(module))
     conditioning = SpacingConditioning(
-        int(module.plane_embedding.embedding_dim), enabled=enabled
+        int(module.plane_embedding.embedding_dim), enabled=enabled, scale=float(scale)
     ).to(device=anchor.device, dtype=anchor.dtype)
     module.spacing_conditioning = conditioning
     return conditioning

@@ -103,11 +103,21 @@ def load_b54_checkpoint(path: str | Path, *, base_checkpoint: str | Path, device
         ),
         adapt_hierarchy=bool(payload.get("adapt_hierarchy", True)),
     )
-    install_spacing_conditioning(model.base)
+    # The scale is not in the state dict -- it describes the host model, not the
+    # weights -- so it comes from the audit. A checkpoint written before the
+    # scale existed gets 1.0, which is exactly what it was trained with.
+    install_spacing_conditioning(
+        model.base, scale=float(spacing_state.get("conditioning_scale", 1.0))
+    )
     model.base.load_state_dict(payload["base_state"], strict=True)
     model.head.load_state_dict(payload["head_state"], strict=True)
     model.eval().to(device)
 
+    print(
+        f"[B54 eval] conditioning scale "
+        f"{spacing_state.get('conditioning_scale', 1.0)}",
+        flush=True,
+    )
     if not conditioning_has_moved(model):
         raise RuntimeError(
             "the loaded conditioning is still exactly zero; this checkpoint was "

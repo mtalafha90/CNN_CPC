@@ -122,19 +122,57 @@ def triplet_depth_mm(spacing_mm, gap: int = 1) -> np.ndarray:
     return 2.0 * int(gap) * np.asarray(spacing_mm, dtype=float)
 
 
+#: The corpus p05 and p95 spacings. The spread between them is what can carry
+#: information; a constant added to every series is a bias the model absorbs.
+SPREAD_ENDPOINTS_MM = (0.80, 5.00)
+
+
+def reference_scale(metadata_norm: float) -> float:
+    """The scale at which a unit-norm weight produces a useful contribution.
+
+    Without it the term has to *learn* its way from zero to relevance, and the
+    first B54 run showed it cannot: after 4,341 steps the learned weight gave a
+    spread 0.07% of the sum it was added to, and the ablation compared a model
+    against itself.
+
+    The fix is to make the scale a property of where the term lives rather than
+    something gradient descent must discover. `scale` is chosen so that a weight
+    of Frobenius norm 1 produces, in expectation, a p05-to-p95 spread equal to
+    `metadata_norm` — the size of the `plane + fluid + fat` sum it joins.
+
+    The expectation is over random weights: for `W` with independent entries and
+    `||W||_F = 1`, `E||W d||^2 = ||d||^2 / SPACING_BASIS`, hence the square root.
+    The consequence worth having is that the *learned* weight norm then reads
+    directly as the fraction of the metadata scale the term reaches.
+    """
+    thin, thick = spacing_basis(torch.tensor(list(SPREAD_ENDPOINTS_MM)))
+    span = float((thin - thick).norm())
+    if span <= 0:
+        raise ValueError("the spacing basis does not separate the corpus range")
+    return float(metadata_norm) * math.sqrt(SPACING_BASIS) / span
+
+
 class SpacingConditioning(nn.Module):
     """A zero-initialised projection of the spacing basis into feature space.
 
     Add its output to series features exactly where `plane + fluid + fat`
     already is. At initialisation it contributes zero, so a run that switches
     this on starts from the same numbers as one that does not.
+
+    `scale` multiplies the projection. It is fixed, not learned, and not part of
+    the state dict: it describes the host model, so it is set when the module is
+    installed and recorded in the run's audit rather than carried in the
+    weights. `1.0` reproduces the first B54 run, whose term never grew.
     """
 
-    def __init__(self, d_model: int, *, enabled: bool = True):
+    def __init__(self, d_model: int, *, enabled: bool = True, scale: float = 1.0):
         super().__init__()
         if int(d_model) < 1:
             raise ValueError("d_model must be positive")
+        if not float(scale) > 0:
+            raise ValueError("scale must be positive")
         self.d_model = int(d_model)
+        self.scale = float(scale)
         self.projection = nn.Linear(SPACING_BASIS, self.d_model, bias=False)
         nn.init.zeros_(self.projection.weight)
         self.enabled = bool(enabled)
@@ -157,7 +195,7 @@ class SpacingConditioning(nn.Module):
         weight_dtype = self.projection.weight.dtype
         basis = spacing_basis(spacing_mm).to(weight_dtype)
         usable = (torch.isfinite(spacing_mm) & (spacing_mm > 0)).to(weight_dtype)
-        return self.projection(basis) * usable.unsqueeze(-1)
+        return self.projection(basis) * self.scale * usable.unsqueeze(-1)
 
 
 # --- where the number comes from ---------------------------------------------

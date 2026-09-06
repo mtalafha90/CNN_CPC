@@ -210,18 +210,31 @@ def test_it_keeps_b50s_hierarchy_interface():
     assert "hierarchy_parameters" in inspect.getsource(b52_parameter_groups)
 
 
-def test_the_conditioning_is_added_to_the_hierarchy_group():
-    """The failure that would have been silent.
+def test_the_conditioning_gets_its_own_group_at_the_head_rate():
+    """The correction after the first B54 run.
 
-    b52_parameter_groups builds three groups from the encoder,
-    hierarchy_parameters() and the head. hierarchy_names is fixed in __init__,
-    before the conditioning is installed, so without this override the
-    conditioning reaches no group at all: its zero weights would never move and
-    the ablation would report no effect from a model never trained to use it.
+    Folding it into hierarchy_parameters got it to the optimiser but at 5e-6 --
+    the rate that exists because those weights are pretrained. The conditioning
+    is fresh, like the sparse head, which gets 1e-4 for that reason. It now has
+    its own group and hierarchy_parameters is B50's again.
     """
-    source = inspect.getsource(B54SpacingConditionedMIL.hierarchy_parameters)
-    assert "super().hierarchy_parameters()" in source
-    assert "conditioning_parameters" in source
+    from rsna_knee.b52_competition_training import b52_parameter_groups
+
+    assert "hierarchy_parameters" not in vars(B54SpacingConditionedMIL)
+
+    source = inspect.getsource(b52_parameter_groups)
+    assert "conditioning_parameters(model)" in source
+    assert '"name": "spacing_conditioning"' in source
+    block = source.split("conditioning_parameters(model)", 1)[1]
+    assert '"lr": float(head_lr),' in block
+
+
+def test_the_conditioning_group_is_absent_without_a_conditioning():
+    """B52's own path keeps exactly three groups."""
+    from rsna_knee.b52_competition_training import b52_parameter_groups
+
+    source = inspect.getsource(b52_parameter_groups)
+    assert "if conditioning:" in source
 
 
 def test_the_spacing_is_optional_on_both_overridden_methods():

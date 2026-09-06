@@ -71,8 +71,13 @@ SPREAD_REAL = 0.10
 SPREAD_PRESENT = 0.01
 
 
-def load_conditioning(checkpoint: str | Path) -> tuple[torch.Tensor, dict]:
-    """The trained projection weight, and the base state it came from."""
+def load_conditioning(checkpoint: str | Path) -> tuple[torch.Tensor, dict, float]:
+    """The trained projection weight, the base state, and the scale applied.
+
+    The scale is not in the state dict -- it describes the host model rather
+    than the weights -- so it comes from the run's audit. A checkpoint written
+    before the scale existed gets 1.0, which is what it was trained with.
+    """
     payload = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
     base_state = payload.get("base_state")
     if not isinstance(base_state, dict):
@@ -88,7 +93,8 @@ def load_conditioning(checkpoint: str | Path) -> tuple[torch.Tensor, dict]:
             f"unexpected conditioning shape {tuple(weight.shape)}; expected "
             f"(d_model, {SPACING_BASIS})"
         )
-    return weight, base_state
+    scale = float(payload.get("spacing", {}).get("conditioning_scale", 1.0))
+    return weight, base_state, scale
 
 
 def contributions(weight: torch.Tensor, spacings) -> torch.Tensor:
@@ -123,7 +129,8 @@ def probe(
     out_json: str | Path | None = None,
 ) -> dict:
     """Measure whether the learned term is big enough to matter."""
-    weight, base_state = load_conditioning(checkpoint)
+    weight, base_state, applied_scale = load_conditioning(checkpoint)
+    weight = weight * applied_scale
     scale = metadata_scale(base_state)
     typical = scale["typical_metadata_norm"]
 
@@ -137,6 +144,8 @@ def probe(
         {
             "version": PROBE_VERSION,
             "checkpoint": str(Path(checkpoint).resolve()),
+            "conditioning_scale": applied_scale,
+            "weight_norm_raw": float(weight.norm() / applied_scale),
             "weight_norm": float(weight.norm()),
             "weight_is_exactly_zero": bool(torch.all(weight == 0)),
             "weight_max_abs": float(weight.abs().max()),

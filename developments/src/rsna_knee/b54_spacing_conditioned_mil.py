@@ -45,20 +45,25 @@ conditioning` can add the head later without touching anything here.
 `b54_state` reports `conditioning_sites`, so any run records which choice it
 made rather than leaving it to be inferred.
 
-## The conditioning has to reach the optimiser
+## The conditioning has to reach the optimiser, at the right rate
 
-`b52_parameter_groups` builds exactly three groups — the encoder,
-`hierarchy_parameters()`, and the head — and B50 fixes `hierarchy_names` in
-`__init__`, before the conditioning is installed. Left alone, the conditioning
-would appear in none of the three: never updated, permanently zero, and the
-ablation would report no effect from a model that had never been trained to
-use the spacing. A silent no-op that still produces a number is the worst
-failure this experiment could have.
+`b52_parameter_groups` builds groups from the encoder, `hierarchy_parameters()`
+and the head, and B50 fixes `hierarchy_names` in `__init__` — before the
+conditioning is installed. Left alone the conditioning appears in none of them:
+never updated, permanently zero, and the ablation reports no effect from a
+model never trained to use the spacing.
 
-`hierarchy_parameters` is therefore overridden to include it, and
-`assert_conditioning_will_train` checks the finished optimiser rather than
-trusting that. `conditioning_has_moved` checks the same thing from the other
-end after the run.
+The first B54 run solved that by folding it into `hierarchy_parameters`. That
+worked and was still wrong. The hierarchy rate is 5e-6 *because those weights
+are pretrained* and a large step destroys them; the conditioning is fresh, like
+the sparse head, which gets 1e-4 for exactly that reason. A fresh parameter was
+given the pretrained-fine-tuning rate, and the term reached 0.07% of the sum it
+joined.
+
+It now has its own group at the head rate, added by `b52_parameter_groups`.
+`assert_conditioning_will_train` still checks the finished optimiser rather than
+trusting any of this, and `conditioning_has_moved` checks from the other end
+after the run.
 
 ## What it is at initialisation
 
@@ -109,24 +114,6 @@ class B54SpacingConditionedMIL(B50AdaptedHierarchySparseMILResidual):
     then call `install_spacing_conditioning(model.base)`. Installing first adds
     a state-dict key the checkpoint does not have and a strict load will raise.
     """
-
-    def hierarchy_parameters(self) -> list[torch.nn.Parameter]:
-        """B50's list, plus the conditioning -- which would otherwise not train.
-
-        This is the sharp edge of the whole feature. `b52_parameter_groups`
-        builds exactly three groups: the encoder, `hierarchy_parameters()`, and
-        the head. `hierarchy_names` is computed in `__init__`, *before* the
-        conditioning is installed, so the conditioning appears in none of the
-        three. The optimiser would never receive it, its zero-initialised
-        weights would stay zero for the whole run, and the ablation would
-        report no difference -- from a model that had never been trained to use
-        the spacing at all.
-
-        A silent no-op that still produces a number is the worst failure this
-        experiment could have, so the parameters are added here, in the study
-        hierarchy group, which is also the right learning rate for them.
-        """
-        return list(super().hierarchy_parameters()) + conditioning_parameters(self)
 
     def _base_logits_from_global(
         self,

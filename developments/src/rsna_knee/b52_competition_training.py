@@ -104,6 +104,7 @@ from .b50_adapted_hierarchy_mil import B50AdaptedHierarchySparseMILResidual
 from .b54_spacing_conditioned_mil import (
     B54SpacingConditionedMIL,
     assert_conditioning_will_train,
+    conditioning_parameters,
     conditioning_has_moved,
     losses_with_spacing,
     move_study_with_spacing,
@@ -198,6 +199,20 @@ def b52_parameter_groups(
                 "params": hierarchy,
                 "lr": float(head_lr) * float(hierarchy_lr_scale),
                 "name": "study_hierarchy",
+            }
+        )
+
+    # B54's spacing conditioning is freshly initialised, so it takes the head
+    # rate rather than the hierarchy's. The hierarchy rate is low because those
+    # weights are pretrained; giving a fresh parameter the pretrained rate is
+    # what left the first B54 term at 0.07% of the sum it was added to.
+    conditioning = [p for p in conditioning_parameters(model) if p.requires_grad]
+    if conditioning:
+        groups.append(
+            {
+                "params": conditioning,
+                "lr": float(head_lr),
+                "name": "spacing_conditioning",
             }
         )
 
@@ -528,7 +543,11 @@ def train_b52(
     # pretrained weights, which is the only safe order: installing first adds a
     # state-dict key the checkpoint does not have.
     if use_spacing:
-        install_spacing_conditioning(model.base)
+        conditioning = install_spacing_conditioning(model.base)
+        # The scale describes the host model, not the weights, so it is not in
+        # the state dict. Recording it is what lets this run be reproduced.
+        spacing_state["conditioning_scale"] = float(conditioning.scale)
+        print(f"[B54] conditioning scale {conditioning.scale:.6f}", flush=True)
         gate = preflight(train_index, model=model)
         print(f"[B54] preflight {gate['passed']}", flush=True)
         if not gate["passed"]:
