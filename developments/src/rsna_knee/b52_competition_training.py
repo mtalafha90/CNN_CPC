@@ -279,10 +279,15 @@ def evaluate_split(
     loader,
     multiplier_t,
     aux_weight: float,
-    move=_move_study,
-    losses=_losses,
+    move_study=_move_study,
+    compute_losses=_losses,
 ) -> dict:
-    """Score one split without touching gradients or the training mode flag."""
+    """Score one split without touching gradients or the training mode flag.
+
+    The two callables are named `move_study` and `compute_losses`, not `move`
+    and `losses`. `losses` is already a local list here, and a parameter of that
+    name is silently overwritten by it — the function then tries to call a list.
+    """
     was_training = model.training
     model.eval()
     predictions: list[np.ndarray] = []
@@ -292,8 +297,8 @@ def evaluate_split(
 
     for items in loader:
         for item in items:
-            tensors = move(item, runtime.device)
-            out, total, _combined, _local = losses(
+            tensors = move_study(item, runtime.device)
+            out, total, _combined, _local = compute_losses(
                 model, runtime, tensors, multiplier_t, aux_weight
             )
             predictions.append(
@@ -676,8 +681,8 @@ def train_b52(
             valid_loader,
             multiplier_t,
             aux_weight,
-            move=move_study,
-            losses=compute_losses,
+            move_study=move_study,
+            compute_losses=compute_losses,
         )
         row = {
             "epoch": epoch,

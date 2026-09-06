@@ -59,8 +59,8 @@ def test_every_b54_branch_is_behind_use_spacing():
 
 def test_evaluate_split_defaults_to_the_frozen_pair():
     parameters = inspect.signature(trainer.evaluate_split).parameters
-    assert parameters["move"].default is _move_study
-    assert parameters["losses"].default is _losses
+    assert parameters["move_study"].default is _move_study
+    assert parameters["compute_losses"].default is _losses
 
 
 def test_the_dataset_class_is_unchanged_without_the_flag():
@@ -352,3 +352,124 @@ def test_the_surface_records_which_count_it_used():
     source = inspect.getsource(_report_only_surface)
     assert 'supervision["expected_usable_cells"]' in source
     assert 'supervision["expected_usable_cells_is_frozen_default"]' in source
+
+
+# --- executing evaluate_split, not just reading it -----------------------------
+
+
+class _Out:
+    def __init__(self, logits):
+        self.logits = logits
+        self.local_logits = logits
+
+
+class _FakeRuntime:
+    device = torch.device("cpu")
+
+
+class _FakeModel(nn.Module):
+    def forward(self, *args, **kwargs):  # pragma: no cover - never called
+        raise AssertionError("the stub loss should be used instead")
+
+
+def _eval_items(n_targets: int = 12, studies: int = 4):
+    """One batch of ragged study items, as collate_b42 produces them."""
+    torch.manual_seed(0)
+    return [
+        [
+            {
+                "target": torch.randint(0, 2, (n_targets,)).float(),
+                "weight": torch.ones(n_targets),
+            }
+            for _ in range(studies)
+        ]
+    ]
+
+
+def test_evaluate_split_actually_runs():
+    """The collision that source-inspection tests could never catch.
+
+    `losses` is a local list inside evaluate_split. A parameter of that name is
+    overwritten by it, and the function then calls a list. Nothing short of
+    executing the function finds that.
+    """
+    from rsna_knee.constants import TARGETS
+
+    calls = {"move": 0, "loss": 0}
+
+    def move_study(item, device):
+        calls["move"] += 1
+        return ("tensors", item)
+
+    def compute_losses(model, runtime, tensors, multiplier_t, aux_weight):
+        calls["loss"] += 1
+        _, item = tensors
+        logits = torch.rand(1, len(TARGETS))
+        return _Out(logits), torch.tensor(0.5), None, None
+
+    scores = trainer.evaluate_split(
+        _FakeModel(),
+        _FakeRuntime(),
+        _eval_items(len(TARGETS)),
+        torch.ones(len(TARGETS)),
+        1.0,
+        move_study=move_study,
+        compute_losses=compute_losses,
+    )
+
+    assert calls == {"move": 4, "loss": 4}
+    assert scores["studies"] == 4
+    assert scores["loss"] == pytest.approx(0.5)
+
+
+def test_evaluate_split_runs_on_its_frozen_defaults_too():
+    """B52's own path must still work with the parameters left alone."""
+    parameters = inspect.signature(trainer.evaluate_split).parameters
+    assert parameters["move_study"].default is _move_study
+    assert parameters["compute_losses"].default is _losses
+
+
+def test_no_parameter_shadows_a_local_in_evaluate_split():
+    """The general form of the bug, so a future rename cannot reintroduce it."""
+    import ast
+
+    source = inspect.getsource(trainer.evaluate_split)
+    tree = ast.parse(source.lstrip())
+    function = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
+    parameters = {a.arg for a in function.args.args} | {
+        a.arg for a in function.args.kwonlyargs
+    }
+    assigned = {
+        target.id
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    } | {
+        node.target.id
+        for node in ast.walk(function)
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert not (parameters & assigned), sorted(parameters & assigned)
+
+
+def test_the_model_training_flag_is_restored():
+    from rsna_knee.constants import TARGETS
+
+    model = _FakeModel()
+    model.train(True)
+    trainer.evaluate_split(
+        model,
+        _FakeRuntime(),
+        _eval_items(len(TARGETS)),
+        torch.ones(len(TARGETS)),
+        1.0,
+        move_study=lambda item, device: ("t", item),
+        compute_losses=lambda *a: (
+            _Out(torch.rand(1, len(TARGETS))),
+            torch.tensor(0.1),
+            None,
+            None,
+        ),
+    )
+    assert model.training is True
