@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
+from pathlib import Path
 
 import pytest
 import torch
@@ -28,16 +30,18 @@ from rsna_knee.b52_competition_submission_dualgpu_fast import (
 from rsna_knee.b54_competition_submission_dualgpu_fast import (
     B52_LEADERBOARD_SCORE,
     B52_LEADERBOARD_TRAINING_STUDIES,
-    B54_EXPERT58_SPACING_OFF,
-    B54_EXPERT58_SPACING_ON,
     B54_SUBMISSION_EXPERIMENT,
     assert_conditioning_disabled,
     b54_endpoint_manifest,
+    conditioning_spread_ratio,
+    load_ablation,
     load_b54_checkpoint_for_submission,
     require_b54_endpoint,
+    require_disabled_arm_is_safe,
 )
 from rsna_knee.b54_spacing_run import install_spacing_conditioning
 from rsna_knee.spacing_conditioning import SPACING_BASIS, SpacingConditioning
+from rsna_knee.spacing_conditioning_probe import SPREAD_PRESENT
 
 D_MODEL = 8
 
@@ -211,6 +215,176 @@ def test_a_disabled_module_really_contributes_zero():
     assert torch.equal(out, torch.zeros(3, D_MODEL))
 
 
+# --- the gate: may this checkpoint be submitted with the spacing off? ---------
+
+
+def _weighted_payload(column_value: float, embedding_scale: float = 1.0, **overrides):
+    """A payload whose conditioning weight and metadata scale are both chosen.
+
+    Feature 0 of the basis is the normalised log spacing, so putting mass there
+    produces a contribution that really does move across the corpus range --
+    the quantity the gate measures.
+    """
+    torch.manual_seed(0)
+    weight = torch.zeros(D_MODEL, SPACING_BASIS)
+    weight[:, 0] = column_value
+
+    base_state = {"spacing_conditioning.projection.weight": weight}
+    for name, rows in (
+        ("plane_embedding.weight", 4),
+        ("fluid_embedding.weight", 3),
+        ("fat_embedding.weight", 3),
+    ):
+        values = torch.randn(rows, D_MODEL) * embedding_scale
+        values[0] = 0.0
+        base_state[name] = values
+    return _payload(base_state=base_state, **overrides)
+
+
+def _ablation(tmp_path, checkpoint, *, delta: float, resolution: float = 0.03):
+    path = tmp_path / "expert58.json"
+    path.write_text(
+        json.dumps(
+            {
+                "checkpoint": str(Path(checkpoint).resolve()),
+                "spacing_delta": delta,
+                "resolution": resolution,
+                "arms": {
+                    "spacing_on": {"macro_auc": 0.68 + delta},
+                    "spacing_off": {"macro_auc": 0.68},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_the_ratio_agrees_with_the_probe():
+    """The gate must not be able to disagree with the tool people read."""
+    from rsna_knee.spacing_conditioning_probe import probe
+
+    payload = _weighted_payload(0.05)
+    path = Path(__import__("tempfile").mkdtemp()) / "c.pt"
+    torch.save(payload, path)
+
+    assert conditioning_spread_ratio(payload) == pytest.approx(
+        probe(path)["spread_over_metadata"], rel=1e-6
+    )
+
+
+def test_the_recorded_scale_is_applied_to_the_ratio():
+    """v1 trained at 1.0 and v2 at 90.3; the same weight means different things."""
+    small = _weighted_payload(0.001)
+    small["spacing"] = {**small["spacing"], "conditioning_scale": 1.0}
+    large = _weighted_payload(0.001)
+    large["spacing"] = {**large["spacing"], "conditioning_scale": 100.0}
+
+    assert conditioning_spread_ratio(large) == pytest.approx(
+        conditioning_spread_ratio(small) * 100.0, rel=1e-5
+    )
+
+
+def test_a_payload_with_no_recorded_scale_reads_at_one():
+    """What B54 v1 trained at, so its ratio stays reproducible."""
+    payload = _weighted_payload(0.001)
+    payload["spacing"] = {"enabled": True, "conditioning_moved": True}
+    explicit = _weighted_payload(0.001)
+    explicit["spacing"] = {**explicit["spacing"], "conditioning_scale": 1.0}
+
+    assert conditioning_spread_ratio(payload) == pytest.approx(
+        conditioning_spread_ratio(explicit)
+    )
+
+
+def test_a_negligible_term_needs_no_evidence():
+    """B54 v1's case: 0.07% of its own sum, so switching it off changes nothing."""
+    payload = _weighted_payload(1e-6)
+    evidence = require_disabled_arm_is_safe(payload, checkpoint="x.pt", ablation=None)
+
+    assert evidence["term_is_negligible"] is True
+    assert evidence["spread_over_metadata"] < SPREAD_PRESENT
+    assert "not a change to the model" in evidence["why_disabling_is_safe"]
+
+
+def test_a_real_term_without_evidence_is_refused():
+    """B54 v2's case, and the bug this whole change exists to prevent."""
+    payload = _weighted_payload(1.0)
+    assert conditioning_spread_ratio(payload) >= SPREAD_PRESENT
+
+    with pytest.raises(ValueError, match="needs evidence"):
+        require_disabled_arm_is_safe(payload, checkpoint="x.pt", ablation=None)
+
+
+def test_a_real_term_with_an_agreeing_ablation_is_allowed(tmp_path):
+    payload = _weighted_payload(1.0)
+    ablation = _ablation(tmp_path, "x.pt", delta=0.0001)
+
+    evidence = require_disabled_arm_is_safe(
+        payload, checkpoint="x.pt", ablation=ablation
+    )
+    assert evidence["term_is_negligible"] is False
+    assert evidence["expert58_spacing_delta"] == pytest.approx(0.0001)
+    assert evidence["ablation_source"] == str(ablation.resolve())
+
+
+def test_a_real_term_whose_ablation_moved_is_refused(tmp_path):
+    """The term is doing work, so the disabled arm is not the trained model."""
+    payload = _weighted_payload(1.0)
+    ablation = _ablation(tmp_path, "x.pt", delta=0.05)
+
+    with pytest.raises(ValueError, match="measurable work"):
+        require_disabled_arm_is_safe(payload, checkpoint="x.pt", ablation=ablation)
+
+
+def test_a_negative_ablation_delta_is_judged_on_its_size(tmp_path):
+    """A term that helps and one that hurts are both measurable work."""
+    payload = _weighted_payload(1.0)
+    ablation = _ablation(tmp_path, "x.pt", delta=-0.05)
+
+    with pytest.raises(ValueError, match="measurable work"):
+        require_disabled_arm_is_safe(payload, checkpoint="x.pt", ablation=ablation)
+
+
+def test_an_ablation_of_another_checkpoint_is_refused(tmp_path):
+    """Evidence from a sibling run prints identically and licenses nothing."""
+    payload = _weighted_payload(1.0)
+    ablation = _ablation(tmp_path, "other.pt", delta=0.0001)
+
+    with pytest.raises(ValueError, match="cannot license this one"):
+        require_disabled_arm_is_safe(payload, checkpoint="x.pt", ablation=ablation)
+
+
+def test_an_ablation_with_no_recorded_checkpoint_is_refused(tmp_path):
+    path = tmp_path / "expert58.json"
+    path.write_text(json.dumps({"spacing_delta": 0.0, "resolution": 0.03}), "utf-8")
+
+    with pytest.raises(ValueError, match="cannot license this one"):
+        load_ablation(path, checkpoint="x.pt")
+
+
+def test_a_file_that_is_not_an_ablation_is_refused(tmp_path):
+    path = tmp_path / "expert58.json"
+    path.write_text(
+        json.dumps({"checkpoint": str(Path("x.pt").resolve()), "spacing_delta": 0.0}),
+        "utf-8",
+    )
+
+    with pytest.raises(ValueError, match="missing resolution"):
+        load_ablation(path, checkpoint="x.pt")
+
+
+def test_the_ablations_own_resolution_is_used(tmp_path):
+    """Not a constant here: the eval owns what its surface can resolve."""
+    payload = _weighted_payload(1.0)
+    generous = _ablation(tmp_path, "x.pt", delta=0.02, resolution=0.5)
+
+    evidence = require_disabled_arm_is_safe(
+        payload, checkpoint="x.pt", ablation=generous
+    )
+    assert evidence["expert58_resolution"] == 0.5
+
+
 # --- the load, and the one line that differs from B52's -----------------------
 
 
@@ -358,13 +532,28 @@ def test_the_manifest_says_which_arm_was_submitted():
     assert spacing["submitted_arm"] == "spacing_off"
 
 
-def test_the_manifest_carries_the_evidence_for_disabling_it():
+def test_the_manifest_carries_the_measured_evidence_it_was_given():
     """A claim that the term is a no-op needs its measurement beside it."""
+    evidence = {"spread_over_metadata": 0.0007, "term_is_negligible": True}
+    spacing = b54_endpoint_manifest(
+        _manifest_payload(), spacing_evidence=evidence
+    )["spacing_conditioning"]
+
+    assert spacing["evidence"] == evidence
+
+
+def test_the_manifest_quotes_no_hardcoded_expert58_numbers():
+    """The bug this replaced: v1's numbers attached to v2's weights.
+
+    With no evidence supplied the block must say so, never fall back on a
+    constant that describes some other run.
+    """
     spacing = b54_endpoint_manifest(_manifest_payload())["spacing_conditioning"]
 
-    assert spacing["expert58_spacing_on"] == B54_EXPERT58_SPACING_ON
-    assert spacing["expert58_spacing_off"] == B54_EXPERT58_SPACING_OFF
-    assert abs(B54_EXPERT58_SPACING_ON - B54_EXPERT58_SPACING_OFF) < 0.001
+    assert spacing["evidence"] is None
+    text = json.dumps(spacing)
+    for stale in ("0.681223", "0.681071", "0.000152"):
+        assert stale not in text
 
 
 def test_the_manifest_warns_that_the_population_differs():
@@ -408,7 +597,28 @@ def test_the_launcher_hands_b42_b54s_loader_and_manifest():
 
     body = _body(generate_b54_submission_dual_gpu_fast)
     assert "load_replica=_load_b54_replica" in body
-    assert "endpoint_manifest=b54_endpoint_manifest" in body
+    assert "b54_endpoint_manifest(p, spacing_evidence=evidence)" in body
+
+
+def test_the_launcher_gates_before_it_spends_a_gpu():
+    """Eight hours in is the wrong place to discover the arm is not licensed."""
+    from rsna_knee.b54_competition_submission_dualgpu_fast import (
+        generate_b54_submission_dual_gpu_fast,
+    )
+
+    body = _body(generate_b54_submission_dual_gpu_fast)
+    assert body.index("require_disabled_arm_is_safe") < body.index(
+        "generate_b42_submission_dual_gpu_fast"
+    )
+
+
+def test_the_launcher_accepts_the_ablation():
+    from rsna_knee.b54_competition_submission_dualgpu_fast import (
+        generate_b54_submission_dual_gpu_fast,
+    )
+
+    parameters = inspect.signature(generate_b54_submission_dual_gpu_fast).parameters
+    assert parameters["expert58_ablation"].default is None
 
 
 def test_the_launcher_keeps_b52s_hidden_safe_defaults():

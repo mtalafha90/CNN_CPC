@@ -24,29 +24,45 @@ succeed by silently discarding the trained term, which is the failure this
 project has repeatedly paid for: a switch that looks like it works and
 measures nothing.
 
-## The conditioning is installed and then switched off
+## The conditioning is switched off, but only when that is measured to be safe
 
-The submitted forward pass runs with `enabled=False`, and the manifest says so
-in a field of its own. Three reasons, in order of weight:
+The submitted forward pass runs with `enabled=False`, because B42's inference
+loop does not carry a spacing: feeding one means a new per-series DICOM read
+inside a hidden run whose exceptions are invisible, and B39, B41 and B51 each
+passed a visible notebook and then threw on the hidden rerun. That path has
+cost this project three submissions.
+
+**Disabling a trained term is a change to the model, so it has to be earned.**
+An earlier version of this module earned it with a sentence: the term is a
+no-op, worth `+0.000152` on the 58 experts. That was true of B54 v1, whose
+conditioning reached 0.07% of the sum it joined. It is false of v2, whose
+scaled conditioning reaches **12.65%** — and the sentence would have shipped
+v1's evidence attached to v2's weights, inside the one artefact nobody can
+inspect during a hidden run.
+
+So the claim is now checked against the checkpoint in hand, in two steps:
 
 ```text
-B42's inference loop does not carry a spacing. Feeding one means a new
-per-series DICOM read inside a hidden run whose exceptions are invisible --
-and B39, B41 and B51 each passed a visible notebook and then threw on the
-hidden rerun. This path has cost this project three submissions already.
+conditioning_spread_ratio(payload)      measured from these weights, by the
+                                        same code spacing_conditioning_probe
+                                        uses -- not a recorded constant
 
-The term is a measured no-op. On the 58 expert studies, on with 0.681223
-against off with 0.681071: +0.000152, where the surface resolves to about
-0.03. `spacing_conditioning_probe` explains why -- the learned term reaches
-0.07% of the sum it was added to.
+below SPREAD_PRESENT (0.01)             a rounding error on its own sum;
+                                        switching it off changes nothing and
+                                        needs no further evidence
 
-What B54 actually puts on the leaderboard is the rebuilt teacher, and that
-does not need the spacing term to be active.
+at or above it                          a real term. The disabled arm is
+                                        refused unless an Expert-58 ablation
+                                        *for this same checkpoint* shows the
+                                        two arms agree within the surface's
+                                        resolution.
 ```
 
-So this is an ablation arm, not the trained configuration, and it is labelled
-as one rather than described as "B54". `assert_conditioning_disabled` checks
-the loaded model instead of trusting the argument.
+The second case is the honest one to be strict about: it is exactly when a
+convenient assumption would be most costly and least visible.
+`assert_conditioning_disabled` then checks the loaded model rather than the
+keyword that was passed, because `enabled=False` is one character from its
+opposite and the failure would be silent.
 
 ## Read the population before you spend a submission
 
@@ -70,6 +86,7 @@ obvious now and forgotten by the time a score appears.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import torch
@@ -90,6 +107,7 @@ from .b52_competition_submission_dualgpu_fast import (
 from .b54_spacing_run import B54_VERSION, install_spacing_conditioning
 from .phase9_matched_supervision_training import load_phase9_checkpoint
 from .spacing_conditioning import SpacingConditioning
+from .spacing_conditioning_probe import SPREAD_PRESENT
 
 B54_SUBMISSION_EXPERIMENT = "B54_teacher_rebuild_hidden_test_inference"
 
@@ -99,11 +117,123 @@ B54_SUBMISSION_EXPERIMENT = "B54_teacher_rebuild_hidden_test_inference"
 B52_LEADERBOARD_TRAINING_STUDIES = 3801
 B52_LEADERBOARD_SCORE = 0.716
 
-#: Measured on the 58 expert studies from B54's own checkpoint, both arms.
-#: Quoted in the manifest so the choice to submit the disabled arm carries its
-#: own evidence rather than an assertion.
-B54_EXPERT58_SPACING_ON = 0.681223
-B54_EXPERT58_SPACING_OFF = 0.681071
+def conditioning_spread_ratio(payload: dict) -> float:
+    """How much of the metadata sum's scale the trained term actually reaches.
+
+    Delegates to `spacing_conditioning_probe`: same basis, same yardstick, same
+    corpus endpoints. Reimplementing it here would let the gate and the probe
+    disagree, and the gate would be the one nobody reads.
+
+    The spread rather than the size, for the probe's own reason: a constant
+    added to every series is a bias the study hierarchy absorbs, so only the
+    movement across the corpus range can carry information.
+    """
+    from .spacing_conditioning_probe import (
+        CONDITIONING_KEY,
+        CORPUS_P05_MM,
+        CORPUS_P95_MM,
+        contributions,
+        metadata_scale,
+    )
+
+    base_state = payload["base_state"]
+    scale = float(payload.get("spacing", {}).get("conditioning_scale", 1.0))
+    weight = base_state[CONDITIONING_KEY].detach().float() * scale
+
+    thin, thick = contributions(weight, (CORPUS_P05_MM, CORPUS_P95_MM))
+    typical = metadata_scale(base_state)["typical_metadata_norm"]
+    if not typical:
+        raise ValueError("the metadata embeddings are all zero; nothing to compare against")
+    return float(float((thin - thick).norm()) / typical)
+
+
+def load_ablation(path: str | Path, *, checkpoint: str | Path) -> dict:
+    """Read an Expert-58 ablation and refuse one measured on another model.
+
+    The whole point of the evidence is that it describes *these* weights. An
+    ablation from a sibling run would look identical in every field that gets
+    printed, which is precisely why the checkpoint identity is compared rather
+    than assumed.
+    """
+    result = json.loads(Path(path).read_text(encoding="utf-8"))
+    measured = str(result.get("checkpoint", ""))
+    wanted = str(Path(checkpoint).resolve())
+    if measured != wanted:
+        raise ValueError(
+            f"{path} is an ablation of {measured or '<unrecorded>'}, not of "
+            f"{wanted}; evidence from another run cannot license this one"
+        )
+    for key in ("spacing_delta", "resolution", "arms"):
+        if key not in result:
+            raise ValueError(f"{path} is not a b54_expert58_eval result; missing {key}")
+    return result
+
+
+def require_disabled_arm_is_safe(
+    payload: dict, *, checkpoint: str | Path, ablation: str | Path | None
+) -> dict:
+    """Decide whether this checkpoint may be submitted with the spacing off.
+
+    Returns the evidence for the manifest, or raises with the reason. A term
+    too small to matter needs nothing; a real one needs a measurement on the
+    same weights showing the two arms agree.
+    """
+    ratio = conditioning_spread_ratio(payload)
+    evidence: dict = {
+        "spread_over_metadata": ratio,
+        "band_present": SPREAD_PRESENT,
+        "term_is_negligible": bool(ratio < SPREAD_PRESENT),
+    }
+
+    if ratio < SPREAD_PRESENT:
+        evidence["why_disabling_is_safe"] = (
+            f"the trained term reaches {ratio:.4%} of the sum it joins, below "
+            f"the {SPREAD_PRESENT:.0%} at which it could influence a ranking; "
+            "switching it off is not a change to the model"
+        )
+        return evidence
+
+    if ablation is None:
+        raise ValueError(
+            f"this checkpoint's spacing term reaches {ratio:.2%} of the sum it "
+            f"joins, well above {SPREAD_PRESENT:.0%}, so switching it off is a "
+            "real change to a trained model rather than a formality. B42's "
+            "inference path supplies no spacing, so the disabled arm needs "
+            "evidence: pass --expert58-ablation with the b54_expert58_eval "
+            "result for this same checkpoint. If that ablation shows the two "
+            "arms differ, the honest answer is that this model cannot be "
+            "submitted through B42's loop as it stands."
+        )
+
+    measured = load_ablation(ablation, checkpoint=checkpoint)
+    delta = float(measured["spacing_delta"])
+    resolution = float(measured["resolution"])
+    if abs(delta) >= resolution:
+        raise ValueError(
+            f"the Expert-58 ablation on this checkpoint moved the macro AUC by "
+            f"{delta:+.6f}, at or beyond the {resolution} this surface "
+            "resolves. The spacing term is doing measurable work, so the "
+            "disabled arm is not the trained model and must not be submitted "
+            "as one."
+        )
+
+    arms = measured["arms"]
+    evidence.update(
+        {
+            "expert58_spacing_on": float(arms["spacing_on"]["macro_auc"]),
+            "expert58_spacing_off": float(arms["spacing_off"]["macro_auc"]),
+            "expert58_spacing_delta": delta,
+            "expert58_resolution": resolution,
+            "ablation_source": str(Path(ablation).resolve()),
+            "why_disabling_is_safe": (
+                f"the trained term reaches {ratio:.2%} of the sum it joins, but "
+                f"the measured ablation on these same weights moved the "
+                f"Expert-58 macro AUC by only {delta:+.6f} against a surface "
+                f"that resolves to {resolution}"
+            ),
+        }
+    )
+    return evidence
 
 
 def require_b54_endpoint(payload: dict) -> dict:
@@ -234,7 +364,7 @@ def _load_b54_replica(checkpoint_path: Path, base_path: Path, device: torch.devi
     return model, payload
 
 
-def b54_endpoint_manifest(payload: dict) -> dict:
+def b54_endpoint_manifest(payload: dict, *, spacing_evidence: dict | None = None) -> dict:
     """B52's manifest, corrected on the three things that are not true of B54.
 
     Reusing B52's is the point: everything about the training contract, the
@@ -254,20 +384,20 @@ def b54_endpoint_manifest(payload: dict) -> dict:
             "spacing_conditioning": {
                 "trained": True,
                 "enabled_at_inference": False,
-                "why_disabled": (
-                    "B42's inference path supplies no spacing. On the 58 expert "
-                    "studies the term moved the macro AUC by +0.000152 on a "
-                    "surface that resolves to about 0.03, and the probe measured "
-                    "it at 0.07% of the sum it joins, so the arm submitted is a "
-                    "measured no-op rather than a discarded effect."
-                ),
-                "expert58_spacing_on": B54_EXPERT58_SPACING_ON,
-                "expert58_spacing_off": B54_EXPERT58_SPACING_OFF,
                 "submitted_arm": "spacing_off",
+                "why_disabled": (
+                    "B42's inference path supplies no spacing. Whether that is "
+                    "harmless is measured on these weights rather than assumed; "
+                    "the evidence is in this block."
+                ),
                 "conditioning_scale": float(spacing.get("conditioning_scale", 1.0)),
                 "conditioning_moved_during_training": bool(
                     spacing.get("conditioning_moved", False)
                 ),
+                # Measured from the checkpoint being submitted. Never a recorded
+                # constant: an earlier version quoted B54 v1's numbers, which
+                # would have described a term 180x smaller than v2's.
+                "evidence": spacing_evidence,
             },
             "what_b54_changes_from_b52": [
                 "teacher rebuilt on B52's rule: 34,842 cells, 3,513 more quoted",
@@ -302,6 +432,7 @@ def generate_b54_submission_dual_gpu_fast(
     base_checkpoint: str | Path,
     expected_checkpoint_sha256: str,
     out_path: str | Path = "submission.csv",
+    expert58_ablation: str | Path | None = None,
     on_unreadable: str = ON_UNREADABLE_FALLBACK,
     fallback_probability: float = DEFAULT_FALLBACK_PROBABILITY,
     stream_views: bool = True,
@@ -312,6 +443,10 @@ def generate_b54_submission_dual_gpu_fast(
     Every execution default is B52's, for the same reasons B52 gives: the
     hidden-safe contract, telemetry-only budget projection, and a fallback row
     rather than an aborted run on one unreadable study out of 1,300.
+
+    `expert58_ablation` is the `expert58.json` from `b54_expert58_eval` on this
+    same checkpoint. It is needed only when the trained spacing term is large
+    enough to matter, and it is checked before a GPU is spent rather than after.
     """
     path = Path(checkpoint).resolve()
     if not path.is_file():
@@ -325,6 +460,11 @@ def generate_b54_submission_dual_gpu_fast(
     payload = torch.load(str(path), map_location="cpu", weights_only=False)
     identity = require_b54_endpoint(payload)
 
+    # Before a GPU is spent, not after eight hours of it.
+    evidence = require_disabled_arm_is_safe(
+        payload, checkpoint=path, ablation=expert58_ablation
+    )
+
     print(f"[B54 submit] {B54_SUBMISSION_EXPERIMENT}", flush=True)
     print(f"[B54 submit] checkpoint sha256 {observed}", flush=True)
     print(
@@ -336,9 +476,11 @@ def generate_b54_submission_dual_gpu_fast(
     print(f"[B54 submit] head geometry {identity['sparse_mil']}", flush=True)
     print(
         "[B54 submit] spacing conditioning trained then DISABLED for inference; "
-        f"scale {identity['spacing']['conditioning_scale']:.6f}",
+        f"scale {identity['spacing']['conditioning_scale']:.6f}, term reaches "
+        f"{evidence['spread_over_metadata']:.2%} of the sum it joins",
         flush=True,
     )
+    print(f"[B54 submit] {evidence['why_disabling_is_safe']}", flush=True)
 
     trained = identity["training_studies"]
     if trained != B52_LEADERBOARD_TRAINING_STUDIES:
@@ -360,7 +502,7 @@ def generate_b54_submission_dual_gpu_fast(
         out_path=out_path,
         expected_checkpoint_sha256=expected_checkpoint_sha256,
         load_replica=_load_b54_replica,
-        endpoint_manifest=b54_endpoint_manifest,
+        endpoint_manifest=lambda p: b54_endpoint_manifest(p, spacing_evidence=evidence),
         on_unreadable=on_unreadable,
         fallback_probability=fallback_probability,
         stream_views=stream_views,
@@ -384,6 +526,15 @@ def main() -> None:
         help="sha256sum of the B54 checkpoint you intend to submit",
     )
     parser.add_argument("--out-path", default="submission.csv")
+    parser.add_argument(
+        "--expert58-ablation",
+        default=None,
+        help=(
+            "expert58.json from b54_expert58_eval on this same checkpoint. "
+            "Required when the trained spacing term is large enough to matter, "
+            "because the submitted arm switches it off."
+        ),
+    )
     args = parser.parse_args()
 
     config = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
@@ -394,6 +545,7 @@ def main() -> None:
         base_checkpoint=args.base_checkpoint,
         expected_checkpoint_sha256=args.expected_checkpoint_sha256,
         out_path=args.out_path,
+        expert58_ablation=args.expert58_ablation,
     )
 
 
@@ -405,7 +557,10 @@ __all__ = [
     "B54_SUBMISSION_EXPERIMENT",
     "assert_conditioning_disabled",
     "b54_endpoint_manifest",
+    "conditioning_spread_ratio",
     "generate_b54_submission_dual_gpu_fast",
+    "load_ablation",
     "load_b54_checkpoint_for_submission",
     "require_b54_endpoint",
+    "require_disabled_arm_is_safe",
 ]

@@ -1,8 +1,8 @@
 # B54 Kaggle submission runbook
 
 B54 is B52's competition recipe with a rebuilt teacher, the B6 v1.3.1 report
-vocabulary, and a spacing term that was trained and measured to do nothing. Its
-selected epoch scored **0.804168** macro AUC on 548 unseen-scanner studies.
+vocabulary, and a spacing term the model was told to use. Its selected epoch
+scored **0.800665** macro AUC on 548 unseen-scanner studies.
 
 ```text
 b52_best_model.pt (in runs/085_B54/train)
@@ -12,27 +12,22 @@ b52_best_model.pt (in runs/085_B54/train)
 
 There is no conversion step. The file submitted is the file that was trained.
 
-## 0. Before anything else: the re-run would delete this checkpoint
+## 0. Which run this is
 
-`B54_ONE_RUN_RUNBOOK.md` starts the second run with
+Two B54 runs were trained. **Only the second exists.**
 
-```bash
-rm -rf runs/085_B54/train
+```text
+v1   scale 1.0     best epoch 4   0.804168   DELETED by the re-run's rm -rf
+v2   scale 90.33   best epoch 4   0.800665   runs/085_B54/train   <- this one
 ```
 
-**That is the run you are submitting.** Preserve it first, and submit from the
-copy, so the two runs cannot be confused later:
+They scored the same on 548 studies, so nothing was lost scientifically, but v1
+is not recoverable and no path below refers to it. `B54_ONE_RUN_RUNBOOK.md` now
+renames rather than deletes, so this cannot happen to v2.
 
-```bash
-cd /media/talafha/Disk_1/CNN_CPC
-mv runs/085_B54/train runs/085_B54/train_v1_unscaled
-mv runs/085_B54/b54_train.log runs/085_B54/b54_v1_unscaled_train.log 2>/dev/null || true
-ls -la runs/085_B54/train_v1_unscaled/
-```
-
-Then the second run's `--out-root runs/085_B54/train` starts clean with no
-`rm -rf` at all, and both checkpoints survive. Every path below points at
-`train_v1_unscaled`.
+The two differ in one way that matters here: v1's spacing term reached 0.07% of
+the sum it joined, and v2's reaches **12.65%**. Section 3 is entirely about the
+consequence.
 
 ## 1. Read the population before you spend a submission
 
@@ -41,7 +36,7 @@ This is the thing most likely to be misread once a number appears.
 ```text
 runs/086_...b52_competition_full_finetune   0.802666   1,447 studies
 runs/087_...b52_full_data                   0.834998   3,801 studies  -> Kaggle 0.716
-runs/085_B54/train_v1_unscaled              0.804168   1,447 studies  <- this one
+runs/085_B54/train                          0.800665   1,447 studies  <- this one
 ```
 
 **B54 is 086's population, not 087's.** It trained on the same 1,447-study B50
@@ -84,30 +79,63 @@ B42's inference loop by passing a loader into it. **Strictness stays.** Setting
 trained term away, which is the exact shape of failure this project has already
 paid for twice.
 
-## 3. The spacing term is switched off, and the manifest says so
+## 3. The spacing term is switched off, and that has to be earned
 
-The submitted forward runs with `enabled=False`. Three reasons, in order of
-weight:
+The submitted forward runs with `enabled=False`, because B42's inference loop
+supplies no spacing. Feeding one means a new per-series DICOM read inside a
+hidden run whose exceptions are invisible, and B39, B41 and B51 each passed a
+visible notebook and then threw on the hidden rerun.
+
+**Switching off a trained term is a change to the model.** An earlier version of
+this runbook justified it in a sentence: the term is a no-op, worth `+0.000152`
+on the 58 experts. That was true of B54 v1, whose conditioning reached 0.07% of
+the sum it joined. **It is false of v2, whose scaled conditioning reaches
+12.65%** — and the sentence would have shipped v1's evidence attached to v2's
+weights.
+
+So the launcher now measures the checkpoint in hand, using the same code the
+probe uses, and applies a two-step rule:
 
 ```text
-B42's inference loop supplies no spacing. Feeding one means a new per-series
-DICOM read inside a hidden run whose exceptions are invisible. B39, B41 and
-B51 each passed a visible notebook and then threw on the hidden rerun; that
-has cost this project three submissions.
+term below 1% of its own sum      switching it off is not a change to the
+                                  model; no further evidence needed
 
-The term is a measured no-op. Expert-58: on 0.681223, off 0.681071. The
-difference is +0.000152 on a surface that resolves to about 0.03, and the
-probe measured the learned term at 0.07% of the sum it joins.
-
-What B54 puts on the leaderboard is the rebuilt teacher, which does not need
-the spacing term active.
+term at or above 1%               the disabled arm is REFUSED unless you pass
+                                  --expert58-ablation with the eval result for
+                                  this same checkpoint, and that result shows
+                                  the two arms agree within the surface's
+                                  resolution
 ```
 
-This is an ablation arm rather than the trained configuration, so it is
-labelled as one: `spacing_conditioning.submitted_arm` in the manifest reads
-`spacing_off`, with both Expert-58 numbers beside it.
-`assert_conditioning_disabled` checks the loaded model rather than trusting the
-keyword that was passed.
+An ablation of a *different* checkpoint is refused too: it would print
+identically and license nothing. The evidence that survives goes into the
+manifest under `spacing_conditioning.evidence`, measured rather than recorded.
+
+**For B54 v2 this means you must run the Expert-58 ablation first** (step 4a
+below) and it must come back small. If it does not, the spacing term is doing
+measurable work, the disabled arm is not the trained model, and this checkpoint
+cannot go through B42's loop as it stands. That is the correct outcome rather
+than an obstacle — the alternative is submitting a model in a configuration it
+was never trained in and calling it B54.
+
+`assert_conditioning_disabled` separately checks the loaded model rather than
+trusting the keyword that was passed.
+
+## 4a. Run the ablation, because v2 needs it
+
+```bash
+cd /media/talafha/Disk_1/CNN_CPC
+PYTHONPATH=developments/src python -m rsna_knee.b54_expert58_eval \
+  --data-root /media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection \
+  --checkpoint runs/085_B54/train/b52_best_model.pt \
+  --base-checkpoint runs/067_Experiment_LLM_FILL_ALL_b6_preserved_llm_fill_all_targets/b6_plus_llm_fill_all_ft1/train/llm-filled/model.pt \
+  --spacing-geometry-csv runs/slice_geometry_scan/series_geometry.csv \
+  --out-root runs/085_B54/expert58_v2 \
+  2>&1 | tee runs/085_B54/b54_v2_expert58.log
+```
+
+It writes `runs/085_B54/expert58_v2/expert58.json`, which is what
+`--expert58-ablation` wants in step 9.
 
 ## 4. Fingerprints this run depends on
 
@@ -115,7 +143,7 @@ Read them; do not assume them.
 
 ```bash
 cd /media/talafha/Disk_1/CNN_CPC
-R=runs/085_B54/train_v1_unscaled
+R=runs/085_B54/train
 
 find "$R" -name "b52_best_model.pt"
 sha256sum "$R"/**/b52_best_model.pt
@@ -124,7 +152,7 @@ PYTHONPATH=developments/src python - <<'PY'
 from pathlib import Path
 import torch
 
-for path in sorted(Path("runs/085_B54/train_v1_unscaled").rglob("b52_best_model.pt")):
+for path in sorted(Path("runs/085_B54/train").rglob("b52_best_model.pt")):
     p = torch.load(path, map_location="cpu", weights_only=False)
     spacing = p.get("spacing", {})
     print(path)
@@ -141,9 +169,12 @@ for path in sorted(Path("runs/085_B54/train_v1_unscaled").rglob("b52_best_model.
 PY
 ```
 
-Expected for the v1 run: `model version` starting `b54_`, `spacing on` **True**,
-`spacing moved` **True**, and `spacing scale` **1.0** — v1 trained before the
-scale existed, and 1.0 is what it ran at. `train studies` should read **1447**.
+Expected: `model version` starting `b54_`, `spacing on` **True**, `spacing
+moved` **True**, `spacing scale` **90.334485**, `train studies` **1447**,
+`chunk size` **4**, and `selected epoch` **4** at **0.800665**.
+
+A scale of `1.0` would mean you are looking at a v1 checkpoint, which should not
+exist — say so rather than submitting it.
 
 The first hash is what you will declare as `B54_SHA`.
 
@@ -156,7 +187,7 @@ cd /media/talafha/Disk_1/CNN_CPC
 git pull --ff-only origin main
 conda activate rsna-knee
 
-export B54_CHECKPOINT="$(find runs/085_B54/train_v1_unscaled -name b52_best_model.pt | head -1)"
+export B54_CHECKPOINT="$(find runs/085_B54/train -name b52_best_model.pt | head -1)"
 export BASE_CHECKPOINT="$(PYTHONPATH=developments/src python -c "import torch;print(torch.load('$B54_CHECKPOINT',map_location='cpu',weights_only=False)['base_checkpoint'])")"
 
 rm -rf kaggle_b54_artifacts
@@ -263,15 +294,24 @@ generate_b54_submission_dual_gpu_fast(
     checkpoint=B54_CHECKPOINT,
     base_checkpoint=BASE_CHECKPOINT,
     expected_checkpoint_sha256=B54_SHA,
+    expert58_ablation=ABLATION_JSON,   # upload it with the artifacts
     out_path="/kaggle/working/submission.csv",
 )
 ```
 
-Four lines to read before you leave it:
+`ABLATION_JSON` is `expert58.json` from step 4a. Copy it into the artifact
+dataset alongside the checkpoint and resolve it the same way, by `rglob`. It is
+tiny, and the launcher refuses the disabled arm without it whenever the trained
+term is large enough to matter — which for v2 it is.
+
+Five lines to read before you leave it:
 
 ```text
-[B54 submit] epoch 4 selected at 0.804168, trained on 1447 studies, augmentation=True
-[B54 submit] spacing conditioning trained then DISABLED for inference; scale 1.000000
+[B54 submit] epoch 4 selected at 0.800665, trained on 1447 studies, augmentation=True
+[B54 submit] spacing conditioning trained then DISABLED for inference; scale
+             90.334485, term reaches 12.65% of the sum it joins
+[B54 submit] the trained term reaches 12.65% ... but the measured ablation on
+             these same weights moved the Expert-58 macro AUC by only ...
 [B54 submit] POPULATION: this model saw 1447 studies; the standing 0.716 was set
              by a B52 run that saw 3801. ...
 [B54 submit] inference path is B42's, unchanged
