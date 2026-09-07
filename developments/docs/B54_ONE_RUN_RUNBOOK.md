@@ -275,6 +275,53 @@ The scale used is printed and written into the checkpoint as
 still means what it meant: a checkpoint with no recorded scale is read back at
 1.0, which is what it trained with.
 
+### Keep the first run: it is the one being submitted
+
+**Do not `rm -rf runs/085_B54/train`.** That directory holds the v1 checkpoint,
+which is the artefact `B54_KAGGLE_SUBMISSION.md` submits. Rename it instead, so
+both runs survive and neither can be mistaken for the other:
+
+```bash
+cd /media/talafha/Disk_1/CNN_CPC
+mv runs/085_B54/train runs/085_B54/train_v1_unscaled
+mv runs/085_B54/b54_train.log runs/085_B54/b54_v1_unscaled_train.log
+```
+
+Then run step 6 exactly as written — `--out-root runs/085_B54/train` now
+creates a fresh directory, so no deletion is needed at all. Use a new log name:
+
+```text
+2>&1 | tee runs/085_B54/b54_v2_scaled_train.log
+```
+
+The trainer's own overwrite guard would have caught this, but only for the
+checkpoint file, and only if the directory still existed. A rename costs
+nothing and does not rely on a guard firing.
+
+### Two lines that confirm the corrections took
+
+Both appear in the first minute. If the fourth parameter group is missing, stop
+— the conditioning is back where it cannot learn.
+
+```text
+[B54] conditioning scale 90.xxxxxx
+[B52]   spacing_conditioning  lr=1.000e-04  params=...
+```
+
+### The stopping rule, declared before the number exists
+
+After the re-run, `spacing_conditioning_probe`'s spread-over-metadata ratio
+decides it:
+
+```text
+>= 0.10        a real term; the Expert-58 delta means something either way
+0.01 to 0.10   present; the ablation is worth reading
+< 0.01         refractory to this parameterisation -- DROP IT
+```
+
+Under 0.01 the answer is to stop, not to try a third scale or a third rate.
+Two attempts is enough, and continuing would be fitting to an endpoint.
+
 ### Three guards, in the order they fire
 
 **Preflight, before the first epoch.** Refuses a spacing that failed to resolve
