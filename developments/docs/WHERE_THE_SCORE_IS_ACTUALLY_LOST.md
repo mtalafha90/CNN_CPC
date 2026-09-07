@@ -206,8 +206,24 @@ new experiment rather than a tweak, so it does not belong in the next few runs.
 
 ## What to stop
 
-* **The spacing conditioning, after the current probe.** The stopping rule is
-  already written down: under 0.01 and it is dropped, not tuned a third time.
+* **The spacing conditioning. Closed.** Tested properly on the second run — term
+  at 12.65% of its own sum, Expert-58 `-0.004908`, validation `-0.003503`. Both
+  surfaces negative. See `TELLING_THE_MODEL_THE_SPACING_CHANGED_NOTHING`.
+
+  It closes with a pattern worth carrying forward. Three times now this project
+  has measured a real defect in its inputs and fixed it, and three times the
+  model has been indifferent or slightly worse:
+
+  ```text
+  teacher accuracy vs model performance     Pearson +0.09
+  a rebuilt teacher, 832 more cells         -0.003620 on Expert-58
+  telling the model the slice spacing       -0.004908 on Expert-58
+  ```
+
+  **A measured flaw in the data is not evidence that fixing it will help.** That
+  should raise the bar for the next experiment of this shape, and it is a further
+  argument for spending the next runs on ordinary competition engineering — the
+  augmentation, the ensemble, the throughput — rather than on another defect.
 * **Small architecture edits judged on the 58 expert studies.** The retrospective
   established this and it still holds; the surface is adaptively spent and points
   the wrong way.
