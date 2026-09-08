@@ -47,6 +47,7 @@ import argparse
 from pathlib import Path
 
 from .b42_constant_area_aspect_sparse_mil import B42ConstantAreaAspectDataset
+from .b53_augmented_training import AugmentationPolicy, B53AugmentedDataset
 from .b52_competition_training import (
     B52_DEFAULT_ENCODER_LR_SCALE,
     B52_DEFAULT_ENCODER_STAGES,
@@ -73,24 +74,51 @@ B55_RUN_ROOT = "runs/089_Experiment_B55_physical_geometry"
 B55_DEFAULT_EPOCHS = 8
 
 
-def b55_dataset_factory(crop_mm: float, reference_area: int):
+class B55AugmentedDataset(B53AugmentedDataset, B55PhysicalGeometryDataset):
+    """B55's geometry, with B53's augmentation applied on top of it.
+
+    The composition works because the two subclass B42 at different points:
+    B55 overrides `_load_b42`, which produces the tensor, and B53 augments in
+    `__getitem__` *after* `super().__getitem__()` has produced it. The method
+    resolution order runs B53's `__getitem__`, which calls down into B42's,
+    which calls `self._load_b42` -- B55's. Neither had to know about the other.
+    """
+
+
+def b55_dataset_factory(
+    crop_mm: float,
+    reference_area: int,
+    *,
+    policy=None,
+    seed: int = B52_SEED,
+):
     """A `_build_dataset` with B55's geometry baked in.
 
     Returns a callable with B52's exact signature, so `train_b52` needs to know
     nothing about B55.
+
+    `policy` adds B53's augmentation, and **only to the training surface**.
+    Augmenting validation would change what the score measures rather than what
+    the model learns, which is why the contract carries `train`.
     """
 
-    def build(uids, index, dataset_config, crop_policy, targets, weights, spacing=False):
+    def build(
+        uids,
+        index,
+        dataset_config,
+        crop_policy,
+        targets,
+        weights,
+        spacing=False,
+        train=False,
+    ):
         if spacing:
             raise ValueError(
                 "B55 does not carry the spacing conditioning: it was tested at "
                 "12.65% of its own sum and measured -0.004908 on Expert-58, so "
                 "it is closed. Run without --spacing-geometry-csv."
             )
-        return B55PhysicalGeometryDataset(
-            uids,
-            index,
-            dataset_config,
+        shared = dict(
             crop_focus_policy=crop_policy,
             center_offsets=(0,),
             targets=targets,
@@ -98,6 +126,11 @@ def b55_dataset_factory(crop_mm: float, reference_area: int):
             crop_mm=float(crop_mm),
             reference_area=int(reference_area),
         )
+        if train and policy is not None and not policy.is_disabled():
+            return B55AugmentedDataset(
+                uids, index, dataset_config, policy=policy, seed=int(seed), **shared
+            )
+        return B55PhysicalGeometryDataset(uids, index, dataset_config, **shared)
 
     return build
 
@@ -114,6 +147,7 @@ def train_b55(
     crop_mm: float = CROP_MM,
     reference_side: int = B55_REFERENCE_SIDE,
     all_data: bool = True,
+    augment: bool = False,
     expected_supervision_cells: int | None = None,
     num_workers: int | None = None,
     seed: int = B52_SEED,
@@ -122,6 +156,13 @@ def train_b55(
 ):
     """B52's run with B55's geometry. Everything else is B52's, called not copied."""
     reference_area = int(reference_side) * int(reference_side)
+    policy = AugmentationPolicy.from_config(config) if augment else None
+    if augment and policy.is_disabled():
+        raise ValueError(
+            "--augment was asked for but every configured value is zero. Check "
+            "b7_rotation_deg and friends in the config."
+        )
+    print(f"[B55] augmentation {policy.active() if policy else 'off'}", flush=True)
     print(
         f"[B55] crop={crop_mm:g} mm  canonical_side={CANONICAL_SIDE}  "
         f"reference={reference_side}^2 (B42 used 448^2)",
@@ -143,7 +184,9 @@ def train_b55(
         train_splits=B52_FULL_TRAIN_SPLITS if all_data else (B52_TRAIN_SPLIT,),
         expected_supervision_cells=expected_supervision_cells,
         num_workers=num_workers,
-        dataset_factory=b55_dataset_factory(crop_mm, reference_area),
+        dataset_factory=b55_dataset_factory(
+            crop_mm, reference_area, policy=policy, seed=int(seed)
+        ),
         identity={"experiment": B55_EXPERIMENT, "version": B55_VERSION},
         seed=int(seed),
         out_root=out_root,
@@ -169,6 +212,14 @@ def main() -> None:
     parser.add_argument("--crop-mm", type=float, default=CROP_MM)
     parser.add_argument("--reference-side", type=int, default=B55_REFERENCE_SIDE)
     parser.add_argument(
+        "--augment",
+        action="store_true",
+        help=(
+            "apply B53's augmentation to the training surface only. Off by "
+            "default until B53 reports whether it helps at these settings."
+        ),
+    )
+    parser.add_argument(
         "--gate-split",
         action="store_true",
         help="train on the 1,447-study gate rows only, instead of all data",
@@ -191,6 +242,7 @@ def main() -> None:
         crop_mm=args.crop_mm,
         reference_side=args.reference_side,
         all_data=not args.gate_split,
+        augment=args.augment,
         expected_supervision_cells=args.expected_supervision_cells,
         num_workers=args.num_workers,
         seed=args.seed,

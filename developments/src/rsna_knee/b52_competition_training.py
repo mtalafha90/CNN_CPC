@@ -339,8 +339,11 @@ def evaluate_split(
 
 
 def _build_dataset(
-    uids, index, dataset_config, crop_policy, targets, weights, spacing: bool = False
+    uids, index, dataset_config, crop_policy, targets, weights,
+    spacing: bool = False, train: bool = False,
 ):
+    # `train` is unused here and part of the contract for a factory that
+    # needs it: an augmenting dataset must not be built for validation.
     # `with_spacing` returns a subclass, so every frozen contract that tests
     # for B42ConstantAreaAspectDataset still holds.
     cls = with_spacing(B42ConstantAreaAspectDataset) if spacing else (
@@ -523,6 +526,7 @@ def train_b52(
         train_targets,
         train_weights,
         spacing=use_spacing,
+        train=True,
     )
     valid_dataset = build_dataset(
         valid_uids,
@@ -696,6 +700,13 @@ def train_b52(
 
     for epoch in range(resumed.start_epoch, int(epochs) + 1):
         started = time.monotonic()
+        # An augmenting dataset needs a fresh draw each pass. B52's own has no
+        # such method, so this is inert for it and load-bearing for a
+        # descendant that augments -- without it every epoch would repeat one
+        # draw, which is augmentation that reaches the pixels and then stops
+        # varying.
+        if hasattr(train_dataset, "set_epoch"):
+            train_dataset.set_epoch(epoch)
         if runtime.device.type == "cuda" and torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(runtime.device)
         model.train()

@@ -258,3 +258,64 @@ def test_an_uncommitted_state_clears_the_value(tmp_path):
     out = write_states(frame, melted)
     assert out.loc[0, "Effusion__state"] == UNCERTAIN
     assert pd.isna(out.loc[0, "Effusion"])
+
+
+# --- the evidence the runbook promises ----------------------------------------
+#
+# rubric_changes.csv carried only the study, target and states: the matched term
+# and the sentence were computed inside apply_rubric and discarded. Since
+# reading those sentences is the only way to tell a working gate from an
+# over-firing one, the audit was useless for the job the runbook gives it.
+
+
+def test_the_changes_csv_carries_the_matched_term_and_the_sentence(tmp_path):
+    source = _export(tmp_path, _wide(_rows()))
+    rebuild(source, _reports(), teacher_anchors(), tmp_path / "out")
+
+    changes = pd.read_csv(tmp_path / "out" / "rubric_changes.csv")
+    assert set(changes.columns) >= {
+        "StudyInstanceUID", "target", "from", "to", "matched_term", "window",
+    }
+
+    trace = changes[changes["StudyInstanceUID"] == "a"].iloc[0]
+    assert trace["matched_term"] == "trace"
+    assert "trace joint effusion" in trace["window"]
+
+
+def test_every_row_has_its_evidence_filled_in(tmp_path):
+    """A blank column would be as useless as a missing one."""
+    source = _export(tmp_path, _wide(_rows()))
+    rebuild(source, _reports(), teacher_anchors(), tmp_path / "out")
+
+    changes = pd.read_csv(tmp_path / "out" / "rubric_changes.csv")
+    assert changes["matched_term"].notna().all()
+    assert changes["window"].notna().all()
+    assert (changes["window"].str.len() > 0).all()
+
+
+def test_the_summary_json_is_not_buried_under_the_per_cell_rows(tmp_path):
+    """Thousands of change rows in audit.json would hide the counts."""
+    source = _export(tmp_path, _wide(_rows()))
+    rebuild(source, _reports(), teacher_anchors(), tmp_path / "out")
+
+    rubric = json.loads((tmp_path / "out" / "audit.json").read_text("utf-8"))[
+        "severity_rubric"
+    ]
+    assert "changes" not in rubric
+    assert rubric["cells_downgraded"] == 2
+
+
+def test_apply_rubric_hands_the_evidence_to_its_caller():
+    """Carried in the audit rather than returned separately: a caller that has
+    to ask for the evidence is a caller that will not."""
+    from rsna_knee.severity_rubric import apply_rubric
+
+    frame = pd.DataFrame(
+        [{"StudyInstanceUID": "a", "target": "Effusion", "state": STATE_POSITIVE}]
+    )
+    _, audit = apply_rubric(
+        frame, {"a": "Trace effusion."}, {"Effusion": ("effusion",)}
+    )
+
+    assert audit["changes"][0]["matched_term"] == "trace"
+    assert audit["changes"][0]["window"]

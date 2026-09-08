@@ -84,9 +84,16 @@ STATE_NEGATED = "negated"
 #: negative, so that is the default rather than "uncertain".
 DOWNGRADE_STATE = STATE_NEGATED
 
-#: How much text around the finding is searched for a severity qualifier.
-#: Wide enough for "a small amount of joint fluid is seen", narrow enough not to
-#: reach the next sentence's finding.
+#: How many words may sit between a severity word and the sub-threshold word it
+#: modifies. Zero covers "high-grade sprain"; two covers "high-grade partial
+#: thickness tear". Measured in words rather than characters because characters
+#: reach across a whole clause: in "large joint effusion with a small Baker's
+#: cyst" the word `large` is 27 characters before `small` and modifies nothing
+#: of the sort.
+COMPOUND_WORDS = 2
+
+#: Retained for the audit's shape only. The decision is scoped by sentence now,
+#: not by a character window -- see `_sentences` for why.
 CONTEXT_CHARS = 90
 
 # --- the vocabulary -----------------------------------------------------------
@@ -217,74 +224,154 @@ def _anchor_spans(folded: str, anchor: str) -> list[int]:
         at = found + len(needle)
 
 
-def _windows(text: str, anchors: tuple[str, ...]) -> list[tuple[str, int]]:
-    """The text around each mention of the finding, and where the finding is.
+def _sentences(folded: str) -> list[tuple[str, int]]:
+    """Split into sentences, each with its offset in the folded text.
 
-    The offset is returned rather than assumed to be the middle. Near the start
-    or end of a report the window is clipped, so the centre of the string is
-    not the position of the finding -- and distances measured from the wrong
-    origin pick the wrong qualifier, which is the whole decision this module
-    makes.
+    A severity word qualifies a finding in its own sentence. Measuring by
+    character distance across a fixed window instead lets one sentence's
+    qualifier reach into the next: "Large joint effusion. Small Baker's cyst."
+    put `small` nine characters from `effusion` and `large` twelve, so the
+    effusion was downgraded by the cyst's adjective.
     """
-    folded = _fold(text)
-    spans: list[tuple[str, int]] = []
-    for anchor in anchors:
-        for found in _anchor_spans(folded, str(anchor)):
-            lo = max(0, found - CONTEXT_CHARS)
-            hi = min(len(folded), found + CONTEXT_CHARS)
-            spans.append((folded[lo:hi], found - lo))
-    return spans
+    parts, start = [], 0
+    for index, ch in enumerate(folded):
+        if ch in ".;\n":
+            piece = folded[start:index]
+            if piece.strip():
+                parts.append((piece, start))
+            start = index + 1
+    tail = folded[start:]
+    if tail.strip():
+        parts.append((tail, start))
+    return parts or [(folded, 0)]
 
 
-def _nearest(window: str, at: int, terms: tuple[str, ...]) -> int | None:
-    """Distance from the finding to the closest of `terms`, or None."""
-    best: int | None = None
+def _matches(window: str, terms: tuple[str, ...]) -> list[tuple[int, str]]:
+    """Every occurrence of any term, as (offset, term)."""
+    found: list[tuple[int, str]] = []
     for term in terms:
-        folded = _fold(term)
-        if not folded:
+        needle = _fold(term)
+        if not needle:
             continue
-        start = 0
+        at = 0
         while True:
-            found = window.find(folded, start)
-            if found < 0:
+            hit = window.find(needle, at)
+            if hit < 0:
                 break
-            distance = abs(found - at)
-            best = distance if best is None else min(best, distance)
-            start = found + 1
-    return best
+            found.append((hit, term))
+            at = hit + 1
+    return found
+
+
+def _qualified_above(window: str, at: int, anchors: tuple[str, ...]) -> str | None:
+    """An above-threshold word modifying this one, if any.
+
+    `sprain` means low grade on its own and nothing of the sort in "high-grade
+    sprain": there the severity word modifies the sub-threshold word rather
+    than competing with it. Distance from the finding cannot see this -- in
+    "High-grade MCL sprain" the word `sprain` is nearer the anchor than
+    `high grade` is, so nearest-wins downgrades a high-grade tear.
+
+    The two are taken to describe the same finding when few words separate
+    them, **not counting this finding's own name**: "high-grade partial
+    thickness MCL sprain" is one finding, while "large joint effusion with a
+    small Baker's cyst" is two and the gap there is full of the other one.
+    """
+    for hit, term in _matches(window[:at], _ABOVE_THRESHOLD):
+        gap = window[hit + len(_fold(term)) : at]
+        for start, anchor in sorted(_anchor_matches(gap, anchors), reverse=True):
+            gap = gap[:start] + " " + gap[start + len(anchor) :]
+        if len(gap.split()) <= COMPOUND_WORDS:
+            return term
+    return None
+
+
+def _anchor_matches(window: str, anchors: tuple[str, ...]) -> list[tuple[int, str]]:
+    """Where this finding's own name appears, and how much of the text it spans."""
+    found: list[tuple[int, str]] = []
+    for anchor in anchors:
+        for start in _anchor_spans(window, str(anchor)):
+            # A regex anchor's matched text is not the pattern, so re-measure.
+            text = _fold(anchor)
+            if any(ch in _META for ch in str(anchor)):
+                try:
+                    match = re.search(str(anchor), window[start:], re.IGNORECASE)
+                    text = match.group(0) if match else ""
+                except re.error:
+                    text = ""
+            if text:
+                found.append((start, text))
+    return found
 
 
 def is_sub_threshold(target: str, text: str, anchors: tuple[str, ...]) -> dict:
     """Does the report describe this finding below the competition's threshold?
 
-    Returns the decision and why, so every downgrade can be read back rather
-    than trusted. A sub-threshold word only counts when no above-threshold word
-    sits closer to the finding: reports routinely mention several findings of
-    different severities in one sentence.
+    Three rules, in order, each answering a way the previous one fails:
+
+    ```text
+    same sentence      a qualifier belongs to the finding it is written with
+    not a compound     "high-grade sprain" is not a low-grade sprain
+    nearest wins       within one sentence naming several findings, the
+                       closest qualifier is the one that applies
+    ```
+
+    Returns the decision and its evidence, so every downgrade can be read back
+    rather than trusted.
     """
     terms = SUB_THRESHOLD.get(target)
     if not terms:
         return {"downgrade": False, "reason": "no published threshold for this target"}
 
-    windows = _windows(text, anchors)
-    if not windows:
+    folded = _fold(text)
+    positions = sorted(
+        {pos for anchor in anchors for pos in _anchor_spans(folded, str(anchor))}
+    )
+    if not positions:
         return {"downgrade": False, "reason": "the finding is not mentioned in the text"}
 
-    for window, at in windows:
-        below = _nearest(window, at, terms)
-        if below is None:
-            continue
-        above = _nearest(window, at, _ABOVE_THRESHOLD)
-        if above is not None and above <= below:
-            continue
-        matched = next(
-            (t for t in terms if _fold(t) in window), ""
+    sentences = _sentences(folded)
+    blocked: str | None = None
+
+    for position in positions:
+        sentence, start = next(
+            (
+                (piece, offset)
+                for piece, offset in sentences
+                if offset <= position < offset + len(piece)
+            ),
+            (folded, 0),
         )
+        at = position - start
+
+        below: list[tuple[int, int, str]] = []
+        for hit, term in _matches(sentence, terms):
+            modifier = _qualified_above(sentence, hit, anchors)
+            if modifier is not None:
+                blocked = blocked or f"{modifier!r} qualifies {term!r}"
+                continue
+            below.append((abs(hit - at), hit, term))
+        if not below:
+            continue
+
+        below.sort()
+        distance, _, matched = below[0]
+        above = _matches(sentence, _ABOVE_THRESHOLD)
+        nearest_above = min((abs(h - at) for h, _ in above), default=None)
+        if nearest_above is not None and nearest_above <= distance:
+            continue
+
         return {
             "downgrade": True,
-            "reason": f"sub-threshold qualifier {matched!r} near the finding",
+            "reason": f"sub-threshold qualifier {matched!r} in the same sentence",
             "matched_term": matched,
-            "window": window.strip()[:200],
+            "window": sentence.strip()[:200],
+        }
+
+    if blocked:
+        return {
+            "downgrade": False,
+            "reason": f"above-threshold: {blocked}",
         }
     return {"downgrade": False, "reason": "no sub-threshold qualifier near the finding"}
 
@@ -340,6 +427,12 @@ def apply_rubric(
 
     positives = int((cells[state_column] == STATE_POSITIVE).sum())
     audit = {
+        # Every downgraded cell with the term and the sentence that caused it.
+        # `rebuild` pops this into rubric_changes.csv rather than letting it
+        # into audit.json, where thousands of rows would bury the summary.
+        # It is carried here rather than returned separately because a caller
+        # that has to ask for the evidence is a caller that will not.
+        "changes": changes,
         "version": SEVERITY_VERSION,
         "downgrade_state": downgrade_to,
         "positive_cells_before": positives,

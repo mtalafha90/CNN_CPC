@@ -124,22 +124,48 @@ PYTHONPATH=developments/src python -m rsna_knee.b55_physical_geometry_training \
   2>&1 | tee runs/089_Experiment_B55_physical_geometry/b55_train.log
 ```
 
+Add `--augment` only once B53 has reported positive — see the next section.
+
 It resumes if interrupted — re-run the identical command.
 
 **Expect it to be faster than B53.** 336² is about 56% of 448²'s pixels, so the
 encoder does roughly half the work per slice.
 
-## Reading the result
+## Augmentation
 
-The comparison is against B52's `0.834998` on the identical 548 unseen-scanner
-studies — but **only for the geometry**. The teacher changed, so the validation
-labels changed too, and a score computed against different labels is not
-comparable with one computed against the old ones.
+`--augment` applies B53's augmentation to the **training surface only**, using
+the same policy read from the same config. It is **off by default**, and that is
+a decision rather than an oversight: whether augmentation helps at these
+settings is exactly what B53 is measuring right now, and switching it on here
+would bundle a fourth unvalidated change into a run that already cannot
+attribute.
 
-That is a real limitation of bundling, stated rather than glossed: **B55's
-validation macro AUC is not directly comparable to B52's.** What it can support
-is a leaderboard submission, which is scored against labels neither run
-controls.
+Turn it on once B53 reports positive. The composition is already built and
+tested — `B55AugmentedDataset` inherits B53's `__getitem__` and B55's
+`_load_b42`, and a test runs the delegation rather than reading it, because
+both classes override `_load_b42` and a broken chain would still produce valid
+pixels.
+
+## Reading the result — and the comparison you cannot make
+
+**B55's validation macro AUC is not comparable with B52's `0.834998` or with
+B53's.** The teacher changed, so the validation labels changed too. A score
+against different labels answers a different question, and the difference
+between the two numbers would be mostly the ruler.
+
+This is the real cost of bundling the teacher with the geometry, and it is worth
+being blunt about: **the local surface cannot tell you whether B55 is better.**
+
+Three things it *can* do:
+
+* **Support a submission.** The leaderboard scores against labels neither run
+  controls, so it is the one comparison the teacher change does not corrupt.
+* **Show the training curve.** Whether B55 converges, plateaus or overfits is
+  visible regardless of which labels the surface uses.
+* **Be made comparable, with a tool that does not yet exist.** Scoring B55's
+  checkpoint against the *old* labels on the same 548 studies would restore a
+  common ruler and isolate the geometry. That evaluator has not been built. Ask
+  for it before drawing a local conclusion from B55, rather than after.
 
 Given the measured exchange rate — local movement reaches Kaggle at about a
 quarter — the honest expectation is that the crop and laterality bundle is worth

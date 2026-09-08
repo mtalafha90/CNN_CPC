@@ -201,3 +201,113 @@ def test_all_data_is_the_default_and_gate_split_is_the_opt_out():
         ).main
     )
     assert "all_data=not args.gate_split" in source
+
+
+# --- augmentation, composed rather than reimplemented -------------------------
+#
+# B55 originally had none, which would have discarded B53's finding if B53 turns
+# out positive. It is off by default: whether augmentation helps at these
+# settings is what B53 is currently measuring, and bundling a fourth unvalidated
+# change would be the opposite of what this endpoint is for.
+
+
+def test_augmentation_is_off_by_default():
+    assert inspect.signature(train_b55).parameters["augment"].default is False
+
+
+def test_the_augmented_dataset_composes_both_behaviours():
+    from rsna_knee.b53_augmented_training import B53AugmentedDataset
+    from rsna_knee.b55_physical_geometry_training import B55AugmentedDataset
+
+    assert issubclass(B55AugmentedDataset, B53AugmentedDataset)
+    assert issubclass(B55AugmentedDataset, B55PhysicalGeometryDataset)
+
+
+def test_the_resolution_order_augments_after_b55_builds_the_tensor():
+    """B53 augments in __getitem__, B55 produces the tensor in _load_b42.
+
+    If B55 came first in the MRO its __getitem__ would win and the
+    augmentation would never run -- silently, since the pixels would still be
+    valid B55 pixels.
+    """
+    from rsna_knee.b53_augmented_training import B53AugmentedDataset
+    from rsna_knee.b55_physical_geometry_training import B55AugmentedDataset
+
+    order = list(B55AugmentedDataset.__mro__)
+    assert order.index(B53AugmentedDataset) < order.index(B55PhysicalGeometryDataset)
+    assert B55AugmentedDataset.__getitem__ is B53AugmentedDataset.__getitem__
+
+
+def test_b53s_loader_delegates_down_to_b55s_geometry(monkeypatch):
+    """Both override `_load_b42`, so this could easily not be true.
+
+    B53's shifts the slice centres and then calls `super()._load_b42`. Under
+    this MRO that `super()` is B55's, so the physical crop still runs. Proved by
+    running it rather than by reading it: if B53 ever stopped delegating, the
+    pixels would still be valid B42 pixels and nothing would look wrong.
+    """
+    from rsna_knee.b55_physical_geometry import B55PhysicalGeometryDataset
+    from rsna_knee.b55_physical_geometry_training import B55AugmentedDataset
+
+    reached = []
+    monkeypatch.setattr(
+        B55PhysicalGeometryDataset,
+        "_load_b42",
+        lambda self, uid, series_uid, plane: reached.append((uid, plane)),
+    )
+
+    # A real instance, not a stand-in: zero-argument `super()` binds to the
+    # object's own type, so a stub cannot exercise the delegation at all.
+    instance = B55AugmentedDataset.__new__(B55AugmentedDataset)
+    instance.slice_jitter = 0
+    instance._draw = None
+
+    instance._load_b42("study", "series", "sagittal")
+    assert reached == [("study", "sagittal")], "B55's geometry was bypassed"
+
+
+def test_validation_is_never_augmented():
+    """Augmenting it would change what the score measures, not what is learnt."""
+    from rsna_knee.b53_augmented_training import AugmentationPolicy
+    from rsna_knee.b55_physical_geometry_training import B55AugmentedDataset
+
+    policy = AugmentationPolicy(rotation_deg=5.0)
+    source = inspect.getsource(b55_dataset_factory)
+
+    assert "if train and policy is not None" in source
+    assert "B55AugmentedDataset" in source
+    assert B55AugmentedDataset is not B55PhysicalGeometryDataset
+
+
+def test_the_factory_contract_carries_the_train_flag():
+    from rsna_knee.b52_competition_training import _build_dataset
+
+    assert "train" in inspect.signature(_build_dataset).parameters
+    assert inspect.signature(_build_dataset).parameters["train"].default is False
+
+
+def test_only_the_training_surface_is_told_it_is_training():
+    source = inspect.getsource(train_b52)
+    assert source.count("train=True,") == 1, "validation must not be built as train"
+
+
+def test_the_loop_advances_the_augmentation_draw():
+    """Without this every epoch repeats one draw: augmentation that reaches the
+    pixels and then stops varying."""
+    source = inspect.getsource(train_b52)
+    assert 'hasattr(train_dataset, "set_epoch")' in source
+    assert "train_dataset.set_epoch(epoch)" in source
+
+
+def test_asking_for_augmentation_that_is_all_zero_is_refused():
+    """The B52 failure: a flag that sets fields nobody reads."""
+    from rsna_knee.b55_physical_geometry_training import train_b55
+
+    with pytest.raises(ValueError, match="every configured value is zero"):
+        train_b55(
+            {"b7_rotation_deg": 0.0, "b7_translate_frac": 0.0, "b7_scale_jitter": 0.0,
+             "b7_gamma_jitter": 0.0, "b7_bias_field_strength": 0.0,
+             "b7_noise_std": 0.0, "b7_slice_dropout": 0.0},
+            data_root=".", labels_root=".", series_policy_path=".",
+            base_checkpoint=".", domain_split=".", augment=True,
+        )

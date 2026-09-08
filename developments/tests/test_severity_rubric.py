@@ -338,3 +338,70 @@ def test_the_gated_targets_all_have_anchors():
     anchors = teacher_anchors()
     for target in SUB_THRESHOLD:
         assert anchors.get(target), f"{target} is gated but has nothing to find"
+
+
+# --- the two failures found by review, before B55 ever trained ----------------
+#
+# Both came from the same root: arbitrating by character distance over a fixed
+# window. A qualifier belongs to the finding it is written with, which is a
+# question about sentences and modifiers, not about how many characters away
+# something happens to sit.
+
+
+def test_a_high_grade_sprain_is_not_downgraded():
+    """`sprain` implies low grade alone and not at all in "high-grade sprain".
+
+    Nearest-wins put `sprain` four characters from the anchor and `high grade`
+    eleven, so a high-grade tear was graded negative.
+    """
+    assert not _sub("MCL", "High-grade MCL sprain.", ("mcl",))
+
+
+def test_the_modifier_survives_the_finding_name_between_them():
+    """"high-grade partial thickness MCL sprain" is still one finding."""
+    assert not _sub("MCL", "High-grade partial thickness MCL sprain.", ("mcl",))
+
+
+def test_a_bare_sprain_is_still_downgraded():
+    """The fix must not disable the rule it is protecting."""
+    assert _sub("MCL", "MCL sprain.", ("mcl",))
+    assert _sub("MCL", "Low-grade MCL sprain.", ("mcl",))
+
+
+def test_another_findings_adjective_cannot_cross_a_sentence_boundary():
+    """"Large joint effusion. Small Baker's cyst." downgraded the effusion.
+
+    `small` sat nine characters from `effusion` and `large` twelve, so the
+    cyst's adjective decided the effusion.
+    """
+    text = "Large joint effusion. Small Baker's cyst."
+    assert not _sub("Effusion", text, ("effusion",))
+    assert _sub("Baker's", text, ("baker",))
+
+
+def test_the_same_pair_within_one_sentence_still_resolves():
+    """The version that passed before, which passed only by word spacing."""
+    text = "Large joint effusion with a small Baker's cyst."
+    assert not _sub("Effusion", text, ("effusion",))
+    assert _sub("Baker's", text, ("baker",))
+
+
+def test_a_refusal_names_the_modifier_that_caused_it():
+    """So an over-strict gate is as readable as an over-eager one."""
+    verdict = is_sub_threshold("MCL", "High-grade MCL sprain.", ("mcl",))
+
+    assert verdict["downgrade"] is False
+    assert "above-threshold" in verdict["reason"]
+    assert "sprain" in verdict["reason"]
+
+
+def test_the_window_reported_is_the_sentence():
+    verdict = is_sub_threshold(
+        "Baker's", "Large joint effusion. Small Baker's cyst.", ("baker",)
+    )
+    assert verdict["window"] == "small baker's cyst"
+    assert "effusion" not in verdict["window"]
+
+
+def test_moderate_to_large_is_not_read_as_moderate_then_large():
+    assert not _sub("Effusion", "Moderate to large effusion.", ("effusion",))

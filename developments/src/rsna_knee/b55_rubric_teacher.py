@@ -143,6 +143,10 @@ def rebuild(
     for name in ("policy.json", "audit.json"):
         shutil.copyfile(source / name, destination / name)
 
+    # The per-cell evidence goes to the CSV, not into audit.json where several
+    # thousand rows would bury the summary a person actually reads.
+    changes = audit.pop("changes", [])
+
     export_audit = json.loads((destination / "audit.json").read_text(encoding="utf-8"))
     export_audit["severity_rubric"] = {
         "version": SEVERITY_VERSION,
@@ -154,18 +158,6 @@ def rebuild(
         json.dumps(export_audit, indent=2, sort_keys=True), encoding="utf-8"
     )
 
-    changes = [
-        {
-            "StudyInstanceUID": row["StudyInstanceUID"],
-            "target": row["target"],
-            "from": STATE_POSITIVE,
-            "to": downgrade_to,
-        }
-        for _, row in states.merge(
-            graded, on=["StudyInstanceUID", "target"], suffixes=("_before", "_after")
-        ).iterrows()
-        if row["state_before"] != row["state_after"]
-    ]
     write_audit(audit, destination / "rubric_changes.csv", changes)
     return audit
 
