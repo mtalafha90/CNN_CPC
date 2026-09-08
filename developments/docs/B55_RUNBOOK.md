@@ -210,22 +210,36 @@ PYTHONPATH=developments/src python -m rsna_knee.common_ruler_eval $COMMON \
 
 Each is 548 studies with no training — minutes, not hours.
 
-### Reading the pair
+### Reading the pair, and what it cannot tell you
+
+**A common ruler compares complete models. It does not attribute.** B55's
+weights were trained on regraded labels *and* B55's geometry, so scoring it
+against the old teacher does not isolate the geometry: it scores a
+differently-trained model on a familiar scale. Nothing here separates the
+crop from the laterality from the resolution from the teacher, and no choice
+of ruler can, because all four are baked into the weights.
+
+What the two rulers actually give you:
 
 ```text
-ruler = old teacher       does B55's geometry help, on the scale B52 and B53
-                          were selected on? This isolates crop + laterality +
-                          resolution from the teacher entirely.
+ruler = old teacher       B55 as a whole, on the scale B52's 0.834998 and
+                          B53's number already sit on. Comparable, and still
+                          a comparison of complete models.
 
-ruler = regraded teacher  which model is better at the target the competition
-                          actually scores? No historical numbers exist on this
-                          scale, so it is B52 vs B53 vs B55 and nothing else.
+ruler = regraded teacher  the same three models on the answer key that is
+                          closer to the competition's severity rule. No
+                          historical numbers exist on this scale.
 ```
 
-If B55 wins on the old ruler, the geometry is worth having independently of the
-teacher. If it wins only on the regraded one, the gain is the teacher, and the
-geometry is neutral. If it loses on both, the bundle is not working and the
-submission slot is better spent elsewhere.
+Both rulers are report-derived, and **the competition's labels are neither**:
+two MSK radiologists reading images, with borderline findings graded negative.
+The regraded teacher is a closer proxy than the old one; it is still a proxy.
+
+So: if B55 wins on both rulers, it is a better model and worth a submission. If
+it wins on one, that says which answer key favours it, not which change caused
+it. If it loses on both, the bundle is not working and the slot is better spent
+elsewhere. Attribution would need one change per run, which is the trade this
+endpoint deliberately gave up.
 
 ### What this is not
 

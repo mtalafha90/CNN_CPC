@@ -26,11 +26,19 @@ Same eyes, same answer key. The difference is then the model.
 
 Either, and the choice should be stated rather than defaulted into:
 
-* **The old teacher** answers "is B55's geometry better?", because that is what
-  B52 and B53 were selected on and their published numbers are on that scale.
-* **The regraded teacher** answers "which model is better at the target the
-  competition actually scores?", which is the more useful question and the one
-  with no historical numbers to compare against.
+* **The old teacher** puts every model on the scale B52 and B53 were selected
+  on, so their published numbers are comparable with the new one.
+* **The regraded teacher** uses the answer key closer to the competition's
+  severity rule. No historical numbers exist on that scale.
+
+**Neither isolates a change.** B55's weights were trained on regraded labels
+*and* B55's geometry; scoring it against the old teacher scores a
+differently-trained model on a familiar scale rather than measuring the
+geometry. Attribution needs one change per run, which B55 deliberately gave up.
+
+Both rulers are also report-derived, and the competition's labels are neither:
+two MSK radiologists reading images, borderline findings graded negative. The
+regraded teacher is the closer proxy. It is still a proxy.
 
 Running both is cheap -- 548 studies, no training -- and the pair is more
 informative than either. One ruler per invocation: run it twice with different
@@ -74,7 +82,6 @@ from .b55_physical_geometry_training import (
     B55_EXPERIMENT,
     b55_dataset_factory,
 )
-from .constants import TARGETS
 from .data import backfill_series_metadata, load_series_csv
 from .loader_throughput import (
     add_worker_argument,
@@ -106,6 +113,22 @@ def geometry_for(payload: dict) -> str:
             "once you know which dataset it was trained to see."
         )
     return GEOMETRY_BY_EXPERIMENT[experiment]
+
+
+def per_target_table(scores: dict) -> dict:
+    """The per-target AUCs, named and JSON-safe.
+
+    `macro_auc` returns them **keyed by target name**, not as a list. Zipping
+    that dict with TARGETS iterates its keys, so `float()` is handed `'ACL'`
+    and the run dies with `could not convert string to float` -- after every
+    study has already been through the model. Reading `.items()` is the fix,
+    and this is a named function so a test can hold `macro_auc`'s real return
+    against it rather than inspecting the source of `score_one`.
+    """
+    return {
+        str(name): float(value)
+        for name, value in dict(scores["per_target_auc"]).items()
+    }
 
 
 def dataset_factory_for(payload: dict):
@@ -305,10 +328,7 @@ def score_one(
         "geometry": geometry_for(payload),
         "studies": len(valid_uids),
         "macro_auc": float(scores["macro_auc"]),
-        "per_target_auc": {
-            target: float(value)
-            for target, value in zip(TARGETS, scores["per_target_auc"])
-        },
+        "per_target_auc": per_target_table(scores),
         "supervision_cells": int(surface.get("usable_cells", -1)),
         "center_offset": int(center_offset),
     }

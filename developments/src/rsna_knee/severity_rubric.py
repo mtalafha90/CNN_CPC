@@ -235,6 +235,10 @@ def _sentences(folded: str) -> list[tuple[str, int]]:
     """
     parts, start = [], 0
     for index, ch in enumerate(folded):
+        # Sentences, not clauses. A comma does not stop a qualifier describing
+        # a finding -- "Intrasubstance degenerative signal, medial meniscus" is
+        # one statement -- so splitting here would lose real downgrades. The
+        # comma matters only to the compound veto; see `_qualified_above`.
         if ch in ".;\n":
             piece = folded[start:index]
             if piece.strip():
@@ -277,7 +281,15 @@ def _qualified_above(window: str, at: int, anchors: tuple[str, ...]) -> str | No
     thickness MCL sprain" is one finding, while "large joint effusion with a
     small Baker's cyst" is two and the gap there is full of the other one.
     """
-    for hit, term in _matches(window[:at], _ABOVE_THRESHOLD):
+    # A modifier cannot reach across a comma. "Large joint effusion, small
+    # Baker's cyst" leaves only two words between `large` and `small`, close
+    # enough for the word gap below to read the effusion's adjective as
+    # modifying the cyst's -- and the small cyst then escapes its downgrade.
+    # The comma is a clause boundary for *this* question and not for finding
+    # the qualifier in the first place, which is why `_sentences` ignores it.
+    clause_start = window.rfind(",", 0, at) + 1
+    for hit, term in _matches(window[clause_start:at], _ABOVE_THRESHOLD):
+        hit += clause_start
         gap = window[hit + len(_fold(term)) : at]
         for start, anchor in sorted(_anchor_matches(gap, anchors), reverse=True):
             gap = gap[:start] + " " + gap[start + len(anchor) :]
@@ -344,29 +356,51 @@ def is_sub_threshold(target: str, text: str, anchors: tuple[str, ...]) -> dict:
         )
         at = position - start
 
-        below: list[tuple[int, int, str]] = []
-        for hit, term in _matches(sentence, terms):
-            modifier = _qualified_above(sentence, hit, anchors)
-            if modifier is not None:
-                blocked = blocked or f"{modifier!r} qualifies {term!r}"
+        # The finding's own comma-clause first. A qualifier written with the
+        # finding beats one written with a different finding in the same
+        # sentence, however few characters away that one happens to sit:
+        # "Large joint effusion, small Baker's cyst" puts `small` ten
+        # characters from `effusion` and `large` twelve.
+        clause_lo = sentence.rfind(",", 0, at) + 1
+        clause_hi = sentence.find(",", at)
+        clause_hi = len(sentence) if clause_hi < 0 else clause_hi
+        scopes = [(sentence[clause_lo:clause_hi], at - clause_lo, "clause")]
+        if (clause_lo, clause_hi) != (0, len(sentence)):
+            # Only when the clause settles nothing: "Intrasubstance
+            # degenerative signal, medial meniscus" is one statement whose
+            # qualifier sits in the other clause.
+            scopes.append((sentence, at, "sentence"))
+
+        for window, anchor_at, scope in scopes:
+            below: list[tuple[int, int, str]] = []
+            for hit, term in _matches(window, terms):
+                modifier = _qualified_above(window, hit, anchors)
+                if modifier is not None:
+                    blocked = blocked or f"{modifier!r} qualifies {term!r}"
+                    continue
+                below.append((abs(hit - anchor_at), hit, term))
+
+            above = _matches(window, _ABOVE_THRESHOLD)
+            nearest_above = min((abs(h - anchor_at) for h, _ in above), default=None)
+
+            if not below:
+                # An above-threshold word alone settles it; nothing settles
+                # nothing, so widen.
+                if nearest_above is not None:
+                    break
                 continue
-            below.append((abs(hit - at), hit, term))
-        if not below:
-            continue
 
-        below.sort()
-        distance, _, matched = below[0]
-        above = _matches(sentence, _ABOVE_THRESHOLD)
-        nearest_above = min((abs(h - at) for h, _ in above), default=None)
-        if nearest_above is not None and nearest_above <= distance:
-            continue
+            below.sort()
+            distance, _, matched = below[0]
+            if nearest_above is not None and nearest_above <= distance:
+                break
 
-        return {
-            "downgrade": True,
-            "reason": f"sub-threshold qualifier {matched!r} in the same sentence",
-            "matched_term": matched,
-            "window": sentence.strip()[:200],
-        }
+            return {
+                "downgrade": True,
+                "reason": f"sub-threshold qualifier {matched!r} in the same {scope}",
+                "matched_term": matched,
+                "window": window.strip()[:200],
+            }
 
     if blocked:
         return {

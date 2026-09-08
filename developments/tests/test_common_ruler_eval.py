@@ -26,6 +26,7 @@ from rsna_knee.common_ruler_eval import (
     GEOMETRY_BY_EXPERIMENT,
     dataset_factory_for,
     geometry_for,
+    per_target_table,
     report,
     score_one,
 )
@@ -311,3 +312,59 @@ def test_the_b55_factory_accepts_the_call_score_one_makes():
 
     built = b55_dataset_factory(CROP_MM, B55_REFERENCE_SIDE**2)
     inspect.signature(built).bind(None, None, None, None, None, None)
+
+
+# --- the per-target table, built from macro_auc's real return -------------------
+#
+# This is the crash that cost a whole scoring run: `per_target_auc` is keyed by
+# target name, and the first version of this module zipped it with TARGETS.
+# Zipping a dict iterates its keys, so `float()` was handed 'ACL' -- and it
+# raised only after every study had already been through the model.
+
+
+def _real_scores():
+    """`macro_auc`'s own output, not a hand-written stand-in."""
+    import numpy as np
+
+    from rsna_knee.b52_competition_training import TARGETS, macro_auc
+
+    rows, columns = 40, len(TARGETS)
+    generator = np.random.default_rng(0)
+    target = (generator.random((rows, columns)) > 0.5).astype(np.float64)
+    weight = np.ones((rows, columns), dtype=np.float64)
+    prediction = generator.random((rows, columns))
+    return macro_auc(target, weight, prediction)
+
+
+def test_the_per_target_table_is_built_from_the_real_scores():
+    table = per_target_table(_real_scores())
+
+    from rsna_knee.b52_competition_training import TARGETS
+
+    assert set(table) == set(TARGETS), "keyed by target name, not by position"
+    assert all(isinstance(value, float) for value in table.values())
+
+
+def test_zipping_the_per_target_scores_with_targets_is_the_bug_that_was_fixed():
+    """The failure mode, reproduced, so nobody reintroduces the shorter line."""
+    from rsna_knee.b52_competition_training import TARGETS
+
+    scores = _real_scores()
+    with pytest.raises(ValueError, match="could not convert string to float"):
+        {
+            name: float(value)
+            for name, value in zip(TARGETS, scores["per_target_auc"])
+        }
+
+
+def test_the_per_target_table_survives_a_target_no_study_supervises():
+    """An undefined AUC is NaN, which is a float and must not raise."""
+    table = per_target_table({"per_target_auc": {"ACL": float("nan")}})
+
+    assert table["ACL"] != table["ACL"], "NaN is carried through, not dropped"
+
+
+def test_score_one_uses_the_table_rather_than_rebuilding_it():
+    source = inspect.getsource(score_one)
+    assert "per_target_table(scores)" in source
+    assert "zip(TARGETS" not in source

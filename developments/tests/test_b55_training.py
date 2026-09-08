@@ -311,3 +311,126 @@ def test_asking_for_augmentation_that_is_all_zero_is_refused():
             data_root=".", labels_root=".", series_policy_path=".",
             base_checkpoint=".", domain_split=".", augment=True,
         )
+
+
+# --- what the checkpoint says the run did -------------------------------------
+#
+# `train_b52`'s own `augment` defaults to **True**. B55 originally omitted it,
+# so a run with augmentation off would have written `augmentation_enabled: true`
+# into its checkpoint over undistorted pixels -- exactly the B52 failure that
+# B53 exists to correct, reappearing one layer up and just as invisible.
+#
+# These run `train_b55` with `train_b52` replaced, so they read the arguments
+# that were actually passed rather than the text of the call.
+
+
+def _captured_call(monkeypatch, **kwargs) -> dict:
+    from rsna_knee import b55_physical_geometry_training as b55
+
+    seen: dict = {}
+
+    def fake_train_b52(config, **passed):
+        seen.update(passed)
+        return None
+
+    monkeypatch.setattr(b55, "train_b52", fake_train_b52)
+    b55.train_b55(
+        {},
+        data_root=".",
+        labels_root=".",
+        series_policy_path=".",
+        base_checkpoint=".",
+        domain_split=".",
+        **kwargs,
+    )
+    return seen
+
+
+@pytest.mark.parametrize("augment", [False, True])
+def test_the_augment_flag_reaches_b52_rather_than_defaulting(monkeypatch, augment):
+    """Omitting it wrote `augmentation_enabled: true` over untouched pixels."""
+    assert inspect.signature(train_b52).parameters["augment"].default is True, (
+        "the whole hazard is that B52's default is True"
+    )
+
+    assert _captured_call(monkeypatch, augment=augment)["augment"] is augment
+
+
+def test_the_recorded_policy_matches_the_flag(monkeypatch):
+    """A boolean can lie. The policy that was built is written instead."""
+    off = _captured_call(monkeypatch, augment=False)
+    assert off["extra"]["b55_augmentation"] is None
+
+    on = _captured_call(monkeypatch, augment=True)
+    assert on["extra"]["b55_augmentation"], "an active policy, not an empty dict"
+    assert all(value > 0 for value in on["extra"]["b55_augmentation"].values())
+
+
+def test_the_geometry_is_recorded_as_it_was_used(monkeypatch):
+    recorded = _captured_call(monkeypatch, crop_mm=150.0, reference_side=224)["extra"]
+
+    assert recorded["b55_geometry"]["crop_mm"] == 150.0
+    assert recorded["b55_geometry"]["reference_side"] == 224
+    assert recorded["b55_geometry"]["reference_area"] == 224 * 224
+
+
+def test_b55s_extra_fields_are_named_for_b55(monkeypatch):
+    """So they cannot collide with, or be mistaken for, B52's own record."""
+    recorded = _captured_call(monkeypatch, augment=False)["extra"]
+
+    assert set(recorded) == {"b55_geometry", "b55_augmentation"}
+    assert all(name.startswith("b55_") for name in recorded)
+
+
+# --- the hook cannot rewrite B52's record -------------------------------------
+
+
+def test_extra_cannot_overwrite_what_b52_says_about_the_run():
+    """A subclass silently rewriting `augmentation_enabled` is the same bug."""
+    from rsna_knee.b52_competition_training import _refuse_reserved_extra
+
+    with pytest.raises(ValueError, match="augmentation_enabled"):
+        _refuse_reserved_extra({"augmentation_enabled": False})
+
+
+def test_extra_may_add_fields_of_its_own():
+    from rsna_knee.b52_competition_training import _merge_extra, _refuse_reserved_extra
+
+    _refuse_reserved_extra({"b55_geometry": {"crop_mm": 130.0}})
+    payload = {"experiment": "B55", "augmentation_enabled": True}
+
+    assert _merge_extra(payload, {"b55_augmentation": None})["b55_augmentation"] is None
+
+
+def test_the_merge_is_the_backstop_for_the_frozen_set():
+    """It reads the payload that was built, so a new field is protected too."""
+    from rsna_knee.b52_competition_training import _merge_extra
+
+    with pytest.raises(ValueError, match="added_later"):
+        _merge_extra({"added_later": 1}, {"added_later": 2})
+
+
+def test_the_reserved_names_are_fields_the_checkpoint_really_writes():
+    """Otherwise the frozen set rots into a list of names nothing protects."""
+    import ast
+
+    from rsna_knee.b52_competition_training import B52_RESERVED_PAYLOAD_FIELDS
+
+    tree = ast.parse(inspect.getsource(train_b52).lstrip())
+    written = {
+        key.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Dict)
+        for key in node.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
+    missing = sorted(B52_RESERVED_PAYLOAD_FIELDS - written)
+    assert not missing, f"reserved but never written: {missing}"
+
+
+def test_augmentation_enabled_is_reserved():
+    """The one field this whole guard exists for."""
+    from rsna_knee.b52_competition_training import B52_RESERVED_PAYLOAD_FIELDS
+
+    assert "augmentation_enabled" in B52_RESERVED_PAYLOAD_FIELDS
+    assert "experiment" in B52_RESERVED_PAYLOAD_FIELDS

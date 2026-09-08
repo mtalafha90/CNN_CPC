@@ -187,7 +187,24 @@ def train_b55(
         dataset_factory=b55_dataset_factory(
             crop_mm, reference_area, policy=policy, seed=int(seed)
         ),
+        # Passed, not defaulted. train_b52's `augment` defaults to True, so
+        # omitting it wrote augmentation_enabled: true into a checkpoint that
+        # had trained on undistorted pixels -- which is precisely the B52
+        # failure B53 exists to correct, reappearing here.
+        augment=bool(augment),
         identity={"experiment": B55_EXPERIMENT, "version": B55_VERSION},
+        extra={
+            "b55_geometry": {
+                "crop_mm": float(crop_mm),
+                "reference_side": int(reference_side),
+                "reference_area": reference_area,
+                "canonical_side": CANONICAL_SIDE,
+            },
+            # The policy itself, not a boolean: a flag that says True while the
+            # pixels are untouched is the thing this project has already paid
+            # 27 hours to learn about.
+            "b55_augmentation": policy.active() if policy else None,
+        },
         seed=int(seed),
         out_root=out_root,
         preflight_only=preflight_only,

@@ -405,3 +405,71 @@ def test_the_window_reported_is_the_sentence():
 
 def test_moderate_to_large_is_not_read_as_moderate_then_large():
     assert not _sub("Effusion", "Moderate to large effusion.", ("effusion",))
+
+
+# --- the comma, found by review after the full-stop version was fixed ---------
+#
+# "Large joint effusion, small Baker's cyst" left only two words between
+# `large` and `small` -- close enough for the compound rule to read the
+# effusion's adjective as modifying the cyst's, so the small cyst escaped its
+# downgrade. Splitting sentences on commas fixed that and broke
+# "Intrasubstance degenerative signal, medial meniscus", which is one statement
+# whose qualifier is in the other clause.
+#
+# The rule that satisfies both: a qualifier written in the finding's own clause
+# wins over anything outside it, and the sentence is consulted only when the
+# clause settles nothing.
+
+
+def test_a_comma_separated_pair_resolves_both_ways():
+    text = "Large joint effusion, small Baker's cyst."
+    assert not _sub("Effusion", text, ("effusion",))
+    assert _sub("Baker's", text, ("baker",))
+
+
+def test_the_same_pair_with_a_full_stop_still_resolves():
+    text = "Large joint effusion. Small Baker's cyst."
+    assert not _sub("Effusion", text, ("effusion",))
+    assert _sub("Baker's", text, ("baker",))
+
+
+def test_the_same_pair_with_no_punctuation_still_resolves():
+    text = "Large joint effusion with a small Baker's cyst."
+    assert not _sub("Effusion", text, ("effusion",))
+    assert _sub("Baker's", text, ("baker",))
+
+
+def test_a_qualifier_across_a_comma_is_still_found_when_the_clause_is_silent():
+    """The regression the comma split caused: one statement, two clauses."""
+    assert _sub(
+        "Medial Meniscus",
+        "Intrasubstance degenerative signal, medial meniscus.",
+        ("meniscus",),
+    )
+
+
+def test_a_conjunction_after_a_comma_resolves_both_ways():
+    text = "Moderate effusion, and a small Bakers cyst."
+    assert not _sub("Effusion", text, ("effusion",))
+    assert _sub("Baker's", text, ("baker",))
+
+
+def test_the_reason_names_which_scope_decided():
+    """Clause or sentence, so an operator can see how far it had to look."""
+    clause = is_sub_threshold(
+        "Baker's", "Large joint effusion, small Baker's cyst.", ("baker",)
+    )
+    sentence = is_sub_threshold(
+        "Medial Meniscus",
+        "Intrasubstance degenerative signal, medial meniscus.",
+        ("meniscus",),
+    )
+    assert "same clause" in clause["reason"]
+    assert "same sentence" in sentence["reason"]
+
+
+def test_the_clause_scope_does_not_break_the_compound_rule():
+    """High-grade must still beat sprain, with and without a comma before it."""
+    assert not _sub("MCL", "High-grade MCL sprain.", ("mcl",))
+    assert not _sub("MCL", "Findings, high-grade MCL sprain.", ("mcl",))
+    assert _sub("MCL", "Findings, MCL sprain.", ("mcl",))

@@ -360,6 +360,87 @@ def _build_dataset(
     )
 
 
+#: Checkpoint fields that describe what the run itself did. A descendant may
+#: add to the checkpoint through `extra`; it may not rewrite these. B52 already
+#: shipped a checkpoint saying `augmentation_enabled: true` over undistorted
+#: pixels, and a subclass quietly overwriting that field would be the same
+#: failure with a longer fuse.
+B52_RESERVED_PAYLOAD_FIELDS = frozenset(
+    {
+        "experiment",
+        "version",
+        "selected_epoch",
+        "selection_metric",
+        "selection_value",
+        "epochs_planned",
+        "seed",
+        "encoder_trainable_stages",
+        "encoder_lr_scale",
+        "hierarchy_lr_scale",
+        "augmentation_enabled",
+        "train_splits",
+        "gradient_checkpointing",
+        "head_lr",
+        "changed_from_frozen_contract",
+        "base_checkpoint",
+        "base_checkpoint_sha256",
+        "base_state",
+        "head_state",
+        "model_state",
+        "encoder_sha256_initial",
+        "encoder_sha256_final",
+        "spacing",
+        "loader",
+        "training_studies",
+        "validation_studies",
+        "training_uids_sha256",
+        "gold_labels_used",
+        "gold_studies_used_in_gradient",
+        "target_balance_multiplier",
+        "label_confidence",
+        "fill_policy",
+        "fill_audit",
+        "fill_artifacts",
+        "supervision",
+        "series_policy_signature",
+        "metadata_repair",
+        "domain_split_sha256",
+        "config_sha256",
+        "source_sha256",
+        "history",
+        "governance",
+    }
+)
+
+
+def _reserved_extra_error(key: str) -> str:
+    return (
+        f"extra[{key!r}] would overwrite B52's own record of the run. Name the "
+        "field for the experiment that owns it -- 'b55_augmentation' rather "
+        "than 'augmentation_enabled' -- so the checkpoint says who wrote it."
+    )
+
+
+def _refuse_reserved_extra(extra: dict | None) -> None:
+    """Fail before training, not after the first epoch improves."""
+    for key in sorted(set(extra or {}) & B52_RESERVED_PAYLOAD_FIELDS):
+        raise ValueError(_reserved_extra_error(key))
+
+
+def _merge_extra(payload: dict, extra: dict | None) -> dict:
+    """Add a descendant's fields to the checkpoint, never replace B52's.
+
+    The backstop for `_refuse_reserved_extra`: this reads the payload that was
+    actually built, so a field added to the payload later is protected without
+    anyone remembering to add it to the frozen set as well.
+    """
+    for key, value in (extra or {}).items():
+        if key in payload:
+            raise ValueError(_reserved_extra_error(key))
+        payload[key] = value
+    return payload
+
+
 def train_b52(
     config: dict,
     *,
@@ -381,6 +462,7 @@ def train_b52(
     num_workers: int | None = None,
     dataset_factory=None,
     identity: dict | None = None,
+    extra: dict | None = None,
     out_root: str | Path = B52_RUN_ROOT,
     preflight_only: bool = False,
 ) -> Path | None:
@@ -393,9 +475,14 @@ def train_b52(
     `identity` overrides what the checkpoint calls itself. B54 reused B52's
     name and left an artefact whose `experiment` field describes a different
     run; a descendant should say what it is.
+
+    `extra` adds a descendant's own fields to the checkpoint -- B55 records its
+    crop and its augmentation policy through it. It cannot overwrite any field
+    B52 writes itself.
     """
     build_dataset = dataset_factory or _build_dataset
     named = {"experiment": B52_EXPERIMENT, "version": B52_VERSION, **(identity or {})}
+    _refuse_reserved_extra(extra)
     settings = dict(config)
     settings["data_root"] = str(Path(data_root).resolve())
     settings["seed"] = int(seed)
@@ -838,6 +925,7 @@ def train_b52(
                     "an effect, and must not be quoted as one."
                 ),
             }
+            _merge_extra(payload, extra)
             torch.save(payload, checkpoint_path)
             print(f"[B52]     new best at epoch {epoch}: {best_macro:.6f}", flush=True)
 
