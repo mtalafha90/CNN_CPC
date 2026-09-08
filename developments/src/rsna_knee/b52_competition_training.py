@@ -128,6 +128,7 @@ from .data import backfill_series_metadata, load_series_csv
 from .encoder_finetune import MAX_TRAINABLE_STAGES
 from .evaluation import fast_auc
 from .phase9_matched_supervision_training import load_phase9_checkpoint
+from .loader_throughput import add_worker_argument, apply_worker_override
 from .runtime import make_scaler, resolve_runtime
 from .training_resume import load_checkpoint, resume, save_checkpoint
 
@@ -370,6 +371,7 @@ def train_b52(
     seed: int = B52_SEED,
     spacing_geometry_csv: str | Path | None = None,
     expected_supervision_cells: int | None = None,
+    num_workers: int | None = None,
     out_root: str | Path = B52_RUN_ROOT,
     preflight_only: bool = False,
 ) -> Path | None:
@@ -377,6 +379,9 @@ def train_b52(
     settings = dict(config)
     settings["data_root"] = str(Path(data_root).resolve())
     settings["seed"] = int(seed)
+    # Before resolve_runtime, which reads num_workers out of the settings, and
+    # before any worker starts. None leaves the config untouched.
+    loader_state = apply_worker_override(settings, num_workers)
 
     if not 1 <= int(encoder_trainable_stages) <= MAX_TRAINABLE_STAGES:
         raise ValueError(
@@ -389,6 +394,11 @@ def train_b52(
     seed_everything(int(seed) + B52_CONSTRUCTION_SEED_OFFSET)
     runtime = resolve_runtime(settings)
     print(runtime.describe(), flush=True)
+    print(
+        f"[B52] loader workers={loader_state['num_workers']} "
+        f"({loader_state['source']}), sharing={loader_state['sharing_strategy']}",
+        flush=True,
+    )
     print(
         f"[B52] epochs={epochs} (was {B52_INHERITED_EPOCHS}) "
         f"encoder_stages={encoder_trainable_stages} (was {B52_INHERITED_ENCODER_STAGES}) "
@@ -770,6 +780,7 @@ def train_b52(
                 "encoder_sha256_initial": encoder_initial_sha,
                 "encoder_sha256_final": encoder_state_sha256(model.base.encoder),
                 "spacing": spacing_state,
+                "loader": loader_state,
                 "training_studies": len(train_uids),
                 "validation_studies": len(valid_uids),
                 "training_uids_sha256": _uid_sha256(train_uids),
@@ -838,6 +849,7 @@ def main() -> None:
         help="faster, uses more GPU memory; identical maths",
     )
     parser.add_argument("--seed", type=int, default=B52_SEED)
+    add_worker_argument(parser)
     parser.add_argument("--out-root", default=B52_RUN_ROOT)
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument(
@@ -881,6 +893,7 @@ def main() -> None:
         out_root=args.out_root,
         spacing_geometry_csv=args.spacing_geometry_csv,
         expected_supervision_cells=args.expected_supervision_cells,
+        num_workers=args.num_workers,
         preflight_only=args.preflight_only,
     )
 

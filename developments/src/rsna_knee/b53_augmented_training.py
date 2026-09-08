@@ -128,7 +128,9 @@ from .data import backfill_series_metadata, load_series_csv
 from .dicom_coverage import require_dicom_coverage
 from .encoder_finetune import MAX_TRAINABLE_STAGES
 from .phase9_matched_supervision_training import load_phase9_checkpoint
+from .loader_throughput import add_worker_argument, apply_worker_override
 from .runtime import make_scaler, resolve_runtime
+from .training_resume import load_checkpoint, resume, save_checkpoint
 
 B53_EXPERIMENT = "B53_AUGMENTATION_APPLIED"
 B53_VERSION = "b53_augmentation_applied_v1"
@@ -539,6 +541,7 @@ def train_b53(
     train_splits: tuple = (B52_TRAIN_SPLIT,),
     gradient_checkpointing: bool = True,
     seed: int = B52_SEED,
+    num_workers: int | None = None,
     out_root: str | Path = B53_RUN_ROOT,
     preflight_only: bool = False,
 ) -> Path | None:
@@ -546,6 +549,10 @@ def train_b53(
     settings = dict(config)
     settings["data_root"] = str(Path(data_root).resolve())
     settings["seed"] = int(seed)
+    # Before resolve_runtime and before any worker starts. B53's augmentation
+    # draws from a generator seeded by run seed, epoch and study index rather
+    # than the global random state, so workers cannot repeat one another.
+    loader_state = apply_worker_override(settings, num_workers)
 
     if not 1 <= int(encoder_trainable_stages) <= MAX_TRAINABLE_STAGES:
         raise ValueError(f"B53 trains the encoder; stages must be 1..{MAX_TRAINABLE_STAGES}")
@@ -569,6 +576,11 @@ def train_b53(
         flush=True,
     )
     print(f"[B53] augmentation: {policy.active() or 'none'}", flush=True)
+    print(
+        f"[B53] loader workers={loader_state['num_workers']} "
+        f"({loader_state['source']}), sharing={loader_state['sharing_strategy']}",
+        flush=True,
+    )
     print(f"[B53] split sha={domain_meta['sha256']}", flush=True)
 
     base_path = Path(base_checkpoint).resolve()
@@ -733,18 +745,51 @@ def train_b53(
     out = Path(out_root)
     out.mkdir(parents=True, exist_ok=True)
     checkpoint_path = out / B53_CHECKPOINT_NAME
-    if checkpoint_path.exists():
+    # The guard exists so a fresh run cannot quietly overwrite a finished one.
+    # A resume is the one case where the best checkpoint legitimately already
+    # exists: the run was interrupted after an epoch improved on it. Allow it
+    # only when there is a recovery point beside it to resume from.
+    if checkpoint_path.exists() and load_checkpoint(out) is None:
         raise FileExistsError(f"B53 will not overwrite {checkpoint_path}")
 
     history: list[dict] = []
     best_macro = -float("inf")
     best_epoch = 0
 
-    for epoch in range(1, int(epochs) + 1):
+    # Resume before the loop. B53's first attempt was stopped at epoch 3 of 6
+    # and had to be abandoned because there was no resume: the three epochs
+    # that would have answered the augmentation question were the three not
+    # run. At roughly three hours an epoch that is the difference between a
+    # ten-hour continuation and a nineteen-hour restart.
+    resumed = resume(
+        out,
+        model=model,
+        version=B53_VERSION,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        scaler=scaler,
+    )
+    print(f"[B53] {resumed.describe()}", flush=True)
+    if resumed.restored:
+        history = list(resumed.history)
+        best_macro = max(
+            (float(row["validation_macro_auc"]) for row in history
+             if np.isfinite(row["validation_macro_auc"])),
+            default=-float("inf"),
+        )
+        best_epoch = next(
+            (int(row["epoch"]) for row in history
+             if float(row["validation_macro_auc"]) == best_macro),
+            0,
+        )
+
+    for epoch in range(resumed.start_epoch, int(epochs) + 1):
         started = time.monotonic()
         if runtime.device.type == "cuda" and torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(runtime.device)
         # A different augmentation draw each epoch, reproducible from the seed.
+        # Keyed on the epoch number rather than on how many epochs this process
+        # has run, so a resumed run draws what an uninterrupted one would.
         train_dataset.set_epoch(epoch)
         model.train()
         total_sum = 0.0
@@ -782,6 +827,19 @@ def train_b53(
             "epoch_minutes": round((time.monotonic() - started) / 60.0, 1),
         }
         history.append(row)
+        # Atomic, and complete: weights, optimiser, schedule, loss scale and
+        # every generator. An epoch boundary is the only safe place to stop.
+        save_checkpoint(
+            out,
+            epoch=epoch,
+            model=model,
+            version=B53_VERSION,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            history=history,
+            extra={"augmentation": policy.active(), "loader": loader_state},
+        )
         print(
             f"[B53] E{epoch:>2} train={row['train_loss']:.6f} "
             f"val={row['validation_loss']:.6f} "
@@ -814,6 +872,7 @@ def train_b53(
                 "augmentation_enabled": bool(augment),
                 "augmentation_policy": policy.to_dict(),
                 "augmentation_verified": preflight["augmentation"],
+                "loader": loader_state,
                 "slice_jitter": int(slice_jitter),
                 "changed_from_b52": {
                     "augmentation": [
@@ -924,6 +983,7 @@ def main() -> None:
         help="faster, uses more GPU memory; identical maths",
     )
     parser.add_argument("--seed", type=int, default=B52_SEED)
+    add_worker_argument(parser)
     parser.add_argument("--out-root", default=B53_RUN_ROOT)
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
@@ -944,6 +1004,7 @@ def main() -> None:
         train_splits=B52_FULL_TRAIN_SPLITS if args.all_data else (B52_TRAIN_SPLIT,),
         gradient_checkpointing=not args.no_gradient_checkpointing,
         seed=args.seed,
+        num_workers=args.num_workers,
         out_root=args.out_root,
         preflight_only=args.preflight_only,
     )

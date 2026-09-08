@@ -188,7 +188,10 @@ def test_b53_checks_coverage_before_it_builds_a_dataset():
     source = inspect.getsource(b53.train_b53)
     check_at = source.index("require_dicom_coverage(")
     build_at = source.index("_build_train_dataset(")
-    loop_at = source.index("for epoch in range(1")
+    # Deliberately not pinned to where the loop starts: that changed from `1`
+    # to `resumed.start_epoch` when B53 gained a resume, and this test is about
+    # ordering rather than about the loop's first epoch.
+    loop_at = source.index("for epoch in range(")
 
     assert check_at < build_at < loop_at, (
         "the coverage check must run before the dataset and the epoch loop"

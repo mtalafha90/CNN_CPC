@@ -507,5 +507,117 @@ def test_the_preflight_runs_the_verification_before_any_training():
 
     train_source = inspect.getsource(b53.train_b53)
     preflight_at = train_source.index("b53_preflight(")
-    loop_at = train_source.index("for epoch in range(1")
+    loop_at = train_source.index("for epoch in range(resumed.start_epoch")
     assert preflight_at < loop_at, "the preflight must run before the epoch loop"
+
+
+# --- resume, which the first attempt did not have -----------------------------
+#
+# B53 was stopped at epoch 3 of 6 and had to be abandoned rather than continued,
+# because there was no recovery point. At roughly three hours an epoch that is
+# the difference between a ten-hour continuation and a nineteen-hour restart --
+# and the three epochs that would have answered the augmentation question were
+# exactly the three that were not run.
+
+
+def _train_source() -> str:
+    import inspect
+
+    from rsna_knee import b53_augmented_training as b53
+
+    return inspect.getsource(b53.train_b53)
+
+
+def _save_block() -> str:
+    source = _train_source()
+    assert "save_checkpoint(" in source
+    return source.split("save_checkpoint(", 1)[1].split("\n        )", 1)[0]
+
+
+def test_the_loop_starts_where_the_resume_says():
+    source = _train_source()
+    assert "resume(" in source
+    assert "for epoch in range(resumed.start_epoch, int(epochs) + 1)" in source
+
+
+def test_every_epoch_writes_a_recovery_point():
+    block = _save_block()
+    for piece in ("optimizer=optimizer", "scheduler=scheduler", "scaler=scaler"):
+        assert piece in block, f"a resume without {piece} restarts the schedule"
+
+
+def test_the_history_survives_a_resume():
+    """Otherwise the finished checkpoint would claim the run was shorter."""
+    assert "history = list(resumed.history)" in _train_source()
+
+
+def test_the_best_epoch_survives_a_resume():
+    """Without this a resumed run re-selects from scratch and could keep an
+    epoch worse than one the earlier process had already beaten."""
+    source = _train_source()
+    assert "best_macro = max(" in source
+    assert "best_epoch = next(" in source
+
+
+def test_the_augmentation_draw_is_keyed_on_the_epoch_number():
+    """A resumed run must draw what an uninterrupted one would at that epoch,
+    not what a fresh process would draw on its first pass."""
+    assert "train_dataset.set_epoch(epoch)" in _train_source()
+
+
+def test_the_recovery_point_records_the_augmentation():
+    """A resumed run that quietly lost its policy would be a different run."""
+    assert "augmentation" in _save_block()
+
+
+def test_the_overwrite_guard_allows_a_resume(tmp_path):
+    """The guard stops a fresh run clobbering a finished one. A resume is the
+    one case where the best checkpoint legitimately already exists."""
+    from rsna_knee.training_resume import load_checkpoint
+
+    assert (
+        "if checkpoint_path.exists() and load_checkpoint(out) is None"
+        in _train_source()
+    )
+    assert load_checkpoint(tmp_path) is None, "an empty directory has no recovery point"
+
+
+def test_a_b52_recovery_point_cannot_resume_a_b53_run(tmp_path):
+    """Both write `recovery_latest.pt`; only the version tells them apart."""
+    import pytest
+    from torch import nn
+
+    from rsna_knee import b53_augmented_training as b53
+    from rsna_knee.b52_competition_training import B52_VERSION
+    from rsna_knee.training_resume import resume, save_checkpoint
+
+    assert b53.B53_VERSION != B52_VERSION
+    assert "version=B53_VERSION" in _train_source()
+
+    model = nn.Linear(2, 2)
+    save_checkpoint(tmp_path, epoch=2, model=model, version=B52_VERSION)
+
+    with pytest.raises(ValueError, match="refusing to resume"):
+        resume(tmp_path, model=model, version=b53.B53_VERSION)
+
+
+def test_a_b53_recovery_point_resumes_a_b53_run(tmp_path):
+    """The other half: the guard must not block the case it exists to serve."""
+    from torch import nn
+
+    from rsna_knee import b53_augmented_training as b53
+    from rsna_knee.training_resume import resume, save_checkpoint
+
+    model = nn.Linear(2, 2)
+    save_checkpoint(
+        tmp_path,
+        epoch=3,
+        model=model,
+        version=b53.B53_VERSION,
+        history=[{"epoch": 1}, {"epoch": 2}, {"epoch": 3}],
+    )
+
+    state = resume(tmp_path, model=model, version=b53.B53_VERSION)
+    assert state.restored is True
+    assert state.start_epoch == 4, "epoch 3 finished, so epoch 4 is next"
+    assert len(state.history) == 3
