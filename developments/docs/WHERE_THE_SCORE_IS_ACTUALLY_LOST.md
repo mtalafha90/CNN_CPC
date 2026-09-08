@@ -216,7 +216,52 @@ should be done before the long runs, not after.
 
 ## Two things worth reconsidering, not yet acting on
 
-### The teacher may have been measured against the wrong ruler
+### RETRACTED: the hidden labels are not report-derived
+
+**Added 2026-09-08.** The section below argued the hidden labels might be
+report-derived, which would make Expert-58 the misleading ruler. **That was
+wrong, and backwards.** Two independent sources now settle it:
+
+```text
+Test ground truth is image-derived by two subspecialty MSK radiologists,
+independently, with a third adjudicating disagreements. The same process
+was used for the test set. Borderline findings are graded NEGATIVE.
+```
+
+Confirmed by host replies in the pinned competition forum threads, reported
+separately by two competing teams, and corroborated by this repository's own
+earlier compilation in `COMPETITION_SPEC_AND_FIELD_INTEL.md`.
+
+**This explains the exchange rate measured above.** The local surface scores
+against report-derived labels; the leaderboard scores against expert
+image-derived labels under a severity threshold. They are two different
+measuring instruments, so `+0.032` local reaching `+0.008` hidden is not noise
+and not shrinkage — it is the fraction of a report-label gain that happens to
+coincide with the real target. The same reading applies to B50's `+0.011`
+local against `-0.001` hidden, and to the teacher's Pearson `+0.09`.
+
+**And it inverts the teacher conclusion.** The rubric is specificity-biased:
+
+```text
+ACL / MCL      high-grade or full-thickness only; low-grade sprain -> NEGATIVE
+Meniscus       definite surface contact on >=2 images; degeneration -> NEGATIVE
+OA             ~>=1 cm of >50%-thickness cartilage loss
+Effusion       moderate or large only; trace and mild -> NEGATIVE
+Baker's        moderate or large only
+```
+
+A teacher tuned for clinical correctness **over-fires** against this. "Mild
+effusion", chondropathy and intrasubstance meniscal degeneration are all real
+and all competition-negative. That is structured, target-correlated noise,
+which is worse than symmetric noise — and it means the teacher work was not
+wasted so much as aimed at the wrong target. A careful human reading only the
+report agrees with gold at roughly 82.5%, which is the ceiling report text can
+reach whatever the vocabulary does.
+
+The section that follows is kept for the record and should be read as
+superseded.
+
+### SUPERSEDED: the teacher may have been measured against the wrong ruler
 
 `THE_TEACHER_IS_NEAR_ITS_CEILING` found that of nine teacher "errors" read
 against the report text, **eight were the parser reading correctly and the
@@ -277,12 +322,35 @@ Revised 2026-09-08, after the exchange rate was measured.
 
 ```text
 1. port the worker fix                          DONE
-2. finish B53 with resume and workers           ~25 h, still the best single run
-3. measure TTA: 1 offset vs 3, on the 548 surface   hours, unlocks ensembling
-4. ensemble the best 2-3 checkpoints            the only lever the exchange
-                                                rate does not shrink
-5. only then B47, more slices, or new representation
+2. finish B53 with resume and workers           running
+3. recalibrate the teacher to the RUBRIC        free, and the target was wrong
+4. physical-mm crop + laterality normalisation  measured at +0.030 LB elsewhere
+5. per-finding attention pooling, 12 heads      the field's most repeated win
+6. ensemble by input representation, not backbone
 ```
+
+**Where this stands against the field.** Public inference-only notebooks score
+`0.899`; the reference baseline with its shipped weights scores `0.891`; the
+top is `0.952`. At `0.716` the gap is structural, not a matter of tuning.
+
+Three corrections to earlier reasoning in this document, all from
+`COMPETITION_SPEC_AND_FIELD_INTEL.md` and the 2026-09-08 field research:
+
+* **Resolution is not the lever, and may be negative.** A controlled arm
+  measured 384 px against 224 px at `-0.004` for 3.5x the cost. This project
+  runs at 448.
+* **DINOv3 is not the answer here.** DINOv3-ViT-B/16 sits at `0.771` on the
+  competition's own model board while DINOv2-**small** reaches `0.914`, and one
+  competitor measured v3 below v2 on an identical pipeline. The unrecorded
+  DINOv3 test in this repo is not worth repeating on that evidence.
+* **There is no shortcut to find.** Metadata-only models were publicly probed
+  at `0.65` random-fold, `0.60` scanner-grouped, and a metadata-only submission
+  scored `0.531`. The leaderboard reflects genuine image reading.
+
+Two operational facts that change planning: **five submissions per day**, not a
+scarce resource as assumed above; and the default Kaggle GPU is a P100 on which
+the preinstalled torch has no `sm_60` kernels, so T4 must be selected
+explicitly.
 
 **What the exchange rate does to these estimates.** A B53 that beats B52 by
 `+0.02` locally — a good result — predicts about `+0.005` hidden, landing near
