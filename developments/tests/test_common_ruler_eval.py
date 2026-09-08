@@ -24,9 +24,11 @@ from rsna_knee.b55_physical_geometry_training import B55_EXPERIMENT
 from rsna_knee.common_ruler_eval import (
     COMMON_RULER_VERSION,
     GEOMETRY_BY_EXPERIMENT,
+    b55_geometry_from,
     dataset_factory_for,
     geometry_for,
     per_target_table,
+    predict_split,
     report,
     score_one,
 )
@@ -60,8 +62,8 @@ def test_b42_lineage_gets_b52s_own_builder():
     assert dataset_factory_for({"experiment": B53_EXPERIMENT}) is _build_dataset
 
 
-def test_b55_gets_a_builder_carrying_its_own_crop_and_resolution():
-    built = dataset_factory_for({"experiment": B55_EXPERIMENT})
+def test_b55_gets_a_builder_carrying_its_own_crop_and_resolution(monkeypatch):
+    built = dataset_factory_for(_payload_from_a_real_b55_call(monkeypatch))
 
     assert built is not _build_dataset
     assert list(inspect.signature(built).parameters) == list(
@@ -69,30 +71,118 @@ def test_b55_gets_a_builder_carrying_its_own_crop_and_resolution():
     )
 
 
-def test_b55s_geometry_is_read_from_the_checkpoint_when_recorded():
-    """A later B55 run at a different crop must not be scored at this one's."""
-    from rsna_knee.b55_physical_geometry_training import b55_dataset_factory
+# --- B55's geometry comes from the checkpoint, in the shape B55 writes --------
+#
+# The first version of this read `model_state`, and the tests here agreed with
+# it -- because they built the payload by hand in the shape the code expected.
+# `model_state` carries the architecture, not the dataset, so a 150 mm crop at
+# a 224 reference side leaves no trace in it: such a run was scored at 130 mm
+# and 336, through eyes it had never been trained with, and the loss was
+# reported as a worse model.
+#
+# So the payload below is not written by hand. It is the one `train_b55`
+# actually passes, captured from the call.
 
-    payload = {
-        "experiment": B55_EXPERIMENT,
-        "model_state": {"crop_mm": 150.0, "reference_area": 224 * 224},
-    }
+
+def _payload_from_a_real_b55_call(monkeypatch, **kwargs) -> dict:
+    """The `extra` a real `train_b55` hands to `train_b52`, as a checkpoint."""
+    from rsna_knee import b55_physical_geometry_training as b55
+
+    seen: dict = {}
+    monkeypatch.setattr(
+        b55, "train_b52", lambda config, **passed: seen.update(passed)
+    )
+    b55.train_b55(
+        {},
+        data_root=".",
+        labels_root=".",
+        series_policy_path=".",
+        base_checkpoint=".",
+        domain_split=".",
+        **kwargs,
+    )
+    # `train_b52` writes the identity and then every `extra` field beside it.
+    return {**seen["identity"], **seen["extra"]}
+
+
+def test_b55s_geometry_is_read_from_the_checkpoint_a_real_run_writes(monkeypatch):
+    """A run at a different crop must not be scored at the default one's."""
+    payload = _payload_from_a_real_b55_call(
+        monkeypatch, crop_mm=150.0, reference_side=224
+    )
     built = dataset_factory_for(payload)
-    source = inspect.getsource(built)
 
-    # The closure carries them; check the values reached it rather than the text.
     assert built.__closure__ is not None
     values = {cell.cell_contents for cell in built.__closure__}
-    assert 150.0 in values
-    assert 224 * 224 in values
+    assert 150.0 in values, "the recorded crop never reached the dataset"
+    assert 224 * 224 in values, "the recorded resolution never reached it"
+    assert CROP_MM not in values, "it fell back to the default crop"
 
 
-def test_b55s_geometry_falls_back_to_the_defaults():
-    built = dataset_factory_for({"experiment": B55_EXPERIMENT})
-    values = {cell.cell_contents for cell in built.__closure__}
+def test_the_defaults_are_read_from_the_checkpoint_too(monkeypatch):
+    """Not guessed at -- they happen to match, and that is what hid the bug."""
+    payload = _payload_from_a_real_b55_call(monkeypatch)
+    values = {cell.cell_contents for cell in dataset_factory_for(payload).__closure__}
 
     assert CROP_MM in values
     assert B55_REFERENCE_SIDE**2 in values
+
+
+def test_the_geometry_is_read_out_of_the_field_b55_writes(monkeypatch):
+    payload = _payload_from_a_real_b55_call(monkeypatch, crop_mm=150.0)
+
+    assert "b55_geometry" in payload, "train_b55 no longer records its geometry"
+    assert b55_geometry_from(payload)["crop_mm"] == 150.0
+
+
+def test_a_b55_checkpoint_with_no_geometry_is_refused_rather_than_defaulted():
+    """Scoring at the defaults is exactly how the wrong geometry stayed quiet."""
+    with pytest.raises(ValueError, match="records no `b55_geometry`"):
+        dataset_factory_for({"experiment": B55_EXPERIMENT})
+
+    with pytest.raises(ValueError, match="records no `b55_geometry`"):
+        dataset_factory_for(
+            {
+                "experiment": B55_EXPERIMENT,
+                # The shape the broken version read. It is not the shape B55
+                # writes, and treating it as one is the bug.
+                "model_state": {"crop_mm": 150.0, "reference_area": 224 * 224},
+            }
+        )
+
+
+def test_a_side_and_an_area_that_disagree_are_refused():
+    with pytest.raises(ValueError, match="do not agree"):
+        b55_geometry_from(
+            {
+                "experiment": B55_EXPERIMENT,
+                "b55_geometry": {
+                    "crop_mm": 130.0,
+                    "reference_side": 336,
+                    "reference_area": 224 * 224,
+                },
+            }
+        )
+
+
+def test_the_area_is_derived_when_only_the_side_is_recorded():
+    geometry = b55_geometry_from(
+        {"b55_geometry": {"crop_mm": 130.0, "reference_side": 224}}
+    )
+
+    assert geometry["reference_area"] == 224 * 224
+
+
+def test_b42_checkpoints_need_no_geometry_field():
+    """B52 and B53 have one geometry and it is the builder's own."""
+    assert dataset_factory_for({"experiment": B52_EXPERIMENT}) is _build_dataset
+
+
+def test_the_score_records_the_numbers_it_scored_through():
+    """`geometry: b55` alone does not say which B55."""
+    source = inspect.getsource(score_one)
+    assert '"geometry_used"' in source
+    assert "b55_geometry_from(payload)" in source
 
 
 # --- the ruler is shared -------------------------------------------------------
@@ -368,3 +458,81 @@ def test_score_one_uses_the_table_rather_than_rebuilding_it():
     source = inspect.getsource(score_one)
     assert "per_target_table(scores)" in source
     assert "zip(TARGETS" not in source
+
+
+# --- inference builds no graph -------------------------------------------------
+#
+# `evaluate_split` carries `@torch.no_grad()`; `predict_split` was written as
+# "the same loop" and did not. Every forward pass then kept its activations
+# alive for a backward pass that never came -- the whole encoder over every
+# slice of every study -- and a 16 GB card runs out of memory while *scoring*,
+# which is the last place anyone looks. TTA multiplies it by the offsets and an
+# ensemble by the members, so the tools most likely to hit it are the new ones.
+
+
+def _run_predict_split(monkeypatch):
+    """Run the real loop with a stand-in model, and report what it saw."""
+    import types
+
+    import numpy as np
+    import torch
+
+    from rsna_knee import b37_highres_sparse_training as trimming
+    from rsna_knee import b42_constant_area_aspect_sparse_training as losses_module
+    from rsna_knee.b52_competition_training import TARGETS
+
+    seen: dict = {}
+    weight = torch.nn.Parameter(torch.zeros(len(TARGETS)))
+
+    def fake_losses(model, runtime, tensors, multiplier_t, aux_weight):
+        seen["grad_enabled"] = torch.is_grad_enabled()
+        logits = weight * 2.0
+        seen["logits_track_gradients"] = logits.requires_grad
+        return types.SimpleNamespace(logits=logits), None, None, None
+
+    monkeypatch.setattr(losses_module, "_losses", fake_losses)
+    monkeypatch.setattr(losses_module, "_move_study", lambda item, device: item)
+    monkeypatch.setattr(trimming, "_trim_host_memory", lambda: None)
+
+    generator = np.random.default_rng(0)
+    batch = [
+        {
+            "target": torch.as_tensor(
+                (generator.random(len(TARGETS)) > 0.5).astype("float32")
+            ),
+            "weight": torch.ones(len(TARGETS)),
+        }
+        for _ in range(6)
+    ]
+    model = torch.nn.Linear(1, 1)
+    runtime = types.SimpleNamespace(device="cpu")
+
+    predict_split(model, runtime, [batch], torch.ones(len(TARGETS)), 1.0)
+    return seen
+
+
+def test_prediction_runs_with_gradients_switched_off(monkeypatch):
+    assert _run_predict_split(monkeypatch)["grad_enabled"] is False
+
+
+def test_no_activation_graph_is_kept_for_a_backward_pass_that_never_comes(monkeypatch):
+    """The memory itself, not just the flag: a graph is what holds it."""
+    assert _run_predict_split(monkeypatch)["logits_track_gradients"] is False
+
+
+def test_the_stand_in_would_have_caught_the_original(monkeypatch):
+    """Outside the guard the same fake tracks gradients -- so the test can fail."""
+    import torch
+
+    with torch.enable_grad():
+        weight = torch.nn.Parameter(torch.zeros(3))
+        assert (weight * 2.0).requires_grad is True
+
+
+def test_both_scoring_loops_carry_the_same_guard():
+    from rsna_knee.b52_competition_training import evaluate_split
+
+    for function in (evaluate_split, predict_split):
+        assert getattr(function, "__wrapped__", None) is not None, (
+            f"{function.__name__} is no longer wrapped in an inference guard"
+        )

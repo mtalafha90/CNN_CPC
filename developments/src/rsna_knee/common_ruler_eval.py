@@ -131,19 +131,51 @@ def per_target_table(scores: dict) -> dict:
     }
 
 
+def b55_geometry_from(payload: dict) -> dict:
+    """The crop and the resolution this B55 checkpoint was actually trained at.
+
+    `train_b55` records them under `b55_geometry`, because that is the one
+    place they exist: the model's own `model_state` carries the architecture,
+    not the dataset, so a crop of 150 mm and a 224 reference side leave no
+    trace in it at all. Reading `model_state` and falling back to the defaults
+    -- which is what this did first -- silently scored such a run at 130 mm and
+    336, through eyes it had never been trained to use, and reported the
+    resulting loss as a worse model.
+
+    A B55 checkpoint with no recorded geometry is refused rather than guessed
+    at. `train_b55` has written the field since the run existed, so a payload
+    missing it is not an old checkpoint; it is one this tool cannot describe.
+    """
+    recorded = payload.get("b55_geometry")
+    if not isinstance(recorded, dict) or not recorded:
+        raise ValueError(
+            "this B55 checkpoint records no `b55_geometry`, so the crop and "
+            "the reference side it was trained at are unknown. Scoring it at "
+            "the defaults would measure a different model and report the "
+            "difference as a worse one. Re-run it with a `train_b55` that "
+            "writes the field, or add the geometry to the payload by hand "
+            "once you know what it was."
+        )
+
+    crop_mm = float(recorded["crop_mm"])
+    side = int(recorded["reference_side"])
+    area = int(recorded.get("reference_area", side * side))
+    if area != side * side:
+        raise ValueError(
+            f"the checkpoint says reference_side={side} and "
+            f"reference_area={area}, which do not agree ({side * side}). One "
+            "of them is wrong and guessing which would change the geometry."
+        )
+    return {"crop_mm": crop_mm, "reference_side": side, "reference_area": area}
+
+
 def dataset_factory_for(payload: dict):
     """The builder that reproduces this checkpoint's own input geometry."""
     if geometry_for(payload) == "b42":
         return _build_dataset
 
-    model_state = payload.get("model_state", {})
-    reference_area = int(
-        model_state.get("reference_area")
-        or payload.get("reference_area")
-        or 336 * 336
-    )
-    crop_mm = float(model_state.get("crop_mm") or payload.get("crop_mm") or 130.0)
-    return b55_dataset_factory(crop_mm, reference_area)
+    geometry = b55_geometry_from(payload)
+    return b55_dataset_factory(geometry["crop_mm"], geometry["reference_area"])
 
 
 def load_model(payload_path: Path, base_checkpoint: Path, device):
@@ -170,6 +202,7 @@ def load_model(payload_path: Path, base_checkpoint: Path, device):
     return model.eval().to(device), payload
 
 
+@torch.no_grad()
 def predict_split(model, runtime, loader, multiplier_t, aux_weight: float):
     """`evaluate_split`, keeping the probabilities it computes and discards.
 
@@ -178,6 +211,14 @@ def predict_split(model, runtime, loader, multiplier_t, aux_weight: float):
     invite a caller to unpack it wrongly. This is the same loop with the
     predictions returned, and `macro_auc` called on the same arrays so the
     score here and the score there cannot disagree.
+
+    **The decorator is part of that sameness.** Without it every forward pass
+    keeps its activations alive for a backward pass that never comes. On this
+    model that is the whole encoder over every slice of a study, and the
+    16 GB card runs out of memory -- during scoring, not training, which is
+    the last place anyone looks. `torch.no_grad` rather than
+    `torch.inference_mode` for one reason only: it is what `evaluate_split`
+    uses, and these two loops are supposed to be the same loop.
     """
     from .b42_constant_area_aspect_sparse_training import _losses, _move_study
     from .b37_highres_sparse_training import _trim_host_memory
@@ -326,6 +367,12 @@ def score_one(
         "experiment": payload.get("experiment"),
         "version": payload.get("version"),
         "geometry": geometry_for(payload),
+        # The numbers, not just the family name. A reader comparing two rows
+        # can then see that they were scored through the eyes each was
+        # trained with, rather than having to trust that they were.
+        "geometry_used": (
+            b55_geometry_from(payload) if geometry_for(payload) == "b55" else None
+        ),
         "studies": len(valid_uids),
         "macro_auc": float(scores["macro_auc"]),
         "per_target_auc": per_target_table(scores),

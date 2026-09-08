@@ -210,6 +210,13 @@ PYTHONPATH=developments/src python -m rsna_knee.common_ruler_eval $COMMON \
 
 Each is 548 studies with no training — minutes, not hours.
 
+Every row is scored through **the geometry its own checkpoint records**, read
+out of the `b55_geometry` field `train_b55` writes. So a second B55 run at a
+different `--crop-mm` or `--reference-side` is scored at *its* numbers, not at
+this run's, and the JSON says which under `geometry_used`. A B55 checkpoint
+carrying no recorded geometry is refused rather than scored at the defaults —
+the defaults happening to be right is exactly what would hide the mistake.
+
 ### Reading the pair, and what it cannot tell you
 
 **A common ruler compares complete models. It does not attribute.** B55's
