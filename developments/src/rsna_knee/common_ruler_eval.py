@@ -147,6 +147,46 @@ def load_model(payload_path: Path, base_checkpoint: Path, device):
     return model.eval().to(device), payload
 
 
+def predict_split(model, runtime, loader, multiplier_t, aux_weight: float):
+    """`evaluate_split`, keeping the probabilities it computes and discards.
+
+    Deliberately not a change to `evaluate_split`: that function is on the
+    training path of every B52-lineage run and returning more from it would
+    invite a caller to unpack it wrongly. This is the same loop with the
+    predictions returned, and `macro_auc` called on the same arrays so the
+    score here and the score there cannot disagree.
+    """
+    from .b42_constant_area_aspect_sparse_training import _losses, _move_study
+    from .b37_highres_sparse_training import _trim_host_memory
+    from .b52_competition_training import macro_auc
+
+    was_training = model.training
+    model.eval()
+    probabilities: list[np.ndarray] = []
+    targets: list[np.ndarray] = []
+    weights: list[np.ndarray] = []
+
+    for items in loader:
+        for item in items:
+            tensors = _move_study(item, runtime.device)
+            out, _total, _combined, _local = _losses(
+                model, runtime, tensors, multiplier_t, aux_weight
+            )
+            probabilities.append(
+                torch.sigmoid(out.logits.detach().float()).cpu().numpy().reshape(-1)
+            )
+            targets.append(item["target"].numpy().reshape(-1))
+            weights.append(item["weight"].numpy().reshape(-1))
+        _trim_host_memory()
+
+    model.train(was_training)
+    stacked = np.stack(probabilities)
+    target_array, weight_array = np.stack(targets), np.stack(weights)
+    scores = macro_auc(target_array, weight_array, stacked)
+    scores["studies"] = len(probabilities)
+    return stacked, target_array, weight_array, scores
+
+
 def score_one(
     checkpoint: str | Path,
     *,
@@ -158,8 +198,18 @@ def score_one(
     domain_split: str | Path,
     surface_cells: int | None = None,
     num_workers: int | None = None,
+    center_offset: int = 0,
+    with_predictions: bool = False,
 ) -> dict:
-    """One checkpoint, one labels root, the 548 unseen-scanner studies."""
+    """One checkpoint, one labels root, the 548 unseen-scanner studies.
+
+    `center_offset` shifts every slice centre together, which is what a TTA
+    view is. Averaging the probabilities from several offsets reproduces what
+    the submission path does, without any change to the model or the dataset.
+
+    `with_predictions` returns the per-study probabilities alongside the score,
+    which is what an ensemble needs and what `evaluate_split` computes and then
+    discards."""
     settings = dict(config)
     settings["data_root"] = str(Path(data_root).resolve())
     apply_worker_override(settings, num_workers)
@@ -224,6 +274,8 @@ def score_one(
         targets[indices],
         weights[indices],
     )
+    if int(center_offset) != 0:
+        dataset.center_offsets = (int(center_offset),)
     loader = DataLoader(
         dataset,
         batch_size=int(settings.get("b42_effective_batch", 2)),
@@ -233,14 +285,20 @@ def score_one(
         **loader_kwargs_with_sharing(runtime, seed=0),
     )
     multiplier = target_balance_multipliers(weights[indices])
-    scores = evaluate_split(
-        model,
-        runtime,
-        loader,
-        torch.as_tensor(multiplier, dtype=torch.float32, device=runtime.device),
-        float(settings.get("b37_local_aux_weight", 1.0)),
+    multiplier_t = torch.as_tensor(
+        multiplier, dtype=torch.float32, device=runtime.device
     )
-    return {
+    aux_weight = float(settings.get("b37_local_aux_weight", 1.0))
+
+    if with_predictions:
+        probabilities, scored_targets, scored_weights, scores = predict_split(
+            model, runtime, loader, multiplier_t, aux_weight
+        )
+    else:
+        scores = evaluate_split(model, runtime, loader, multiplier_t, aux_weight)
+        probabilities = scored_targets = scored_weights = None
+
+    result = {
         "checkpoint": str(Path(checkpoint).resolve()),
         "experiment": payload.get("experiment"),
         "version": payload.get("version"),
@@ -252,7 +310,13 @@ def score_one(
             for target, value in zip(TARGETS, scores["per_target_auc"])
         },
         "supervision_cells": int(surface.get("usable_cells", -1)),
+        "center_offset": int(center_offset),
     }
+    if with_predictions:
+        result["probabilities"] = probabilities
+        result["targets"] = scored_targets
+        result["weights"] = scored_weights
+    return result
 
 
 def report(result: dict) -> None:

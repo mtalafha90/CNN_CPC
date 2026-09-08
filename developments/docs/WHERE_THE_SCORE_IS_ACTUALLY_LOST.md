@@ -362,6 +362,19 @@ to the quarter-rate discount. Rank-averaging independent models buys decorrelati
 directly on the test set. It is also the only standard practice this project has
 never used.
 
+> **Two corrections, added 2026-09-08.**
+>
+> **The discount claim was an argument, not a measurement.** Variance-reduction
+> gains do tend to transfer better than fit gains, but nothing here measured
+> that, and it should not have been stated as though something had.
+>
+> **The checkpoints were not diverse enough to ensemble.** 086, 087 and B54
+> share a base checkpoint, an architecture, a seed and a split; rank-averaging
+> them lands between members rather than above. B53 and B55 are the first
+> genuinely different models this project has, and `ensemble_eval` now measures
+> member agreement beside any gain so this cannot be assumed again. See
+> `TTA_AND_ENSEMBLING.md`.
+
 **B54 v2 should not be submitted.** At `0.800665` local it sits `0.002` below
 086, and the exchange rate predicts `~0.708` — the same number 086 just
 returned, for a whole slot. The teacher rebuild is worth approximately nothing
