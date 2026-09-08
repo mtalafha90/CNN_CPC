@@ -128,7 +128,11 @@ from .data import backfill_series_metadata, load_series_csv
 from .dicom_coverage import require_dicom_coverage
 from .encoder_finetune import MAX_TRAINABLE_STAGES
 from .phase9_matched_supervision_training import load_phase9_checkpoint
-from .loader_throughput import add_worker_argument, apply_worker_override
+from .loader_throughput import (
+    add_worker_argument,
+    apply_worker_override,
+    loader_kwargs_with_sharing,
+)
 from .runtime import make_scaler, resolve_runtime
 from .training_resume import load_checkpoint, resume, save_checkpoint
 
@@ -578,7 +582,8 @@ def train_b53(
     print(f"[B53] augmentation: {policy.active() or 'none'}", flush=True)
     print(
         f"[B53] loader workers={loader_state['num_workers']} "
-        f"({loader_state['source']}), sharing={loader_state['sharing_strategy']}",
+        f"({loader_state['source']}), sharing={loader_state['sharing_strategy']}, "
+        f"worker={loader_state['worker_verified']}",
         flush=True,
     )
     print(f"[B53] split sha={domain_meta['sha256']}", flush=True)
@@ -683,7 +688,7 @@ def train_b53(
         shuffle=True,
         drop_last=False,
         collate_fn=collate_b42,
-        **runtime.loader_kwargs(seed=int(seed) + B52_LOADER_SEED_OFFSET),
+        **loader_kwargs_with_sharing(runtime, seed=int(seed) + B52_LOADER_SEED_OFFSET),
     )
     valid_loader = DataLoader(
         valid_dataset,
@@ -691,7 +696,7 @@ def train_b53(
         shuffle=False,
         drop_last=False,
         collate_fn=collate_b42,
-        **runtime.loader_kwargs(seed=int(seed) + B52_LOADER_SEED_OFFSET),
+        **loader_kwargs_with_sharing(runtime, seed=int(seed) + B52_LOADER_SEED_OFFSET),
     )
 
     model = B50AdaptedHierarchySparseMILResidual(

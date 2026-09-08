@@ -47,10 +47,42 @@ random state, precisely so that workers cannot repeat one another's numbers.
 
 `seed_worker` in `runtime.loader_kwargs` already reseeds each worker, and is
 unchanged here.
+
+## The parent process is not the one that matters
+
+Setting the strategy in the trainer looked sufficient and was not. The config
+uses `multiprocessing_context: spawn`, and a spawned worker is a **fresh Python
+process**: it imports the modules it needs and inherits none of the parent's
+global state, the sharing strategy included.
+
+The sender chooses how a tensor crosses the queue, and the sender is the worker.
+So a run could print `sharing=file_system`, have every worker use
+`file_descriptor` anyway, and die with
+
+```text
+RuntimeError: received 0 items of ancdata
+  ... in rebuild_storage_fd
+```
+
+which is the descriptor table running out — the exact failure the strategy
+exists to prevent, under a log line saying it had been prevented.
+
+The fix is `worker_init`, which runs *inside* each worker. It is a module-level
+function so `spawn` can pickle it by reference and the child re-imports this
+module to call it.
+
+`verify_worker_sharing` then asks a real worker what strategy it ended up with,
+rather than asking the parent about itself. That is the same shape as B53's
+augmentation preflight, and for the same reason: a claim nobody measured is how
+B52 trained on identical pixels for 27 hours.
 """
+
 from __future__ import annotations
 
 import torch
+from torch.utils.data import DataLoader, Dataset
+
+from .runtime import seed_worker
 
 #: What B53 measured, per epoch on 3,801 studies, on an RTX A4500.
 MEASURED_HOURS_WITHOUT_WORKERS = 4.5
@@ -79,6 +111,74 @@ def use_file_system_sharing() -> str:
     if SHARING_STRATEGY in available:
         torch.multiprocessing.set_sharing_strategy(SHARING_STRATEGY)
     return torch.multiprocessing.get_sharing_strategy()
+
+
+def worker_init(worker_id: int) -> None:
+    """Runs inside each DataLoader worker, before it produces anything.
+
+    A module-level function so `spawn` can pickle it by reference: the child
+    re-imports this module and calls it, which is the only way a setting can
+    reach a process that inherits nothing.
+
+    It sets the sharing strategy first, then delegates to `runtime.seed_worker`
+    so the seeding contract every other experiment relies on is unchanged.
+    """
+    use_file_system_sharing()
+    seed_worker(worker_id)
+
+
+def _first(batch):
+    """Module level, not a lambda: `spawn` has to pickle the collate function."""
+    return batch[0]
+
+
+class _StrategyProbe(Dataset):
+    """Reports the sharing strategy of whichever process reads it.
+
+    Module level, not a closure, because a spawned worker has to import it.
+    """
+
+    def __len__(self) -> int:
+        return 2
+
+    def __getitem__(self, index: int) -> str:
+        return torch.multiprocessing.get_sharing_strategy()
+
+
+def verify_worker_sharing(num_workers: int, context: str | None) -> dict:
+    """Ask a real worker what strategy it has, rather than asking the parent.
+
+    Costs a second or two and starts a genuine worker process under the same
+    context the run will use. Without it a trainer can print
+    `sharing=file_system`, be describing only itself, and die hours later when
+    the descriptor table runs out.
+    """
+    if int(num_workers) < 1:
+        return {"checked": False, "reason": "no workers to check"}
+
+    loader = DataLoader(
+        _StrategyProbe(),
+        batch_size=1,
+        num_workers=1,
+        worker_init_fn=worker_init,
+        multiprocessing_context=context or None,
+        collate_fn=_first,
+    )
+    try:
+        observed = next(iter(loader))
+    finally:
+        del loader
+
+    if observed != SHARING_STRATEGY:
+        raise RuntimeError(
+            f"a DataLoader worker reports sharing strategy {observed!r}, not "
+            f"{SHARING_STRATEGY!r}. Under the {context!r} start method a worker "
+            "inherits nothing from this process, so setting the strategy here "
+            "does not reach it, and the run would fail with 'received 0 items "
+            "of ancdata' once the descriptor table filled. Re-run with "
+            "--num-workers 0."
+        )
+    return {"checked": True, "worker_strategy": observed, "context": context}
 
 
 def apply_worker_override(settings: dict, num_workers: int | None) -> dict:
@@ -113,11 +213,29 @@ def apply_worker_override(settings: dict, num_workers: int | None) -> dict:
             "a run, which is the failure the strategy exists to prevent. "
             "Re-run with --num-workers 0 rather than risking it."
         )
+    # The parent's strategy is not the one that decides. Ask a worker.
+    verified = verify_worker_sharing(
+        workers, settings.get("multiprocessing_context", "spawn")
+    )
     return {
         "num_workers": workers,
         "source": "command line",
         "sharing_strategy": strategy,
+        "worker_verified": verified,
     }
+
+
+def loader_kwargs_with_sharing(runtime, *, seed: int | None = None) -> dict:
+    """`runtime.loader_kwargs`, with the worker init that sets the strategy.
+
+    `loader_kwargs` installs `seed_worker`, which seeds but does not share.
+    This replaces it with `worker_init`, which does both. Everything else the
+    runtime decided is passed through untouched.
+    """
+    kwargs = runtime.loader_kwargs(seed=seed)
+    if int(kwargs.get("num_workers", 0)) > 0:
+        kwargs["worker_init_fn"] = worker_init
+    return kwargs
 
 
 def add_worker_argument(parser) -> None:

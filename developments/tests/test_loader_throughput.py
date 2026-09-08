@@ -150,6 +150,166 @@ def test_setting_the_strategy_returns_what_is_actually_in_force():
     assert use_file_system_sharing() == torch.multiprocessing.get_sharing_strategy()
 
 
+# --- the process that actually matters ----------------------------------------
+#
+# The first version of this module set the strategy in the parent and every test
+# above passed. B53 then died at the first validation pass with
+#
+#   RuntimeError: received 0 items of ancdata   ... in rebuild_storage_fd
+#
+# under a log line reading `sharing=file_system`. Under `spawn` a worker is a
+# fresh process that inherits none of the parent's globals, and the sender is
+# what decides how a tensor crosses the queue. Every test that asks the parent
+# about itself is measuring the one process that was never the problem.
+
+
+@pytest.mark.parametrize("context", ["spawn", "fork"])
+def test_a_real_worker_reports_file_system_sharing(context):
+    """Starts an actual worker under both start methods and asks it."""
+    from rsna_knee.loader_throughput import verify_worker_sharing
+
+    torch.multiprocessing.set_sharing_strategy("file_descriptor")
+    result = verify_worker_sharing(1, context)
+
+    assert result["checked"] is True
+    assert result["worker_strategy"] == SHARING_STRATEGY
+
+
+def test_a_worker_without_the_init_would_not_have_been_caught():
+    """The bug, reproduced: a spawned worker inheriting nothing.
+
+    This is what the trainers did before `worker_init` existed, and it is why
+    the parent-side assertions could all pass while the run died.
+    """
+    from torch.utils.data import DataLoader
+
+    from rsna_knee.loader_throughput import _first, _StrategyProbe
+
+    torch.multiprocessing.set_sharing_strategy(SHARING_STRATEGY)
+    loader = DataLoader(
+        _StrategyProbe(),
+        batch_size=1,
+        num_workers=1,
+        multiprocessing_context="spawn",
+        collate_fn=_first,
+    )
+    observed = next(iter(loader))
+
+    assert observed != SHARING_STRATEGY, (
+        "a spawned worker inherited the parent's strategy, so this test no "
+        "longer reproduces the bug and worker_init may be redundant"
+    )
+
+
+def _init_that_does_not_share(worker_id: int) -> None:
+    """A worker init that seeds but does not set the strategy: the old behaviour.
+
+    Module level because `spawn` pickles the init function by reference, which
+    is the same constraint `worker_init` itself has to satisfy.
+    """
+    return None
+
+
+def test_the_verification_refuses_a_worker_on_the_wrong_strategy(monkeypatch):
+    """The guard must fail the run, not report a comfortable string."""
+    from rsna_knee import loader_throughput
+
+    monkeypatch.setattr(loader_throughput, "worker_init", _init_that_does_not_share)
+    with pytest.raises(RuntimeError, match="received 0 items"):
+        loader_throughput.verify_worker_sharing(1, "spawn")
+
+
+def test_zero_workers_skips_the_check():
+    """Nothing crosses a queue, so there is nothing to verify."""
+    from rsna_knee.loader_throughput import verify_worker_sharing
+
+    assert verify_worker_sharing(0, "spawn")["checked"] is False
+
+
+def test_the_override_verifies_a_worker_rather_than_itself():
+    """The whole lesson, pinned: the parent's strategy is not the evidence."""
+    state = apply_worker_override({"multiprocessing_context": "spawn"}, 2)
+
+    assert state["worker_verified"]["checked"] is True
+    assert state["worker_verified"]["worker_strategy"] == SHARING_STRATEGY
+
+
+def test_the_worker_init_also_seeds():
+    """It replaces seed_worker, so it must not drop what seed_worker did."""
+    import inspect
+
+    from rsna_knee.loader_throughput import worker_init
+
+    assert "seed_worker" in inspect.getsource(worker_init)
+
+
+def test_the_loader_kwargs_install_the_worker_init():
+    from rsna_knee.loader_throughput import loader_kwargs_with_sharing, worker_init
+    from rsna_knee.runtime import RuntimeConfig
+
+    runtime = RuntimeConfig(
+        device=torch.device("cpu"),
+        amp_dtype=None,
+        use_scaler=False,
+        num_workers=4,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+        visible_gpus=0,
+        device_name="cpu",
+        multiprocessing_context="spawn",
+    )
+    kwargs = loader_kwargs_with_sharing(runtime, seed=1)
+
+    assert kwargs["worker_init_fn"] is worker_init
+    assert kwargs["num_workers"] == 4
+
+
+def test_the_loader_kwargs_add_nothing_when_there_are_no_workers():
+    """A workerless run must be byte-identical to what it was."""
+    from rsna_knee.loader_throughput import loader_kwargs_with_sharing
+    from rsna_knee.runtime import RuntimeConfig
+
+    runtime = RuntimeConfig(
+        device=torch.device("cpu"),
+        amp_dtype=None,
+        use_scaler=False,
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=None,
+        visible_gpus=0,
+        device_name="cpu",
+        multiprocessing_context=None,
+    )
+    wrapped = loader_kwargs_with_sharing(runtime, seed=1)
+    plain = runtime.loader_kwargs(seed=1)
+
+    # `generator` is a fresh object each call, so compare everything else and
+    # then the generator by the seed it carries.
+    assert set(wrapped) == set(plain)
+    assert {k: v for k, v in wrapped.items() if k != "generator"} == {
+        k: v for k, v in plain.items() if k != "generator"
+    }
+    assert wrapped["generator"].initial_seed() == plain["generator"].initial_seed()
+    assert "worker_init_fn" not in wrapped
+
+
+@pytest.mark.parametrize(
+    "module", ["b52_competition_training", "b53_augmented_training"]
+)
+def test_the_trainers_build_loaders_with_the_sharing_aware_kwargs(module):
+    """Both loaders in both trainers; the validation one is where B53 died."""
+    import importlib
+
+    source = inspect.getsource(importlib.import_module(f"rsna_knee.{module}"))
+
+    assert source.count("loader_kwargs_with_sharing(runtime") == 2
+    assert "**runtime.loader_kwargs(" not in source, (
+        "a loader still uses the plain kwargs, so its workers seed but do not share"
+    )
+
+
 # --- the flag -----------------------------------------------------------------
 
 
