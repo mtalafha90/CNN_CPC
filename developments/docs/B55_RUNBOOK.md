@@ -162,10 +162,7 @@ Three things it *can* do:
   controls, so it is the one comparison the teacher change does not corrupt.
 * **Show the training curve.** Whether B55 converges, plateaus or overfits is
   visible regardless of which labels the surface uses.
-* **Be made comparable, with a tool that does not yet exist.** Scoring B55's
-  checkpoint against the *old* labels on the same 548 studies would restore a
-  common ruler and isolate the geometry. That evaluator has not been built. Ask
-  for it before drawing a local conclusion from B55, rather than after.
+* **Be made comparable — `common_ruler_eval` now does this.** See step 4.
 
 Given the measured exchange rate — local movement reaches Kaggle at about a
 quarter — the honest expectation is that the crop and laterality bundle is worth
@@ -178,3 +175,68 @@ Do not tune the crop millimetres, the reference side, the epoch count or the
 rubric vocabulary against B55's score. Three changes at once already means the
 result cannot attribute; tuning against it would make the next result
 uninterpretable as well.
+
+## Step 4 — score every checkpoint on one ruler
+
+Because the teacher changed, B55's own validation number is not on the same
+scale as B52's or B53's. `common_ruler_eval` fixes that: **one labels root, one
+study set, each model's own geometry.** Same answer key, same studies, each
+model seeing what it was trained to see — so the difference is the model.
+
+Run it twice, once per ruler, and read the pair:
+
+```bash
+cd /media/talafha/Disk_1/CNN_CPC
+export COMMON="--data-root /media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection \
+  --series-policy runs/020_Experiment_B12_variable_series/b12_variable_series/audit/series_policy.json \
+  --base-checkpoint runs/067_Experiment_LLM_FILL_ALL_b6_preserved_llm_fill_all_targets/b6_plus_llm_fill_all_ft1/train/llm-filled/model.pt \
+  --domain-split runs/083_Experiment_B50_selection_gate/b50_ordered_slice_selection_split \
+  --num-workers 6 \
+  --checkpoint runs/087_Experiment_B52_full_data/b52_best_model.pt \
+  --checkpoint runs/088_Experiment_B53_augmentation_applied/b53_best_model.pt \
+  --checkpoint runs/089_Experiment_B55_physical_geometry/b52_best_model.pt"
+
+# ruler 1: the old teacher, the scale B52's 0.834998 is already on
+PYTHONPATH=developments/src python -m rsna_knee.common_ruler_eval $COMMON \
+  --labels-root runs/067_Experiment_LLM_FILL_ALL_b6_preserved_llm_fill_all_targets/b6_plus_llm_fill_all \
+  --out-json runs/089_Experiment_B55_physical_geometry/ruler_old_teacher.json
+
+# ruler 2: the regraded teacher, the target the competition actually scores
+PYTHONPATH=developments/src python -m rsna_knee.common_ruler_eval $COMMON \
+  --labels-root runs/089_Experiment_B55_physical_geometry/teacher_rubric \
+  --expected-supervision-cells <the count step 1 reported> \
+  --out-json runs/089_Experiment_B55_physical_geometry/ruler_rubric.json
+```
+
+Each is 548 studies with no training — minutes, not hours.
+
+### Reading the pair
+
+```text
+ruler = old teacher       does B55's geometry help, on the scale B52 and B53
+                          were selected on? This isolates crop + laterality +
+                          resolution from the teacher entirely.
+
+ruler = regraded teacher  which model is better at the target the competition
+                          actually scores? No historical numbers exist on this
+                          scale, so it is B52 vs B53 vs B55 and nothing else.
+```
+
+If B55 wins on the old ruler, the geometry is worth having independently of the
+teacher. If it wins only on the regraded one, the gain is the teacher, and the
+geometry is neutral. If it loses on both, the bundle is not working and the
+submission slot is better spent elsewhere.
+
+### What this is not
+
+It is **not** a selection. Every checkpoint in that table was already chosen by
+its own run on its own surface. Promoting the winner of this comparison would be
+the post-hoc selection the archive forbids, and the tool prints that under every
+table it produces.
+
+### The guard it keeps
+
+`--expected-supervision-cells` is required when the ruler is a regraded teacher
+whose usable-cell count differs from the frozen 34,010. Two label sets with
+different cell counts are not the same ruler in the sense that matters, so the
+count is declared rather than allowed to drift silently.
