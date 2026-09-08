@@ -186,6 +186,37 @@ def _fold(text: str) -> str:
     return re.sub(r"\s+", " ", folded.replace("-", " ").replace("/", " "))
 
 
+_META = set(r"\[](){}?*+|^$")
+
+
+def _anchor_spans(folded: str, anchor: str) -> list[int]:
+    """Where the finding is mentioned, for a literal *or* a regex anchor.
+
+    The teacher's own vocabulary (`V13_PATTERNS`) is regular expressions --
+    `\\bpatella\\b`, not `patella`. Searching for those literally matches
+    nothing, so the gate would have fired on zero cells while reporting
+    success, which is the failure this archive keeps paying for.
+
+    A pattern with no metacharacters is folded and matched literally, so a
+    plain word list still works and accented spellings still fold.
+    """
+    if any(ch in _META for ch in anchor):
+        try:
+            return [m.start() for m in re.finditer(anchor, folded, re.IGNORECASE)]
+        except re.error:
+            pass  # fall through and treat it as a literal
+    needle = _fold(anchor)
+    if not needle:
+        return []
+    starts, at = [], 0
+    while True:
+        found = folded.find(needle, at)
+        if found < 0:
+            return starts
+        starts.append(found)
+        at = found + len(needle)
+
+
 def _windows(text: str, anchors: tuple[str, ...]) -> list[tuple[str, int]]:
     """The text around each mention of the finding, and where the finding is.
 
@@ -198,18 +229,10 @@ def _windows(text: str, anchors: tuple[str, ...]) -> list[tuple[str, int]]:
     folded = _fold(text)
     spans: list[tuple[str, int]] = []
     for anchor in anchors:
-        start = 0
-        needle = _fold(anchor)
-        if not needle:
-            continue
-        while True:
-            found = folded.find(needle, start)
-            if found < 0:
-                break
+        for found in _anchor_spans(folded, str(anchor)):
             lo = max(0, found - CONTEXT_CHARS)
-            hi = min(len(folded), found + len(needle) + CONTEXT_CHARS)
+            hi = min(len(folded), found + CONTEXT_CHARS)
             spans.append((folded[lo:hi], found - lo))
-            start = found + len(needle)
     return spans
 
 

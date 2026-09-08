@@ -275,3 +275,66 @@ def test_a_refusal_says_why():
 def test_an_ungated_target_says_so():
     reason = is_sub_threshold("Fracture", "Tiny fracture.", ("fracture",))["reason"]
     assert "no published threshold" in reason
+
+
+# --- the teacher's vocabulary is regexes, not words ---------------------------
+#
+# V13_PATTERNS holds entries like r"\bpatella\b". Searching for those as literal
+# substrings matches nothing, so the gate would have reported success while
+# firing on zero cells. This is the test that would have caught it.
+
+
+def test_a_regex_anchor_is_matched_as_a_regex():
+    assert _sub("Effusion", "Trace joint effusion.", (r"\beffusion\b",))
+
+
+def test_a_regex_anchor_still_respects_the_nearer_word():
+    assert not _sub("Effusion", "Large joint effusion.", (r"\beffusion\b",))
+
+
+def test_an_alternation_anchor_works():
+    pattern = (r"\b(?:effusion|epanchement)\b",)
+    assert _sub("Effusion", "Minimal epanchement articulaire.", pattern)
+
+
+def test_a_word_boundary_is_honoured():
+    """`\\bacl\\b` must not fire inside 'tentacle'."""
+    assert not _sub("ACL", "Mild tentacle-like artefact.", (r"\bacl\b",))
+
+
+def test_a_plain_word_anchor_still_works():
+    """A literal list must keep working, accents and all."""
+    assert _sub("Effusion", "Leve derrame articular.", ("derrame",))
+
+
+def test_an_invalid_regex_falls_back_to_a_literal():
+    """An unbalanced bracket must not crash a whole teacher rebuild."""
+    assert _sub("Effusion", "Trace effusion[ here.", ("effusion[",))
+
+
+def test_the_real_teacher_vocabulary_matches_real_text():
+    """The end-to-end check: the teacher's own anchors, unmodified."""
+    from rsna_knee.b55_rubric_teacher import teacher_anchors
+
+    anchors = teacher_anchors()
+    assert _sub("Effusion", "There is a trace joint effusion.", anchors["Effusion"])
+    assert not _sub("Effusion", "Large joint effusion.", anchors["Effusion"])
+
+
+def test_every_target_has_anchors_to_look_for():
+    """A target with no anchors is a gate that silently never fires."""
+    from rsna_knee.b55_rubric_teacher import teacher_anchors
+    from rsna_knee.constants import TARGETS
+
+    anchors = teacher_anchors()
+    for target in TARGETS:
+        assert len(anchors.get(target, ())) >= 2, target
+
+
+def test_the_gated_targets_all_have_anchors():
+    """SUB_THRESHOLD and the anchor vocabulary must agree on what exists."""
+    from rsna_knee.b55_rubric_teacher import teacher_anchors
+
+    anchors = teacher_anchors()
+    for target in SUB_THRESHOLD:
+        assert anchors.get(target), f"{target} is gated but has nothing to find"

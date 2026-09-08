@@ -376,10 +376,23 @@ def train_b52(
     spacing_geometry_csv: str | Path | None = None,
     expected_supervision_cells: int | None = None,
     num_workers: int | None = None,
+    dataset_factory=None,
+    identity: dict | None = None,
     out_root: str | Path = B52_RUN_ROOT,
     preflight_only: bool = False,
 ) -> Path | None:
-    """Train to convergence and keep the best epoch on unseen scanners."""
+    """Train to convergence and keep the best epoch on unseen scanners.
+
+    `dataset_factory` replaces `_build_dataset`, so a descendant can change the
+    geometry without copying this function. It defaults to B52's own, which
+    keeps every existing run byte-identical.
+
+    `identity` overrides what the checkpoint calls itself. B54 reused B52's
+    name and left an artefact whose `experiment` field describes a different
+    run; a descendant should say what it is.
+    """
+    build_dataset = dataset_factory or _build_dataset
+    named = {"experiment": B52_EXPERIMENT, "version": B52_VERSION, **(identity or {})}
     settings = dict(config)
     settings["data_root"] = str(Path(data_root).resolve())
     settings["seed"] = int(seed)
@@ -502,7 +515,7 @@ def train_b52(
             "validation": spacing_summary(valid_index),
         }
 
-    train_dataset = _build_dataset(
+    train_dataset = build_dataset(
         train_uids,
         train_index,
         train_config,
@@ -511,7 +524,7 @@ def train_b52(
         train_weights,
         spacing=use_spacing,
     )
-    valid_dataset = _build_dataset(
+    valid_dataset = build_dataset(
         valid_uids,
         valid_index,
         valid_config,
@@ -755,8 +768,8 @@ def train_b52(
             best_epoch = epoch
             _check_spacing_learned()
             payload = {
-                "experiment": B52_EXPERIMENT,
-                "version": B52_VERSION,
+                "experiment": named["experiment"],
+                "version": named["version"],
                 "selected_epoch": epoch,
                 "selection_metric": f"macro_auc on {B52_PRIMARY_SPLIT}",
                 "selection_value": best_macro,

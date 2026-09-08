@@ -1,0 +1,203 @@
+"""B55's trainer, and the two hooks it needed from B52.
+
+B53 copied B52's loop to change one thing, and the copy is now several hundred
+lines that have to be kept in step by hand. B55 does not: `train_b52` gained a
+`dataset_factory` and an `identity`, both defaulting to B52's own, so B55 is
+thin and a later correction to the loop reaches both runs.
+
+The tests here are mostly about that defaulting. A hook that changed B52's
+behaviour when nobody passed it would silently alter every completed run's
+successor.
+"""
+
+from __future__ import annotations
+
+import inspect
+
+import pytest
+
+from rsna_knee.b42_constant_area_aspect_sparse_mil import B42ConstantAreaAspectDataset
+from rsna_knee.b52_competition_training import (
+    B52_EXPERIMENT,
+    B52_VERSION,
+    _build_dataset,
+    train_b52,
+)
+from rsna_knee.b55_physical_geometry import (
+    B55_REFERENCE_SIDE,
+    B55PhysicalGeometryDataset,
+)
+from rsna_knee.b55_physical_geometry_training import (
+    B55_DEFAULT_EPOCHS,
+    B55_EXPERIMENT,
+    B55_VERSION,
+    b55_dataset_factory,
+    train_b55,
+)
+from rsna_knee.physical_crop import CROP_MM
+
+
+# --- the hooks default to B52's own behaviour ---------------------------------
+
+
+def test_both_hooks_default_to_none():
+    """So every B52 run made before they existed is byte-identical."""
+    parameters = inspect.signature(train_b52).parameters
+
+    assert parameters["dataset_factory"].default is None
+    assert parameters["identity"].default is None
+
+
+def test_the_default_factory_is_b52s_builder():
+    source = inspect.getsource(train_b52)
+    assert "build_dataset = dataset_factory or _build_dataset" in source
+
+
+def test_the_default_identity_is_b52s_own():
+    source = inspect.getsource(train_b52)
+    assert '"experiment": B52_EXPERIMENT' in source
+    assert '"version": B52_VERSION' in source
+
+
+def test_both_dataset_sites_go_through_the_hook():
+    """The validation loader too: B55's geometry must reach what it scores."""
+    source = inspect.getsource(train_b52)
+
+    assert source.count("build_dataset(") == 2
+    assert "_build_dataset(" not in source.split("build_dataset = ")[1], (
+        "a construction site still bypasses the hook"
+    )
+
+
+def test_the_checkpoint_writes_the_resolved_identity():
+    source = inspect.getsource(train_b52)
+    assert '"experiment": named["experiment"]' in source
+    assert '"version": named["version"]' in source
+
+
+# --- the factory ---------------------------------------------------------------
+
+
+def test_the_factory_matches_the_builder_it_replaces():
+    """A mismatched signature would fail inside train_b52, hours in."""
+    built = b55_dataset_factory(CROP_MM, B55_REFERENCE_SIDE**2)
+
+    assert list(inspect.signature(built).parameters) == list(
+        inspect.signature(_build_dataset).parameters
+    )
+
+
+def test_the_factory_builds_b55s_dataset():
+    built = b55_dataset_factory(CROP_MM, B55_REFERENCE_SIDE**2)
+    source = inspect.getsource(built)
+
+    assert "B55PhysicalGeometryDataset" in source
+    assert issubclass(B55PhysicalGeometryDataset, B42ConstantAreaAspectDataset), (
+        "every frozen contract that tests for the B42 dataset must still hold"
+    )
+
+
+def test_the_factory_carries_the_crop_and_the_resolution():
+    source = inspect.getsource(b55_dataset_factory(CROP_MM, B55_REFERENCE_SIDE**2))
+    assert "crop_mm=float(crop_mm)" in source
+    assert "reference_area=int(reference_area)" in source
+
+
+def test_the_factory_refuses_the_spacing_conditioning():
+    """It was tested at 12.65% of its own sum and measured -0.004908. Closed."""
+    built = b55_dataset_factory(CROP_MM, B55_REFERENCE_SIDE**2)
+
+    with pytest.raises(ValueError, match="does not carry the spacing"):
+        built(None, None, None, None, None, None, spacing=True)
+
+
+# --- B55's identity, which B54 did not have -----------------------------------
+
+
+def test_b55_names_itself_rather_than_borrowing_b52s():
+    """B54's checkpoint says B52 and that is still an open cleanup task."""
+    assert B55_EXPERIMENT != B52_EXPERIMENT
+    assert B55_VERSION != B52_VERSION
+    assert "B55" in B55_EXPERIMENT
+
+
+def test_the_trainer_passes_its_own_identity():
+    source = inspect.getsource(train_b55)
+    assert 'identity={"experiment": B55_EXPERIMENT, "version": B55_VERSION}' in source
+
+
+# --- what B55 inherits rather than restates -----------------------------------
+
+
+def test_the_trainer_calls_b52_rather_than_copying_it():
+    """B53 copied the loop; B55 must not, or the two drift."""
+    source = inspect.getsource(train_b55)
+
+    assert "return train_b52(" in source
+    assert "for epoch in range" not in source, "B55 must not own an epoch loop"
+    assert "save_checkpoint" not in source
+
+
+def test_the_rates_and_stages_are_b52s_constants():
+    source = inspect.getsource(train_b55)
+    for name in (
+        "B52_DEFAULT_ENCODER_STAGES",
+        "B52_DEFAULT_ENCODER_LR_SCALE",
+        "B52_DEFAULT_HIERARCHY_LR_SCALE",
+    ):
+        assert name in source, f"{name} must be inherited, not restated"
+
+
+def test_the_default_schedule_is_eight_epochs():
+    assert B55_DEFAULT_EPOCHS == 8
+
+
+def test_the_defaults_are_the_measured_ones():
+    parameters = inspect.signature(train_b55).parameters
+
+    assert parameters["crop_mm"].default == CROP_MM == 130.0
+    assert parameters["reference_side"].default == B55_REFERENCE_SIDE == 336
+    assert parameters["all_data"].default is True
+
+
+def test_the_supervision_guard_is_passed_through_not_defeated():
+    """B55 must be able to declare a new count, but not skip the check."""
+    parameters = inspect.signature(train_b55).parameters
+    assert parameters["expected_supervision_cells"].default is None
+
+    source = inspect.getsource(train_b55)
+    assert "expected_supervision_cells=expected_supervision_cells" in source
+
+
+def test_the_teacher_is_not_wired_in():
+    """It arrives through --labels-root, so the two decisions stay separable."""
+    source = inspect.getsource(train_b55)
+    assert "rebuild(" not in source
+    assert "apply_rubric" not in source
+
+
+# --- the command line ---------------------------------------------------------
+
+
+def test_the_command_line_renders(capsys, monkeypatch):
+    import sys
+
+    from rsna_knee import b55_physical_geometry_training as b55
+
+    monkeypatch.setattr(sys, "argv", ["b55", "--help"])
+    with pytest.raises(SystemExit) as exit_code:
+        b55.main()
+
+    assert exit_code.value.code == 0
+    printed = capsys.readouterr().out
+    for flag in ("--crop-mm", "--reference-side", "--num-workers", "--gate-split"):
+        assert flag in printed
+
+
+def test_all_data_is_the_default_and_gate_split_is_the_opt_out():
+    source = inspect.getsource(
+        __import__(
+            "rsna_knee.b55_physical_geometry_training", fromlist=["main"]
+        ).main
+    )
+    assert "all_data=not args.gate_split" in source
