@@ -57,6 +57,47 @@ been shown, repeatedly, not to point at the target. That is a more serious
 problem than any missing architecture, because it means further careful
 experiments will keep producing confident local numbers that do not arrive.
 
+### The exchange rate, measured
+
+**Added 2026-09-08.** The 1,447-study control was submitted and scored
+**0.708**. That gives the first clean local-to-hidden calibration this project
+has ever had:
+
+```text
+                     training studies    local (548)    Kaggle
+086  B52             1,447               0.802666       0.708
+087  B52             3,801               0.834998       0.716
+                                        +0.032332      +0.008
+```
+
+Same architecture, same teacher, same split, same 548 validation studies. The
+**only** difference is 2.6 times the training data, and both ends were measured
+on both surfaces.
+
+**Local movement reaches the leaderboard at roughly one quarter.** `+0.032`
+became `+0.008`. That single ratio does more work than any result in this
+archive, because every decision here is made on the local surface and nobody
+knew what its numbers were worth.
+
+Two consequences, both uncomfortable:
+
+**More data is not the lever.** 2.6x the studies bought `+0.008`. The population
+caveat attached to a dozen results in this archive is worth less than a
+hundredth of AUC, and the remaining data is already in use.
+
+**The gap cannot be closed on this surface.** Reaching `0.952` from `0.716`
+needs `+0.236` hidden. At the measured exchange rate that is roughly `+0.94`
+local — from a surface already sitting at `0.835`, whose ceiling is `1.0`. The
+arithmetic does not work. **Whatever the leaders are doing does not show up on
+this validation surface at all**, which means it is either a different label
+process, a different data regime, or a capability this pipeline does not have.
+
+One caveat, stated so it is not forgotten: this is one comparison between two
+similar models, and `0.008` on ~1,300 studies is only four times the `0.002`
+this archive already reads as noise. The ratio is a working estimate, not a
+constant. But its direction has now been confirmed four times, and never once
+contradicted.
+
 ### Two readings, and they lead to different work
 
 **Reading A — the surfaces are wrong and the hidden test is reachable.** The
@@ -232,14 +273,31 @@ new experiment rather than a tweak, so it does not belong in the next few runs.
 
 ## The recommended order
 
+Revised 2026-09-08, after the exchange rate was measured.
+
 ```text
-1. finish the current B54 v2 run and submit it       in progress
-2. port the worker fix                               small, multiplies everything
-3. measure TTA: 1 offset vs 3, on the 548 surface    hours, unlocks ensembling
-4. finish B53 with resume and workers                ~10 h, the real question
-5. ensemble the best 2-3 checkpoints                 near-certain gain
-6. only then B47, more slices, or new representation
+1. port the worker fix                          DONE
+2. finish B53 with resume and workers           ~25 h, still the best single run
+3. measure TTA: 1 offset vs 3, on the 548 surface   hours, unlocks ensembling
+4. ensemble the best 2-3 checkpoints            the only lever the exchange
+                                                rate does not shrink
+5. only then B47, more slices, or new representation
 ```
+
+**What the exchange rate does to these estimates.** A B53 that beats B52 by
+`+0.02` locally — a good result — predicts about `+0.005` hidden, landing near
+`0.721`. Worth having and worth knowing, but it does not change the picture.
+
+**Ensembling is now the most interesting item on the list**, because it is the
+one gain that is *not* measured on the local surface and therefore not subject
+to the quarter-rate discount. Rank-averaging independent models buys decorrelation
+directly on the test set. It is also the only standard practice this project has
+never used.
+
+**B54 v2 should not be submitted.** At `0.800665` local it sits `0.002` below
+086, and the exchange rate predicts `~0.708` — the same number 086 just
+returned, for a whole slot. The teacher rebuild is worth approximately nothing
+on this surface, which three measurements now agree on.
 
 Steps 2 to 5 are all standard practice that this project has skipped while
 running eleven careful experiments on mechanisms an order of magnitude smaller
