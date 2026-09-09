@@ -14,10 +14,12 @@ import pandas as pd
 import pytest
 
 from rsna_knee.b55_rubric_teacher import (
+    REPORT_COLUMNS,
     STATE_VALUE,
     melt_states,
     rebuild,
     report,
+    report_column,
     teacher_anchors,
     write_states,
 )
@@ -319,3 +321,57 @@ def test_apply_rubric_hands_the_evidence_to_its_caller():
 
     assert audit["changes"][0]["matched_term"] == "trace"
     assert audit["changes"][0]["window"]
+
+
+# --- finding the report text ---------------------------------------------------
+#
+# The first version looked for `report`, `report_text` and `text`, and refused
+# this competition's own `train.csv` -- whose column is `Report`. The name was
+# already written down in `data.py`, which requires it; nothing here checked
+# against it. The test below does, so the two cannot drift apart again.
+
+
+def test_the_real_column_name_is_the_one_data_py_requires():
+    """Pinned against the loader that validates train.csv, not against memory."""
+    import inspect
+
+    from rsna_knee import data
+
+    source = inspect.getsource(data.load_train_csv)
+    assert '"Report"' in source, "data.py no longer requires a Report column"
+    assert "Report" in REPORT_COLUMNS
+    assert REPORT_COLUMNS[0] == "Report", "the real name should be tried first"
+
+
+def test_the_competitions_own_column_is_found():
+    frame = pd.DataFrame({"StudyInstanceUID": ["a"], "Report": ["Trace effusion."]})
+    assert report_column(frame) == "Report"
+
+
+@pytest.mark.parametrize("name", ["Report", "report", "REPORT", "Report_Text", "Text"])
+def test_the_case_of_the_heading_does_not_matter(name):
+    """A capital letter is what broke this; it must not be able to again."""
+    frame = pd.DataFrame({"StudyInstanceUID": ["a"], name: ["Trace effusion."]})
+    assert report_column(frame) == name
+
+
+def test_the_name_that_is_returned_is_the_frames_own():
+    """It indexes the frame, so a folded name would raise a KeyError."""
+    frame = pd.DataFrame({"StudyInstanceUID": ["a"], "REPORT": ["Trace effusion."]})
+    assert frame[report_column(frame)].iloc[0] == "Trace effusion."
+
+
+def test_the_most_likely_name_wins_when_several_are_present():
+    frame = pd.DataFrame(
+        {"StudyInstanceUID": ["a"], "Report": ["real"], "text": ["something else"]}
+    )
+    assert report_column(frame) == "Report"
+
+
+def test_a_frame_with_no_report_column_says_what_it_did_find():
+    """The old message named only what it wanted, which left you guessing."""
+    frame = pd.DataFrame({"StudyInstanceUID": ["a"], "Findings": ["x"]})
+
+    with pytest.raises(ValueError, match="Findings") as problem:
+        report_column(frame)
+    assert "Report" in str(problem.value), "it should name what it looked for too"

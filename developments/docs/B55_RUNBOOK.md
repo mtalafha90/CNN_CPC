@@ -43,8 +43,10 @@ PYTHONPATH=developments/src python -m rsna_knee.b55_rubric_teacher \
   --out-root runs/089_Experiment_B55_physical_geometry/teacher_rubric
 ```
 
-Check the reports CSV path first — the module looks for a `report`,
-`report_text` or `text` column and says so if it finds none.
+The report text comes from the competition's own `Report` column, which is
+what `data.load_train_csv` requires. Other spellings (`report_text`, `text`)
+are accepted, and the match ignores case; if none is found the error lists the
+columns the file actually has. It prints which column it used.
 
 **Read the audit before training on it.** It prints a per-target breakdown and
 writes `rubric_changes.csv` with the sentence behind every downgraded cell:

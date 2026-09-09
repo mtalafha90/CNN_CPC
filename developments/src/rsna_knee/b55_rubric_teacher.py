@@ -52,6 +52,32 @@ B55_TEACHER_VERSION = "b55_rubric_teacher_v1"
 #: The label value each committed state trains as.
 STATE_VALUE = {STATE_POSITIVE: 1.0, STATE_NEGATED: 0.0}
 
+#: Where the report text lives, most likely name first. `Report` is the name
+#: this competition actually uses: `data.load_train_csv` requires it and every
+#: other teacher in this archive reads `df["Report"]`. The first version here
+#: looked only for lowercase spellings and refused the real file -- a
+#: self-inflicted wound, since the name was already written down in `data.py`.
+REPORT_COLUMNS = ("Report", "report", "report_text", "text")
+
+
+def report_column(frame: pd.DataFrame) -> str:
+    """The report text column, matched without regard to case.
+
+    Case-insensitive rather than a longer list of spellings: the failure was a
+    capital letter, and guessing at more names would only postpone the next one.
+    """
+    by_folded = {str(name).strip().lower(): str(name) for name in frame.columns}
+    for candidate in REPORT_COLUMNS:
+        found = by_folded.get(candidate.lower())
+        if found is not None:
+            return found
+    raise ValueError(
+        "no report text column found (looked for "
+        + ", ".join(REPORT_COLUMNS)
+        + ", ignoring case). The columns present are: "
+        + ", ".join(str(name) for name in frame.columns)
+    )
+
 
 def teacher_anchors() -> dict[str, tuple[str, ...]]:
     """The phrases that mean each finding, taken from the teacher's own lists.
@@ -202,20 +228,25 @@ def main() -> None:
     args = parser.parse_args()
 
     frame = pd.read_csv(args.reports_csv)
-    column = next(
-        (c for c in ("report", "report_text", "text") if c in frame.columns), None
-    )
-    if column is None:
+    try:
+        column = report_column(frame)
+    except ValueError as problem:
+        raise ValueError(f"{args.reports_csv}: {problem}") from None
+    if "StudyInstanceUID" not in frame.columns:
         raise ValueError(
-            f"{args.reports_csv} has no report text column "
-            f"(looked for report, report_text, text)"
+            f"{args.reports_csv} has no StudyInstanceUID column, so its reports "
+            "cannot be matched to studies. The columns present are: "
+            + ", ".join(str(name) for name in frame.columns)
         )
     reports = {
         str(uid): str(text)
         for uid, text in zip(frame["StudyInstanceUID"], frame[column])
         if isinstance(text, str)
     }
-    print(f"[B55 teacher] {len(reports):,} reports", flush=True)
+    print(
+        f"[B55 teacher] {len(reports):,} reports from column {column!r}",
+        flush=True,
+    )
 
     anchors = teacher_anchors()
     thin = [t for t, terms in anchors.items() if len(terms) < 2]
