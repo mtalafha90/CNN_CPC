@@ -106,6 +106,50 @@ members already say the same thing, and a small gain there is the expected
 result rather than a disappointing one. A high `highest pair` with a lower mean
 means two of your members are near-twins and the third is doing the work.
 
+### The measurement: B52 + B53, run 2026-09-09
+
+```text
+    B52_COMPETITION_FULL_FINETUNE   0.834998
+    B53_AUGMENTATION_APPLIED        0.826853
+
+    best single member    0.834998
+    the ensemble          0.833908
+    gain                  -0.001090
+
+    mean rank correlation 0.9495
+```
+
+**The ensemble lost.** Not by much, and not surprisingly once the correlation
+is read: `0.9495` between the two most different checkpoints this project has,
+which differ in one real thing and were otherwise trained identically.
+
+The gain is worth splitting in two, because the halves say different things:
+
+```text
+member mean            0.830925
+the ensemble           0.833908     +0.002982   what the disagreement bought
+best single member     0.834998     -0.001090   what B53's deficit cost
+member spread          0.008145
+```
+
+So there **is** diversity here and it **is** worth something — the blend beats
+the average of its members by about `+0.003`. It is simply not worth as much as
+B53's `-0.008` handicap, and an equal-weight average cannot spend the one to
+cover the other.
+
+**The obvious next thought is a weighted average, and it is refused.** Fitting
+a weight on these 548 studies would fit it on the exact surface both members
+were already selected on — the post-hoc selection this archive forbids, twice
+over. The prize is at most a few thousandths locally, which the measured
+exchange rate turns into well under `0.001` hidden. Not worth the method.
+
+**What this does to the line:** for these two members it closes it. B55 is
+still worth adding once it exists, and for a reason rather than optimism — B52
+and B53 differ in *one* thing and still agree 95% of the time, while B55
+differs in geometry *and* teacher. If that does not lower the correlation,
+nothing this pipeline produces will, and the line closes for good rather than
+for now.
+
 ### Why ranks rather than probabilities
 
 Macro ROC AUC depends only on the ordering of studies within a target.
@@ -131,11 +175,13 @@ something a few GPU-hours would have told you.
 ## The order to run them in
 
 ```text
-1. TTA on one existing checkpoint          three passes, hours
-2. read the delta against 0.005
-3. if TTA is cheap to drop, the ensemble becomes affordable at 3 members
-4. ensemble B53 + B55 + 087 once both have finished
+1. ensemble 087 + B53                      done -- -0.001090, corr 0.9495
+2. TTA on 087                              three passes, ~30 min   <- next
+3. read the delta against 0.005
+4. re-measure the ensemble with B55 in it, once B55 exists
 5. only then decide what to submit
 ```
 
-Step 1 can run today on `087`. Steps 3 and 4 need B53 and B55 to exist.
+Step 1 is done and reported above. Step 2 is independent of it and still worth
+running: it answers a different question, and a null there *frees* budget
+rather than spending it. Step 4 is the ensembling line's last chance.

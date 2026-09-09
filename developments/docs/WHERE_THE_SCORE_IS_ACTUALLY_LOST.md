@@ -430,3 +430,40 @@ members that are wrong in *different places*, not from members that are
 individually best, and B52 and B53 differ in exactly one thing. That is the
 last claim this 24.5-hour run can still support, and it costs one scoring pass
 each to test.
+
+### The second has now fired too
+
+**Added 2026-09-09.** It was tested the same day and it did not hold.
+
+```text
+    best single member    0.834998
+    the ensemble          0.833908
+    gain                  -0.001090
+    mean rank correlation 0.9495
+```
+
+The condition above was written about three checkpoints and the hidden score;
+this is two checkpoints and the local one. It fires anyway, and with room to
+spare, because the result is *worse* than the threshold in both directions:
+the ensemble did not clear `+0.005`, it did not clear zero, and the mechanism
+the condition blamed — correlation — is measured directly at `0.9495`.
+
+So the consequence stands as written: **the models are far more correlated than
+their architectures suggest, and the limitation is representational.** Two
+checkpoints that differ in whether their pixels were distorted agree on 95% of
+the ordering. Averaging this pipeline's outputs does not produce a better
+model; it produces the same model twice.
+
+The one piece of good news is in the split (see `TTA_AND_ENSEMBLING.md`): the
+blend beat the *mean* of its members by `+0.003`. Real disagreement exists, it
+is just small, and B53's `-0.008` deficit is larger than it. Ensembling here
+needs members that are both different *and* comparable in quality, and this
+project has never produced two.
+
+**What this promotes.** The pre-registered answer is B47 and the volumetric
+work — the pending item that changes what the model can represent rather than
+how its outputs are combined. It is `~38` GPU-hours and has never been run.
+B55 stays ahead of it in the queue on cost-effectiveness, not on evidence: it
+is built, tested, cheaper per epoch at 336, and its bundle was measured at
+`+0.030` in the field. If B55 also lands flat, the representational reading is
+what remains, and B47 is the run.
