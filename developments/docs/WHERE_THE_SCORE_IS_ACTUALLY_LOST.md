@@ -398,3 +398,35 @@ holes are where the remaining score is.
 * **A single-offset submission scores the same as three offsets.** Then TTA was
   never buying anything, the runtime budget was always three times larger than it
   appeared, and several past "we cannot afford it" decisions should be revisited.
+
+### The first of those has now fired
+
+**Added 2026-09-09.** B53 ran eight epochs and finished at `0.826853` against
+B52's `0.834998` — `-0.008145`. The condition written above was "level with or
+below", and below is what happened.
+
+So the consequence stands as written: **memorisation was not the binding
+constraint, and the training-regime line is closer to exhausted than it
+looked.** Augmentation is the standard remedy for a model memorising a few
+thousand studies, this archive had never applied it, and applying it properly
+made the local number worse.
+
+One qualification, which weakens the finding without rescuing it: B53's best
+epoch was its last and the gap was still closing at about `0.0025` an epoch, so
+it had not converged. A longer B53 would plausibly reach parity. Parity is
+worth `0.000`. The line is not *dead* — it is not where the remaining score is,
+which is what this review claimed.
+
+That leaves the review's other two conditions live, and both are cheap to
+settle with checkpoints that already exist:
+
+```text
+ensemble B52 + B53   the first pair here that differs by something real
+TTA offsets          one model, three passes, an hour
+```
+
+B53's `-0.008` does not disqualify it from the ensemble. An ensemble gains from
+members that are wrong in *different places*, not from members that are
+individually best, and B52 and B53 differ in exactly one thing. That is the
+last claim this 24.5-hour run can still support, and it costs one scoring pass
+each to test.

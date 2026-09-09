@@ -1,6 +1,8 @@
 # B53 — the augmentation B52 configured but never applied
 
-**Status:** code ready, unrun. It is the follow-up to B52's full-data run.
+**Status: run. 0.826853 against B52's 0.834998 — `-0.008145`.** The result and
+what it does and does not license are at the end, under
+[The result](#the-result).
 
 ## The finding
 
@@ -161,8 +163,103 @@ Three outcomes, and what each would mean:
   geometric ones on a task where small structures matter. Worth re-running with
   rotation and scale halved before concluding anything.
 
+## The result
+
+Eight epochs, 3,801 studies, 24.5 hours. The preflight confirmed the pixels
+really moved this time — `5/5 series changed, max |diff| 1.000000`, which is
+the check B52 never had.
+
+```text
+epoch   train      validation   macro AUC    minutes
+  1     1.122197   1.152135     0.763367     181.8
+  2     1.054653   1.040861     0.793950     177.6
+  3     1.011798   1.083267     0.811829     164.5
+  4     0.983153   1.039008     0.813586     182.1
+  5     0.948891   1.019181     0.821627     191.0
+  6     0.923781   1.046490     0.822657     195.1
+  7     0.901850   1.028842     0.821267     193.1
+  8     0.893680   1.031315     0.826853     188.4     <- selected
+```
+
+```text
+B52, --all-data, 3,801 studies, best of 6    0.834998
+B53, --all-data, 3,801 studies, best of 8    0.826853
+                                            -0.008145
+```
+
+**Augmentation lost.** At the exchange rate this project has measured — local
+movement reaches the leaderboard at about a quarter — that is roughly `-0.002`
+on Kaggle. B53 is not a submission.
+
+### But it had not finished, and the pre-registered readings both half-apply
+
+The three outcomes written down before the run were "clearly above", "level"
+and "clearly below". This is none of them cleanly, and forcing it into one
+would throw away the most informative thing in the table.
+
+```text
+epoch    B52        B53        B53 - B52
+  1     0.777063   0.763367    -0.013696
+  2     0.815093   0.793950    -0.021143
+  3     0.832568   0.811829    -0.020739
+  4     0.828500   0.813586    -0.014914
+  5     0.834998   0.821627    -0.013371
+  6     0.833541   0.822657    -0.010884
+  7        --      0.821267
+  8        --      0.826853
+```
+
+Two shapes, and they say the same thing:
+
+* **B52 was finished and B53 was not.** B52 is flat from epoch 3 — `0.8326`,
+  `0.8285`, `0.8350`, `0.8335`, a plateau with noise on it. B53's best epoch is
+  its **last** one, and it was still climbing when the budget ran out.
+* **The gap is closing, not stable.** It peaks at `-0.021` around epoch 2 and
+  narrows to `-0.011` by epoch 6, about `0.0025` an epoch. That is what a
+  regulariser looks like: it costs early, and it is still paying it back when
+  you stop.
+
+Too-strong augmentation looks different — a lower plateau, or a turnover. This
+looks like a run that stopped too soon.
+
+### What that does not license
+
+**It is not a reason to extend B53.** Take the closing rate at face value and
+parity arrives somewhere around epoch 11 or 12, which is another 12 hours of
+GPU for a number that would then be *level* with a model we already have.
+Level is worth `0.000` on the leaderboard. Beating it by enough to matter is
+speculation stacked on an extrapolation of a noisy trend, and epoch 7 going
+*down* is a fair warning about how noisy.
+
+**It is not a reason to halve the settings and re-run.** That was the
+pre-registered response to "clearly below", and the curve does not support the
+diagnosis it belongs to. Re-running with weaker augmentation would spend 24
+hours testing a hypothesis this table already argues against.
+
+**It does settle the B55 question.** The runbook said `--augment` goes on only
+once B53 reports positive. It reported negative. B55 runs without it, and the
+fourth unvalidated change stays out of a run that already cannot attribute.
+
+### Where B53's 24.5 hours can still pay
+
+In the ensemble. B53 is `0.008` behind, and that does not disqualify it: an
+ensemble gains from members that are *wrong in different places*, not from
+members that are individually best. B52 and B53 differ in exactly one thing,
+which is a reasonable amount of decorrelation to hope for and a cheap thing to
+check — one scoring pass each, no training. `ensemble_eval` reports the rank
+correlation beside the gain, so a gain that is really just one model carrying
+the other is visible rather than assumed. See `TTA_AND_ENSEMBLING.md`.
+
+That measurement, and not a longer schedule, is what to do with this result.
+
 ## Governance
 
 Like B52, B53 selects its checkpoint on a held-out split. That is competition
 practice and deliberately not the frozen-endpoint policy the scientific line
 uses. It sits beside that line and takes nothing from it.
+
+Both numbers above are **selection statistics** — the best of several epochs on
+the surface used to choose the epoch — so both are optimistically biased by
+construction. They are comparable with each other, and with nothing else. The
+`-0.008145` is a difference of two such statistics, which is the fairest
+comparison available here and still not an unbiased estimate of anything.

@@ -124,7 +124,8 @@ PYTHONPATH=developments/src python -m rsna_knee.b55_physical_geometry_training \
   2>&1 | tee runs/089_Experiment_B55_physical_geometry/b55_train.log
 ```
 
-Add `--augment` only once B53 has reported positive — see the next section.
+**Do not add `--augment`.** B53 has now reported, and it reported negative —
+see the next section.
 
 It resumes if interrupted — re-run the identical command.
 
@@ -133,14 +134,20 @@ encoder does roughly half the work per slice.
 
 ## Augmentation
 
-`--augment` applies B53's augmentation to the **training surface only**, using
-the same policy read from the same config. It is **off by default**, and that is
-a decision rather than an oversight: whether augmentation helps at these
-settings is exactly what B53 is measuring right now, and switching it on here
-would bundle a fourth unvalidated change into a run that already cannot
-attribute.
+**Settled: leave it off.** B53 finished at `0.826853` against B52's
+`0.834998` — `-0.008145` at eight epochs on the identical split. The rule
+written here before the run was that `--augment` goes on only if B53 reported
+positive. It did not, so it stays off, and the fourth unvalidated change stays
+out of a run that already cannot attribute.
 
-Turn it on once B53 reports positive. The composition is already built and
+B53 had not converged — its best epoch was its last, and the gap was still
+closing — so this is "not worth bundling here", not "augmentation is useless".
+The distinction is recorded in `B53_AUGMENTATION_APPLIED.md`; it does not
+change what B55 should do.
+
+`--augment` applies B53's augmentation to the **training surface only**, using
+the same policy read from the same config. It is **off by default**. The
+composition is already built and
 tested — `B55AugmentedDataset` inherits B53's `__getitem__` and B55's
 `_load_b42`, and a test runs the delegation rather than reading it, because
 both classes override `_load_b42` and a broken chain would still produce valid
