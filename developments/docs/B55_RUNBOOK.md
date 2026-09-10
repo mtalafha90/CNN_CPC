@@ -283,6 +283,62 @@ this run's, and the JSON says which under `geometry_used`. A B55 checkpoint
 carrying no recorded geometry is refused rather than scored at the defaults —
 the defaults happening to be right is exactly what would hide the mistake.
 
+### Ruler 1, the old teacher — run 2026-09-10
+
+```text
+    B52_COMPETITION_FULL_FINETUNE  0.834998  geometry=b42
+    B53_AUGMENTATION_APPLIED       0.826853  geometry=b42
+    B55_PHYSICAL_GEOMETRY          0.819655  geometry=b55
+
+    spread +0.015344
+```
+
+**The evaluator verified itself on the way past.** B52 and B53 came back at
+`0.834998` and `0.826853` — their own trainers' recorded numbers, to six
+decimal places, through a separately written loop with a different grad guard.
+That is not a small thing: it means the geometry dispatch, the surface builder
+and the scoring path all reproduce the training-time result exactly, so B55's
+`0.819655` is a trustworthy number rather than a new tool's first guess.
+
+**B55 is last, by `-0.015343` against B52.**
+
+One asymmetry has to be stated before that is read as final. **B52 and B53 each
+chose their best epoch on this exact surface. B55 chose its epoch on the other
+one.** Ruler 1 is B52's and B53's home ground, and picking the best of six
+plateau epochs is worth something — B55's own plateau spanned `0.015`, so an
+epoch chosen on the right surface could plausibly be a few thousandths higher
+than one chosen on the wrong one.
+
+That bias runs the other way on ruler 2, which is B55's home ground. **The pair
+brackets the answer; neither ruler alone is it.** That is the whole reason for
+running both, and it is why no verdict belongs here until ruler 2 has reported.
+
+### Ruler 2, the regraded teacher
+
+*Pending.*
+
+### What not to reach for next
+
+The Expert-58 surface is the instrument this archive trusts most for teacher
+changes — `THE_CLEANER_TEACHER_MADE_A_WORSE_MODEL` used it to veto a teacher
+that looked `+0.0277` better on report labels — and it is the wrong tool here,
+for two reasons worth writing down so the idea does not keep resurfacing:
+
+* **It cannot resolve a difference this small.** `B51_EXPERT58_RESOLUTION` is
+  `0.03` on 58 studies. The veto it fired before was `-0.0399`, comfortably
+  outside that. B55's differences are `0.015` and smaller, which the surface
+  would report as inconclusive by construction.
+* **It would need the same geometry fix that `common_ruler_eval` just got.**
+  `evaluate_b42` builds its datasets with B42's 90% native crop baked in, so
+  scoring B55 through it would repeat exactly the bug of scoring a 130 mm/336
+  model at 448 — and would report the result as a worse model.
+
+The coverage confound that doc identified, at least, does **not** apply here.
+The negated-only teacher cut supervision from 34,010 cells to 25,524, and
+coverage predicts report AUC at Pearson `-0.931`. B55's regrade kept all 34,010
+— it flipped states without dropping any. Whatever is happening to B55, it is
+not that.
+
 ### Reading the pair, and what it cannot tell you
 
 **A common ruler compares complete models. It does not attribute.** B55's
