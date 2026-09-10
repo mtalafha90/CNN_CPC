@@ -1,6 +1,9 @@
 # B55 runbook — the three changes the field measured
 
-**Status: implemented, unrun.** Run it after B53 finishes.
+**Status: run 2026-09-10. Best epoch 6, `0.814174` on its own regraded ruler,
+21.0 hours.** That number is **not** comparable with B52's `0.834998` — the
+teacher changed, so the answer key changed. Step 4 is what makes it
+comparable, and it has not been run yet. See [The run](#the-run).
 
 B55 is a competition endpoint, not an experiment. It bundles three changes and
 cannot attribute its result to any one of them. That is B52's limitation,
@@ -155,6 +158,57 @@ tested — `B55AugmentedDataset` inherits B53's `__getitem__` and B55's
 both classes override `_load_b42` and a broken chain would still produce valid
 pixels.
 
+## The run
+
+Eight epochs, 3,801 studies, **21.0 hours** — faster than B53's 24.6 and B52's
+26.6, as 336² predicted. About 157 minutes an epoch against B53's 184, roughly
+15% off for the same work.
+
+```text
+epoch   train      validation   macro AUC    minutes
+  1     1.074443   1.028110     0.744899     171.9
+  2     0.993281   1.011958     0.779983     174.0
+  3     0.951890   1.095444     0.810476     159.2
+  4     0.912311   0.992895     0.798892     142.9
+  5     0.868069   0.990408     0.807177     148.8
+  6     0.830097   0.995655     0.814174     159.6     <- selected
+  7     0.798812   1.003626     0.806800     152.1
+  8     0.783751   1.008701     0.810947     149.2
+```
+
+**It converged.** From epoch 3 the score sits in a band of `0.015` with no
+trend, which is B52's shape rather than B53's — B53's best epoch was its last
+and it was still climbing. Training loss keeps falling to `0.784` while
+validation loss flattens near `1.00` from epoch 4, so the last few epochs are
+memorising rather than learning. Eight epochs was enough; a longer schedule
+would not have helped this run.
+
+### The supervision guard passed, and that is a result
+
+The run was started **without** `--expected-supervision-cells` and did not
+stop. That flag defaulting to `None` means the frozen `34,010` is enforced, so
+the regraded teacher produced exactly the same number of usable cells as the
+old one.
+
+Which is what was predicted here before the run: **downgrading a positive to a
+negative does not change how many cells are usable** — a negative cell is still
+supervision. The rubric moved states and values, and moved nothing else.
+
+Step 4's second ruler therefore needs no `--expected-supervision-cells` either.
+The two label sets are the same ruler in the sense the guard cares about.
+
+### What `0.814174` does and does not mean
+
+**It is not `-0.020` against B52.** B52's `0.834998` was scored against the old
+teacher and this against the regraded one. Two different answer keys.
+
+There is also a reason to expect the regraded ruler to give *lower* numbers for
+any model, better or worse: downgrading borderline positives removes the
+easiest positives from each target and makes it more imbalanced. A model that
+had not changed at all would likely score lower here. That confound is exactly
+what step 4 removes, and until step 4 has run, `0.814174` supports **no**
+comparison with anything.
+
 ## Reading the result — and the comparison you cannot make
 
 **B55's validation macro AUC is not comparable with B52's `0.834998` or with
@@ -213,9 +267,12 @@ PYTHONPATH=developments/src python -m rsna_knee.common_ruler_eval $COMMON \
 # ruler 2: the regraded teacher, the target the competition actually scores
 PYTHONPATH=developments/src python -m rsna_knee.common_ruler_eval $COMMON \
   --labels-root runs/089_Experiment_B55_physical_geometry/teacher_rubric \
-  --expected-supervision-cells <the count step 1 reported> \
   --out-json runs/089_Experiment_B55_physical_geometry/ruler_rubric.json
 ```
+
+No `--expected-supervision-cells` on either: the training run proved the
+regraded teacher still yields the frozen `34,010`, so the guard's default is
+correct for both rulers.
 
 Each is 548 studies with no training — minutes, not hours.
 
