@@ -536,3 +536,98 @@ def test_both_scoring_loops_carry_the_same_guard():
         assert getattr(function, "__wrapped__", None) is not None, (
             f"{function.__name__} is no longer wrapped in an inference guard"
         )
+
+
+# --- a run that stops part-way keeps what it measured --------------------------
+#
+# The first version printed one line *after* a whole checkpoint had been
+# scored, and wrote its JSON only after all of them. So a hang looked the same
+# wherever it happened, and a run that died on the third model threw away the
+# first two -- each of which is a scoring pass over 548 studies.
+
+
+def _run_main(monkeypatch, tmp_path, *, fail_on=None, checkpoints=3):
+    import sys
+
+    from rsna_knee import common_ruler_eval as module
+
+    calls: list[str] = []
+
+    def fake_score_one(path, **kwargs):
+        calls.append(str(path))
+        if fail_on is not None and len(calls) == fail_on:
+            raise RuntimeError("stopped part-way, exactly as a hang would")
+        return {
+            "checkpoint": str(path),
+            "experiment": f"E{len(calls)}",
+            "macro_auc": 0.8 + len(calls) / 1000,
+            "geometry": "b42",
+            "studies": 548,
+        }
+
+    monkeypatch.setattr(module, "score_one", fake_score_one)
+    monkeypatch.setattr(module, "_read_config", lambda path: {})
+
+    out = tmp_path / "ruler.json"
+    argv = ["ruler", "--data-root", ".", "--labels-root", ".",
+            "--series-policy", ".", "--base-checkpoint", ".",
+            "--domain-split", ".", "--out-json", str(out)]
+    for index in range(checkpoints):
+        argv += ["--checkpoint", f"model{index}.pt"]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    return module, out
+
+
+def test_every_scored_checkpoint_is_on_disk_before_the_next_one_starts(
+    monkeypatch, tmp_path, capsys
+):
+    module, out = _run_main(monkeypatch, tmp_path, fail_on=3)
+
+    with pytest.raises(RuntimeError, match="stopped part-way"):
+        module.main()
+
+    saved = json.loads(out.read_text("utf-8"))
+    assert len(saved["scored"]) == 2, "the two completed passes were lost"
+    assert saved["checkpoints_requested"] == 3, "it must say the table is partial"
+
+
+def test_a_complete_run_says_so(monkeypatch, tmp_path, capsys):
+    module, out = _run_main(monkeypatch, tmp_path)
+    module.main()
+
+    saved = json.loads(out.read_text("utf-8"))
+    assert len(saved["scored"]) == saved["checkpoints_requested"] == 3
+
+
+def test_each_checkpoint_is_announced_before_it_is_scored(monkeypatch, tmp_path, capsys):
+    """Otherwise a hang on the first model prints nothing at all."""
+    module, _ = _run_main(monkeypatch, tmp_path, fail_on=1)
+
+    with pytest.raises(RuntimeError):
+        module.main()
+
+    printed = capsys.readouterr().out
+    assert "1/3" in printed, "the run must say which checkpoint it is starting"
+    assert "model0.pt" in printed
+
+
+def test_the_slow_stages_each_announce_themselves():
+    """Named stages, so a hang can be located rather than guessed at."""
+    source = inspect.getsource(score_one)
+
+    for marker in (
+        "reading the base checkpoint",
+        "building the supervision surface",
+        "backfilling series metadata",
+        "loading the model",
+        "scoring ",
+    ):
+        assert marker in source, f"no stage marker for {marker!r}"
+
+
+def test_the_scoring_stage_names_the_worker_count():
+    """A worker deadlock is the likeliest hang, so the number must be visible."""
+    source = inspect.getsource(score_one)
+    assert "num_workers" in source
+    assert "workers" in source

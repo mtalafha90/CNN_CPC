@@ -280,15 +280,25 @@ def score_one(
     runtime = resolve_runtime(settings)
     root = Path(settings["data_root"])
 
+    # Stage markers, because the alternative is what this tool shipped with:
+    # one line printed after a whole checkpoint had been scored, so a hang in
+    # the surface builder, the DICOM backfill and the loader all looked
+    # identical from outside -- silence.
+    def stage(message: str) -> None:
+        print(f"[ruler]   {message}", flush=True)
+
+    stage(f"labels {Path(labels_root).resolve()}")
     _, domain_rows, _ = load_b50_selection_gate(domain_split)
 
     # The surface builder needs the base checkpoint's own payload, so the model
     # is loaded first and its base reused rather than read twice.
     from .phase9_matched_supervision_training import load_phase9_checkpoint
 
+    stage("reading the base checkpoint")
     _base_model, base_payload = load_phase9_checkpoint(
         Path(base_checkpoint).resolve(), expected_arm="llm_fill", device="cpu"
     )
+    stage("building the supervision surface")
     (
         _train,
         uids,
@@ -314,11 +324,17 @@ def score_one(
     )
     indices = _indices_for_split(uids, domain_rows, B52_PRIMARY_SPLIT)
     valid_uids = [uids[i] for i in indices]
+    stage(
+        f"surface ok: {int(surface.get('usable_cells', -1)):,} usable cells, "
+        f"{len(valid_uids)} studies in {B52_PRIMARY_SPLIT}"
+    )
 
     series_policy = _load_series_policy(series_policy_path)
     if not series_policy:
         raise ValueError("a series policy is required")
     series = load_series_csv(root / settings.get("train_series_csv", "train_series.csv"))
+    # Slow on a cold page cache: it opens DICOMs to repair missing metadata.
+    stage("backfilling series metadata from DICOM")
     series, _ = backfill_series_metadata(series, root, split="train")
     _summary, valid_index = audit_variable_series_surface(series, valid_uids)
 
@@ -326,6 +342,7 @@ def score_one(
     valid_config = make_b7_dataset_config(settings, root, train=False)
     valid_config.tta_center_offsets = ()
 
+    stage("loading the model")
     model, payload = load_model(
         Path(checkpoint), Path(base_checkpoint), runtime.device
     )
@@ -353,6 +370,12 @@ def score_one(
         multiplier, dtype=torch.float32, device=runtime.device
     )
     aux_weight = float(settings.get("b37_local_aux_weight", 1.0))
+
+    kwargs = loader_kwargs_with_sharing(runtime, seed=0)
+    stage(
+        f"scoring {len(valid_uids)} studies through geometry "
+        f"{geometry_for(payload)} with {int(kwargs.get('num_workers', 0))} workers"
+    )
 
     if with_predictions:
         probabilities, scored_targets, scored_weights, scores = predict_split(
@@ -441,7 +464,38 @@ def main() -> None:
 
     config = _read_config(args.config)
     scored = []
-    for path in args.checkpoint:
+
+    def collected() -> dict:
+        return {
+            "version": COMMON_RULER_VERSION,
+            "labels_root": str(Path(args.labels_root).resolve()),
+            "split": B52_PRIMARY_SPLIT,
+            "studies": scored[0]["studies"] if scored else 0,
+            "scored": scored,
+            "checkpoints_requested": len(args.checkpoint),
+            "reading": (
+                "One labels root, one study set, each model's own geometry. A "
+                "comparison, not a selection."
+            ),
+        }
+
+    def save() -> None:
+        """Written after every checkpoint, not only at the end.
+
+        A run that dies or hangs on the third model used to lose the first two
+        as well, and each one is a scoring pass over 548 studies. The file is
+        complete JSON at every point; `checkpoints_requested` beside the length
+        of `scored` says whether it is the whole table.
+        """
+        if not args.out_json:
+            return
+        path = Path(args.out_json)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(collected(), indent=2), encoding="utf-8")
+
+    total = len(args.checkpoint)
+    for position, path in enumerate(args.checkpoint, start=1):
+        print(f"[ruler] {position}/{total} {path}", flush=True)
         row = score_one(
             path,
             config=config,
@@ -455,23 +509,9 @@ def main() -> None:
         )
         print(f"[ruler] {row['experiment']} {row['macro_auc']:.6f}", flush=True)
         scored.append(row)
+        save()
 
-    result = {
-        "version": COMMON_RULER_VERSION,
-        "labels_root": str(Path(args.labels_root).resolve()),
-        "split": B52_PRIMARY_SPLIT,
-        "studies": scored[0]["studies"] if scored else 0,
-        "scored": scored,
-        "reading": (
-            "One labels root, one study set, each model's own geometry. A "
-            "comparison, not a selection."
-        ),
-    }
-    if args.out_json:
-        path = Path(args.out_json)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(result, indent=2), encoding="utf-8")
-    report(result)
+    report(collected())
 
 
 if __name__ == "__main__":
