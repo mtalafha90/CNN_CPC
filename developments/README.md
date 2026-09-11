@@ -1,5 +1,11 @@
 # Developments lineage and active B42 implementation
 
+**2026-09-11 update:** B52 full-data is the best recorded Kaggle endpoint at
+`0.716`. [B57](docs/B57_CLEAN_BACKBONE_COMPARISON.md) now implements a fresh
+ConvNeXt reference versus a fully fine-tuned DINOv2 slice model, with shared
+labels and evaluation. It has not been trained. The earlier B42-centered
+description below records the maintained compatibility baseline.
+
 This directory preserves the complete research/development history that
 previously occupied the repository root. It also currently contains the
 maintained B42--B49 implementation because those experiments were developed

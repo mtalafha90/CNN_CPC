@@ -1,10 +1,39 @@
 # Current project status
 
-**Snapshot:** 2026-08-29
+**Snapshot:** 2026-09-11 (latest update below; earlier experiment records retained)
 **Primary metric:** macro ROC AUC across 12 targets
-**Best independent displayed Kaggle score:** **0.714**
+**Best recorded displayed Kaggle score:** **B52 full-data, 0.716**
 
 This file is the living project-status record. Earlier snapshots remain available in Git history and in the frozen experiment documents.
+
+## B52–B57 update
+
+B52 full-data completed and scored **0.716** on Kaggle; its smaller-population
+run scored `0.708`. [Submission record](B52_KAGGLE_SUBMISSION.md).
+B53 and B55 both remain below B52 on the two recorded report-label rulers:
+
+| Model | Original teacher | Regraded teacher |
+|---|---:|---:|
+| B52 | 0.834998 | 0.815318 |
+| B53 | 0.826853 | 0.803564 |
+| B55 | 0.819655 | 0.814174 |
+
+These are reused development measurements. B52's Phase-9 supervised ancestor
+exposed all 4,349 report-only studies, including the later 548 validation UIDs.
+Holding those UIDs out of fine-tuning does not make the whole lineage held out.
+The Kaggle result remains valid; the size of any local bias is unmeasured.
+See [B57's source audit](B57_CLEAN_BACKBONE_COMPARISON.md).
+
+B56 is specified as B55 geometry with the original teacher; the reviewed
+`main` snapshot records no result. [B55/B56 runbook](B55_RUNBOOK.md).
+
+**B57 is implemented, not trained.** It starts a B52-style reference and a
+DINOv2-S slice model from pinned public weights, with fresh competition heads.
+It excludes validation scanner profiles from every new training row, freezes
+the shared original teacher and masks, and evaluates fixed final epochs plus
+one 50:50 ensemble. Expert-58 remains diagnostic. The comparison is development
+evidence requiring another group-disjoint confirmation before promotion.
+[Protocol and commands](B57_CLEAN_BACKBONE_COMPARISON.md).
 
 ## Independent hidden evidence
 
@@ -16,6 +45,8 @@ The recorded completed hidden submissions are:
 | B41 | aspect-preserving 448 square-pad sparse MIL | **0.714** |
 | B42 | constant-area native-aspect ragged sparse MIL | **0.714** |
 | B49 candidate | full-FOV native tiled local branch, dual-T4 hidden-safe inference | 0.707 |
+| B51 | full-population adapted hierarchy | 0.713 |
+| B52 full-data | full encoder fine-tuning, completed schedule | **0.716** |
 
 The three `0.714` entries are displayed ties. Kaggle rounds leaderboard values,
 so identical displayed scores do not establish identical unrounded AUC.

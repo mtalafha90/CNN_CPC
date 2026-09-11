@@ -1,6 +1,11 @@
 # B52 — training the model, and what it was worth
 
-**Status:** both runs complete. Not a submission candidate.
+**Status update, 2026-09-11:** both runs complete; the full-data endpoint was
+submitted and scored **0.716**. See [submission record](B52_KAGGLE_SUBMISSION.md).
+The historical interpretation below predates the
+[B57 ancestry audit](B57_CLEAN_BACKBONE_COMPARISON.md): the later validation
+UIDs had supervised exposure through the Phase-9 parent. These local scores
+are development measurements, not independently held-out estimates.
 
 > **Correction, found after both runs.** B52 reports three changes. Only two of
 > them happened. `augment=True` sets fields on a `DatasetConfig` that

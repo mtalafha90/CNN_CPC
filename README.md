@@ -2,6 +2,20 @@
 
 Twelve binary findings per knee MRI study, scored as macro ROC AUC.
 
+## Latest competition work
+
+The best recorded Kaggle endpoint is **B52 full-data, 0.716**. B42 remains the
+preserved operational reference below. See the
+[B52 submission record](developments/docs/B52_KAGGLE_SUBMISSION.md).
+
+**B57 is implemented and unrun:** a clean B52-style reference, a fully
+fine-tuned DINOv2 slice model, shared label/validation checks and a fixed
+ensemble diagnostic. Start with the
+[B57 runbook](developments/docs/B57_CLEAN_BACKBONE_COMPARISON.md).
+It runs inside `CNN_CPC/runs/093_Experiment_B57_clean_backbone_comparison`.
+Its reused development split is held out from the entire new training lineage;
+old B52 local AUCs are not directly comparable to this clean protocol.
+
 ## Current operational endpoint
 
 **B42 constant-area native-aspect sparse MIL** is the maintained operational
@@ -27,7 +41,7 @@ editable package, alongside the compatibility interface.
 ```text
 CNN_CPC/
 ├── config/                         frozen endpoint configurations
-├── developments/src/rsna_knee/     B42--B49 research and submission code
+├── developments/src/rsna_knee/     active research and submission code
 ├── developments/docs/              governed experiment records
 ├── model/, data/, training/, ...   legacy B34 compatibility interface
 ├── docs/ACTIVE_ENDPOINTS.md        maintained endpoint registry
@@ -69,8 +83,8 @@ fingerprints before prediction.
 ## Two things to keep in mind
 
 **The 58 expert-annotated studies are not a model-selection test set.** They
-remain useful as a diagnostic only. Future experiments must lock an independent
-grouped validation surface before implementation.
+remain useful as a diagnostic only. B57 declares a reused development comparison;
+an additional group-disjoint confirmation is required before promotion.
 
 **B46, B48, and B49 are closed.** Their results do not authorize a new gold
 weight, tile geometry, crop, query, calibration, blend, or seed search. See
