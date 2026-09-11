@@ -631,3 +631,42 @@ def test_the_scoring_stage_names_the_worker_count():
     source = inspect.getsource(score_one)
     assert "num_workers" in source
     assert "workers" in source
+
+
+# --- the card is handed back between checkpoints -------------------------------
+#
+# Each score_one builds a whole B50 hierarchy on the GPU. Python frees the
+# object, but CUDA's caching allocator keeps the blocks, so three checkpoints in
+# one process hold three models' worth on a 16 GB card that is also driving a
+# desktop -- a failure that appears only on the third row of the table.
+
+
+def test_the_model_is_moved_off_the_device():
+    from rsna_knee.common_ruler_eval import release_model
+
+    moved = []
+
+    class Model:
+        def to(self, device):
+            moved.append(device)
+            return self
+
+    release_model(Model())
+    assert moved == ["cpu"]
+
+
+def test_a_model_that_cannot_be_moved_does_not_end_the_run():
+    """Freeing memory must never be the thing that loses a completed score."""
+    from rsna_knee.common_ruler_eval import release_model
+
+    class Awkward:
+        def to(self, device):
+            raise RuntimeError("already gone")
+
+    release_model(Awkward())  # must not raise
+
+
+def test_score_one_releases_before_it_returns():
+    source = inspect.getsource(score_one)
+    assert "release_model(model)" in source
+    assert source.index("release_model(model)") < source.rindex("return result")

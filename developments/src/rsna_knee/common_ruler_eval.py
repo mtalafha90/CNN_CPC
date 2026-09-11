@@ -406,7 +406,27 @@ def score_one(
         result["probabilities"] = probabilities
         result["targets"] = scored_targets
         result["weights"] = scored_weights
+
+    release_model(model)
     return result
+
+
+def release_model(model) -> None:
+    """Give the card back before the next checkpoint asks for it.
+
+    Each `score_one` builds a whole B50 hierarchy on the GPU. Python frees the
+    object when it goes out of scope, but CUDA's caching allocator keeps the
+    blocks, so scoring three checkpoints in one process holds three models'
+    worth of memory on a 16 GB card that is also driving a desktop. Emptying
+    the cache between them costs a few milliseconds and removes a failure that
+    only appears on the third row of the table.
+    """
+    try:
+        model.to("cpu")
+    except Exception:  # pragma: no cover - a model already off the device
+        pass
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def report(result: dict) -> None:
@@ -521,9 +541,13 @@ if __name__ == "__main__":
 __all__ = [
     "COMMON_RULER_VERSION",
     "GEOMETRY_BY_EXPERIMENT",
+    "b55_geometry_from",
     "dataset_factory_for",
     "geometry_for",
     "load_model",
+    "per_target_table",
+    "predict_split",
+    "release_model",
     "report",
     "score_one",
 ]
