@@ -1,9 +1,11 @@
 # B55 runbook — the three changes the field measured
 
-**Status: run 2026-09-10. Best epoch 6, `0.814174` on its own regraded ruler,
-21.0 hours.** That number is **not** comparable with B52's `0.834998` — the
-teacher changed, so the answer key changed. Step 4 is what makes it
-comparable, and it has not been run yet. See [The run](#the-run).
+**Status: run and scored. B55 loses on both rulers.** `-0.015343` against B52
+on the old teacher, `-0.001144` on the regraded one — and the second of those
+is B55's home ground, where it had the epoch-selection advantage and B52 had
+none. Do not submit it. See [The pair, read
+together](#the-pair-read-together), and [B56](#b56--the-same-geometry-on-the-old-teacher)
+for the one-flag follow-up that makes the geometry attributable.
 
 B55 is a competition endpoint, not an experiment. It bundles three changes and
 cannot attribute its result to any one of them. That is B52's limitation,
@@ -313,9 +315,77 @@ That bias runs the other way on ruler 2, which is B55's home ground. **The pair
 brackets the answer; neither ruler alone is it.** That is the whole reason for
 running both, and it is why no verdict belongs here until ruler 2 has reported.
 
-### Ruler 2, the regraded teacher
+### Ruler 2, the regraded teacher — run 2026-09-11
 
-*Pending.*
+```text
+    B52_COMPETITION_FULL_FINETUNE  0.815318  geometry=b42
+    B55_PHYSICAL_GEOMETRY          0.814174  geometry=b55
+    B53_AUGMENTATION_APPLIED       0.803564  geometry=b42
+
+    spread +0.011754
+```
+
+**The evaluator verified itself a second time.** B55 came back at `0.814174` —
+its own trainer's selected-epoch value, to six decimal places, on the labels it
+was selected against. Ruler 1 had already reproduced B52's and B53's. All three
+checkpoints now match their training-time numbers on their home surface.
+
+### The pair, read together
+
+```text
+                      ruler 1        ruler 2        B55 - B52
+                   (old teacher) (regraded)
+B52                   0.834998      0.815318
+B55                   0.819655      0.814174
+B53                   0.826853      0.803564
+
+B55 - B52            -0.015343     -0.001144
+B55 - B53            -0.007198     +0.010610
+```
+
+**B55 loses on both rulers.** The pre-registered reading of that is written
+above: the bundle is not working, and the slot is better spent elsewhere.
+
+The margins differ enormously, and the reason is the selection asymmetry —
+which makes the result *stronger*, not weaker:
+
+```text
+ruler 1 -> ruler 2, every model drops
+  B52   -0.019680
+  B53   -0.023289
+  B55   -0.005481     <- trained on these labels, so it drops least
+```
+
+Every model scores lower on the regraded ruler, exactly as predicted before the
+run: downgrading borderline positives removes the easiest positives and leaves
+each finding more lopsided. B55 drops least because ruler 2 is its home ground,
+and the size of that home advantage is measurable — `+0.014199` relative to
+B52.
+
+So ruler 2 is the comparison that favours B55 about as much as any comparison
+can: **B55 picked its epoch on these labels and B52 did not.** And B52 still
+wins. A model playing away, on an answer key it was never selected against,
+beats B55 at home.
+
+That is the sentence this whole exercise was built to be able to say. B55 does
+not win anywhere, and it loses by most on the one ruler where the comparison is
+fair to B52.
+
+One consolation, and it is small: B55 beats B53 on ruler 2 by `+0.010610`
+having lost to it by `-0.007198` on ruler 1. That is two models swapping places
+between answer keys, which is a statement about the answer keys.
+
+### What this does not say
+
+**It does not condemn the physical crop.** B55 changed four things, and the
+teacher regrade is one of them — the change with a documented precedent of harm
+in this archive. Ruler 1 scores a model *trained on regraded labels* against
+the old ones, so its `-0.015343` mixes the geometry with a teacher the surface
+disagrees with. Nothing here separates them, which was the accepted cost of
+bundling.
+
+The field measured the crop and laterality at `+0.030`. This run does not
+refute that, because this run never tested it alone. **B56 does** — see below.
 
 ### What not to reach for next
 
@@ -383,3 +453,77 @@ table it produces.
 whose usable-cell count differs from the frozen 34,010. Two label sets with
 different cell counts are not the same ruler in the sense that matters, so the
 count is declared rather than allowed to drift silently.
+
+## B56 — the same geometry on the old teacher
+
+**Status: specified, unrun.** One flag different from B55's training command.
+
+### Why it is worth 21 hours
+
+B55 bundled four changes and cannot attribute. The field measured **one** of
+them — a physical-millimetre crop with canonical laterality — at `+0.030`, and
+that specific claim has still never been tested here on its own.
+
+B56 tests it, because it changes exactly one thing against B52:
+
+```text
+                    B52            B55            B56
+teacher             old            regraded       old
+crop                90% native     130 mm         130 mm
+laterality          as scanned     canonical      canonical
+reference           448            336            336
+```
+
+B56 against B52 is therefore **the geometry bundle alone**, on the same labels,
+the same split, the same seed, the same schedule — and its validation number
+lands directly on the scale B52's `0.834998` already sits on. No common ruler
+needed; the trainer prints the comparison itself.
+
+### Why this is the right next run rather than B47
+
+B47 is the pre-registered answer to the representational reading and it is
+`~38` GPU-hours that have never been spent. B56 is `~21`, reuses code that is
+already written and tested, and settles a `+0.030` claim that is currently the
+largest unexamined number in this project's field notes. If B56 is flat, the
+representational reading is what remains and B47 is the run.
+
+### The command
+
+```bash
+mkdir -p runs/090_Experiment_B56_geometry_only
+
+PYTHONPATH=developments/src python -m rsna_knee.b55_physical_geometry_training \
+  --data-root /media/talafha/Disk_1/CNN_CPC/rsna-knee-abnormality-detection \
+  --labels-root runs/067_Experiment_LLM_FILL_ALL_b6_preserved_llm_fill_all_targets/b6_plus_llm_fill_all \
+  --series-policy runs/020_Experiment_B12_variable_series/b12_variable_series/audit/series_policy.json \
+  --base-checkpoint runs/067_Experiment_LLM_FILL_ALL_b6_preserved_llm_fill_all_targets/b6_plus_llm_fill_all_ft1/train/llm-filled/model.pt \
+  --domain-split runs/083_Experiment_B50_selection_gate/b50_ordered_slice_selection_split \
+  --num-workers 6 \
+  --epochs 8 \
+  --out-root runs/090_Experiment_B56_geometry_only \
+  2>&1 | tee runs/090_Experiment_B56_geometry_only/b56_train.log
+```
+
+The only change from B55's command is `--labels-root`, pointing back at the old
+teacher, and a new `--out-root` so B55's artefacts are not overwritten.
+
+**Its checkpoint will say `B55_PHYSICAL_GEOMETRY`.** That is not a mistake to
+fix by editing the payload after the fact — it is the same code — but it is the
+same trap B54 fell into, so the run root is what distinguishes them and
+`runs/090_...` must not be reused for anything else.
+
+### Declared before the run
+
+```text
+noise floor            0.002    what this archive already reads as noise
+success                B56 - B52 > +0.010 on the identical validation surface
+nothing happened       |B56 - B52| <= 0.002
+the crop is harmful    B56 - B52 < -0.010
+```
+
+The middle band is the likeliest outcome and the one to prepare for: it would
+mean the field's `+0.030` does not reproduce on this pipeline, and that the
+`-0.015` B55 showed on ruler 1 was mostly the teacher rather than the geometry.
+
+Do not tune `--crop-mm` or `--reference-side` against B56's score. One change
+per run is the entire point of this run.
