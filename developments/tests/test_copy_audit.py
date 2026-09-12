@@ -20,6 +20,7 @@ from rsna_knee.copy_audit import (
     COPY_AUDIT_VERSION,
     check_against_table,
     compare_manifests,
+    dominant_layout,
     format_check,
     format_comparison,
     rsync_list,
@@ -28,15 +29,22 @@ from rsna_knee.copy_audit import (
 )
 
 
-def _tree(root, layout: dict, *, split: str = "train") -> None:
-    """Build a data root: {study: {series: number_of_slices}}, plus the table."""
+def _tree(root, layout: dict, *, split: str = "train", images_dir="train_images") -> None:
+    """Build a data root: {study: {series: number_of_slices}}, plus the table.
+
+    `images_dir` selects which of the three layouts `find_series_dir` accepts.
+    The empty string means the studies sit directly under the data root -- not
+    `None`, which read as "the default" in the code and "the root layout" in
+    this docstring until a test caught the disagreement.
+    """
     rows = []
     for study, series_map in layout.items():
         for series, slices in series_map.items():
             rows.append({"StudyInstanceUID": study, "SeriesInstanceUID": series})
             if slices is None:
                 continue  # named in the table, absent on disk
-            directory = root / f"{split}_images" / study / series
+            base = root / images_dir if images_dir else root
+            directory = base / study / series
             directory.mkdir(parents=True)
             for index in range(slices):
                 (directory / f"{index:04d}.dcm").write_bytes(b"x" * 100)
@@ -50,7 +58,10 @@ def test_the_scan_counts_files_and_bytes_per_series(tmp_path):
     _tree(tmp_path, {"studyA": {"s1": 3, "s2": 2}})
     manifest = scan_manifest(tmp_path)
 
-    assert manifest["series"]["studyA/s1"] == {"files": 3, "bytes": 300, "present": True}
+    assert manifest["series"]["studyA/s1"] == {
+        "files": 3, "bytes": 300, "present": True,
+        "path": "train_images/studyA/s1",
+    }
     assert manifest["totals"] == {
         "series_in_table": 2,
         "series_present": 2,
@@ -197,8 +208,13 @@ def test_a_destination_series_that_is_larger_is_not_reported(tmp_path):
 
 def test_the_rsync_list_names_directories_not_files():
     """A file path would copy one slice; the trailing slash copies the series."""
-    result = {"absent": ["studyA/s2"], "short": [{"series": "studyA/s1"}]}
-    paths = rsync_list(result, split="train")
+    result = {
+        "absent": ["studyA/s2"],
+        "short": [{"series": "studyA/s1"}],
+        "paths": {"studyA/s1": "train_images/studyA/s1",
+                  "studyA/s2": "train_images/studyA/s2"},
+    }
+    paths = rsync_list(result)
 
     assert paths == ["train_images/studyA/s1/", "train_images/studyA/s2/"]
     assert all(path.endswith("/") for path in paths)
@@ -206,18 +222,99 @@ def test_the_rsync_list_names_directories_not_files():
 
 def test_the_rsync_list_covers_short_series_as_well_as_absent_ones():
     """Re-copying only the absent ones leaves the truncated ones truncated."""
-    result = {"absent": ["a/1"], "short": [{"series": "b/2"}]}
+    result = {"absent": ["a/1"], "short": [{"series": "b/2"}], "paths": {}}
     assert len(rsync_list(result)) == 2
 
 
-def test_the_rsync_list_follows_the_layout_that_is_actually_used():
-    result = {"absent": ["a/1"], "short": []}
+def test_the_rsync_list_is_sorted_and_free_of_duplicates():
+    result = {"absent": ["b/2", "a/1"], "short": [{"series": "a/1"}], "paths": {}}
+    assert rsync_list(result) == ["a/1/", "b/2/"]
+
+
+# --- the layout is read from disk, never assumed -------------------------------
+#
+# The first version built these paths from a `{split}_images` template. On a
+# machine whose images live under `train_series`, every line named a directory
+# that did not exist -- and `cp` printed "failed to get attributes of
+# 'train_images'" once per series while copying nothing. `find_series_dir`
+# already knew the answer; the list simply never asked it.
+
+
+@pytest.mark.parametrize("images_dir", ["train_images", "train_series", ""])
+def test_the_recopy_paths_exist_on_the_machine_that_produced_them(tmp_path, images_dir):
+    """The property that was broken: every listed path must resolve."""
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    destination.mkdir()
+    _tree(source, {"studyA": {"s1": 4, "s2": 2}}, images_dir=images_dir)
+    _tree(destination, {"studyA": {"s1": 1, "s2": None}}, images_dir=images_dir)
+
+    result = compare_manifests(scan_manifest(source), scan_manifest(destination))
+    paths = rsync_list(result)
+
+    assert len(paths) == 2
+    for path in paths:
+        assert (source / path.rstrip("/")).is_dir(), f"{path} does not exist at the source"
+
+
+def test_a_train_series_layout_is_not_reported_as_train_images(tmp_path):
+    """The exact mismatch that produced the cp failure."""
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    destination.mkdir()
+    _tree(source, {"studyA": {"s1": 4}}, images_dir="train_series")
+    _tree(destination, {"studyA": {"s1": None}}, images_dir="train_series")
+
+    paths = rsync_list(compare_manifests(scan_manifest(source), scan_manifest(destination)))
+
+    assert paths == ["train_series/studyA/s1/"]
+    assert not any(path.startswith("train_images") for path in paths)
+
+
+def test_an_absent_series_borrows_the_layout_of_the_ones_that_arrived(tmp_path):
+    """It has no path of its own, so the only honest source is its neighbours."""
+    source = tmp_path / "source"
+    source.mkdir()
+    _tree(source, {"studyA": {"s1": 4, "s2": None}}, images_dir="train_series")
+
+    manifest = scan_manifest(source)
+    assert dominant_layout(manifest) == "train_series"
+
+    paths = rsync_list(check_against_table(source))
+    assert paths == ["train_series/studyA/s2/"]
+
+
+def test_the_root_layout_yields_paths_without_a_prefix(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    _tree(source, {"studyA": {"s1": 4, "s2": None}}, images_dir="")
+
+    assert dominant_layout(scan_manifest(source)) == ""
+    assert rsync_list(check_against_table(source)) == ["studyA/s2/"]
+
+
+def test_dominant_layout_is_empty_when_nothing_is_present(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    _tree(source, {"studyA": {"s1": None}})
+
+    assert dominant_layout(scan_manifest(source)) == ""
+
+
+def test_the_layout_override_still_works_for_an_older_manifest():
+    """Kept for a manifest written before paths were recorded, and nothing else."""
+    result = {"absent": ["a/1"], "short": [], "paths": {}}
     assert rsync_list(result, layout="{split}_series") == ["train_series/a/1/"]
 
 
-def test_the_rsync_list_is_sorted_and_free_of_duplicates():
-    result = {"absent": ["b/2", "a/1"], "short": [{"series": "a/1"}]}
-    assert rsync_list(result) == ["train_images/a/1/", "train_images/b/2/"]
+def test_the_scan_records_the_path_it_found(tmp_path):
+    _tree(tmp_path, {"studyA": {"s1": 2, "s2": None}}, images_dir="train_series")
+    manifest = scan_manifest(tmp_path)
+
+    assert manifest["series"]["studyA/s1"]["path"] == "train_series/studyA/s1"
+    assert manifest["series"]["studyA/s2"]["path"] is None
 
 
 # --- the one-machine fallback, and its honesty ---------------------------------

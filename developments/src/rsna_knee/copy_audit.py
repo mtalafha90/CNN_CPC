@@ -78,13 +78,19 @@ def scan_manifest(data_root: str | Path, *, split: str = "train", series_csv=Non
         directory = find_series_dir(root, split, study, series)
         key = f"{study}/{series}"
         if directory is None:
-            entries[key] = {"files": 0, "bytes": 0, "present": False}
+            entries[key] = {"files": 0, "bytes": 0, "present": False, "path": None}
             continue
         files = series_files(directory)
         entries[key] = {
             "files": len(files),
             "bytes": sum(path.stat().st_size for path in files),
             "present": True,
+            # The path as found, not as assumed. `find_series_dir` accepts
+            # three layouts; the first version of this module recorded none of
+            # them and `rsync_list` guessed `train_images`, which produced a
+            # list of paths that did not exist on a `train_series` machine --
+            # and cp reported "failed to get attributes" for every line.
+            "path": str(directory.relative_to(root)),
         }
 
     return {
@@ -161,8 +167,40 @@ def compare_manifests(source: dict, destination: dict) -> dict:
         "complete": complete,
         "absent": absent,
         "short": short,
+        "paths": _paths_for(source, absent + [row["series"] for row in short]),
         "bytes_missing": _bytes_missing(source, absent, short),
     }
+
+
+def dominant_layout(manifest: dict) -> str:
+    """The directory the present series actually live under, or "" for none.
+
+    An absent series has no path to read, so its layout has to be inferred --
+    and the only honest source is the series that did arrive. If twenty-four
+    thousand of them sit under `train_series`, the missing ones belong there
+    too. Guessing from a template is what broke this.
+    """
+    counts: dict[str, int] = {}
+    for entry in manifest.get("series", {}).values():
+        path = entry.get("path")
+        if not entry.get("present") or not path:
+            continue
+        parts = Path(path).parts
+        prefix = parts[0] if len(parts) > 2 else ""
+        counts[prefix] = counts.get(prefix, 0) + 1
+    if not counts:
+        return ""
+    return max(sorted(counts), key=lambda name: counts[name])
+
+
+def _paths_for(source: dict, keys) -> dict:
+    """Each series' real relative path, falling back to the common layout."""
+    prefix = dominant_layout(source)
+    resolved = {}
+    for key in keys:
+        recorded = source["series"].get(key, {}).get("path")
+        resolved[key] = recorded or (f"{prefix}/{key}" if prefix else key)
+    return resolved
 
 
 def _bytes_missing(source: dict, absent: list[str], short: list[dict]) -> int:
@@ -186,20 +224,30 @@ def check_against_table(data_root: str | Path, *, split: str = "train", series_c
         "expected_series": manifest["totals"]["series_in_table"],
         "absent": absent,
         "thin": thin,
+        "paths": _paths_for(manifest, absent),
         "totals": manifest["totals"],
     }
 
 
-def rsync_list(result: dict, *, split: str = "train", layout: str = "{split}_images") -> list[str]:
+def rsync_list(result: dict, *, split: str = "train", layout: str | None = None) -> list[str]:
     """Paths to re-copy, relative to the data root, for `rsync --files-from`.
 
-    Every entry names a directory and ends with a slash, so rsync copies the
+    Read from the paths the scan actually found, not from a template. Pass
+    `layout` only to override them -- it exists for a manifest written before
+    paths were recorded, and for nothing else.
+
+    Every entry names a directory and ends with a slash, so a copy takes the
     series whole rather than the one file that happened to be listed.
     """
-    prefix = layout.format(split=split)
-    keys = list(result.get("absent", []))
-    keys += [row["series"] for row in result.get("short", [])]
-    return [f"{prefix}/{key}/" for key in sorted(set(keys))]
+    keys = sorted(
+        set(result.get("absent", [])) | {row["series"] for row in result.get("short", [])}
+    )
+    if layout is not None:
+        prefix = layout.format(split=split)
+        return [f"{prefix}/{key}/" if prefix else f"{key}/" for key in keys]
+
+    paths = result.get("paths") or {}
+    return [f"{paths.get(key, key)}/" for key in keys]
 
 
 def format_comparison(result: dict) -> str:
@@ -265,8 +313,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--layout",
-        default="{split}_images",
-        help="directory holding the studies, for the rsync list",
+        default=None,
+        help=(
+            "override the directory holding the studies, e.g. '{split}_series'. "
+            "Normally unnecessary: the list uses the paths the scan found."
+        ),
     )
     args = parser.parse_args()
 
@@ -331,6 +382,7 @@ __all__ = [
     "SUSPICIOUSLY_FEW_SLICES",
     "check_against_table",
     "compare_manifests",
+    "dominant_layout",
     "format_check",
     "format_comparison",
     "rsync_list",
