@@ -16,7 +16,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -e ".[test,b57]"
+          pip install -e ".[test,b57,b58]"
       - name: Verify packaged B42 endpoint
         run: |
           python -c "import rsna_knee; from rsna_knee import b42_constant_area_aspect_sparse_mil as b42; print(rsna_knee.__version__, b42.B42_VERSION)"
@@ -29,6 +29,12 @@ jobs:
           MKL_NUM_THREADS: '2'
         run: |
           pytest -q developments/tests/test_b57_clean_comparison.py
+      - name: Verify B58 external MRI adapters, learning, recovery and boundaries
+        env:
+          OMP_NUM_THREADS: '2'
+          MKL_NUM_THREADS: '2'
+        run: |
+          pytest -q developments/tests/test_b58_external_knee.py
       - name: Run active-endpoint and compatibility safety tests
         env:
           PYTHONPATH: developments/src

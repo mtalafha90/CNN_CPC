@@ -11,12 +11,17 @@ scientific promotion claim.
 | B52 full-data | best recorded Kaggle `0.716`; inherited training exposure limits its local validation claim | [Submission record](../developments/docs/B52_KAGGLE_SUBMISSION.md) |
 | B53 / B55 | below B52 on both recorded report-teacher rulers | [Common-ruler results](../developments/docs/B55_RUNBOOK.md) |
 | B56 | geometry-only protocol specified; no result in the reviewed main snapshot | [B56 protocol](../developments/docs/B55_RUNBOOK.md) |
-| B57 | implemented, unrun; fresh public initialization, shared development AUCs and gated ensemble | [B57 runbook](../developments/docs/B57_CLEAN_BACKBONE_COMPARISON.md) |
+| B57 | DINOv2 arm running on 5090 (user report, 2026-09-13); no completed AUC | [B57 runbook](../developments/docs/B57_CLEAN_BACKBONE_COMPARISON.md) |
+| B58 | implemented for A4500, unrun; mixed RSNA/MRNet/fastMRI/OAI adaptation followed by B57 diagnosis training | [B58 runbook](../developments/docs/B58_EXTERNAL_KNEE_PRETRAINING.md) |
 
 The B57 machine-readable recipe is `config/b57_clean_backbone_comparison.json`.
 Its launcher is `developments/scripts/run_b57_clean_comparison.sh`; its output
 root is `runs/093_Experiment_B57_clean_backbone_comparison`. The historical
 numbered archive registry ends at B50 and does not describe these later runs.
+B58's recipe is `config/b58_external_knee_pretraining.json`, its launcher is
+`developments/scripts/run_b58_external_knee.sh`, and its output root is
+`runs/094_Experiment_B58_external_knee_pretraining`. It does not modify or
+retrain the active B57 run on the other machine.
 
 ## B42 constant-area native-aspect sparse MIL
 

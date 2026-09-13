@@ -8,13 +8,21 @@ The best recorded Kaggle endpoint is **B52 full-data, 0.716**. B42 remains the
 preserved operational reference below. See the
 [B52 submission record](developments/docs/B52_KAGGLE_SUBMISSION.md).
 
-**B57 is implemented and unrun:** a clean B52-style reference, a fully
+**B57's DINOv2 arm is running on the 5090** (user report, 2026-09-13; no AUC
+result yet). Its protocol contains a clean B52-style reference, a fully
 fine-tuned DINOv2 slice model, shared label/validation checks and a fixed
 ensemble diagnostic. Start with the
 [B57 runbook](developments/docs/B57_CLEAN_BACKBONE_COMPARISON.md).
 It runs inside `CNN_CPC/runs/093_Experiment_B57_clean_backbone_comparison`.
 Its reused development split is held out from the entire new training lineage;
 old B52 local AUCs are not directly comparable to this clean protocol.
+
+**B58 is implemented for the A4500:** adapt DINOv2-S using original RSNA
+training images plus MRNet, fastMRI and OAI, then apply the unchanged B57
+diagnosis-training recipe. External datasets must be downloaded first.
+[Data requirements and commands](developments/docs/B58_EXTERNAL_KNEE_PRETRAINING.md).
+Outputs stay under `CNN_CPC/runs/094_Experiment_B58_external_knee_pretraining`.
+Keep the running B57 machine's checkout and environment unchanged.
 
 ## Current operational endpoint
 

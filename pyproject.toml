@@ -23,6 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest>=8.0"]
 b57 = ["timm==1.0.20"]
+b58 = ["timm==1.0.20", "h5py>=3.11,<4", "pydicom>=3.0", "python-gdcm>=3.0.10"]
 
 [project.scripts]
 cnn-train = "training.train:main"

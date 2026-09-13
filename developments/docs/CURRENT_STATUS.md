@@ -1,12 +1,12 @@
 # Current project status
 
-**Snapshot:** 2026-09-11 (latest update below; earlier experiment records retained)
+**Snapshot:** 2026-09-13 (latest update below; earlier experiment records retained)
 **Primary metric:** macro ROC AUC across 12 targets
 **Best recorded displayed Kaggle score:** **B52 full-data, 0.716**
 
 This file is the living project-status record. Earlier snapshots remain available in Git history and in the frozen experiment documents.
 
-## B52–B57 update
+## B52–B58 update
 
 B52 full-data completed and scored **0.716** on Kaggle; its smaller-population
 run scored `0.708`. [Submission record](B52_KAGGLE_SUBMISSION.md).
@@ -27,13 +27,24 @@ See [B57's source audit](B57_CLEAN_BACKBONE_COMPARISON.md).
 B56 is specified as B55 geometry with the original teacher; the reviewed
 `main` snapshot records no result. [B55/B56 runbook](B55_RUNBOOK.md).
 
-**B57 is implemented, not trained.** It starts a B52-style reference and a
+**B57's DINOv2 arm is running on the 5090**, according to the user's
+2026-09-13 report. No completed AUC is recorded yet. It starts a B52-style reference and a
 DINOv2-S slice model from pinned public weights, with fresh competition heads.
 It excludes validation scanner profiles from every new training row, freezes
 the shared original teacher and masks, and evaluates fixed final epochs plus
 one 50:50 ensemble. Expert-58 remains diagnostic. The comparison is development
 evidence requiring another group-disjoint confirmation before promotion.
 [Protocol and commands](B57_CLEAN_BACKBONE_COMPARISON.md).
+
+**B58 is implemented, not trained:** a separate A4500 experiment adapts the
+public DINOv2-S encoder for 2,000 self-supervised steps on a frozen subset of
+RSNA training images, MRNet train, fastMRI knee train and OAI knee MRI. It then
+uses B57's unchanged twelve-epoch RSNA diagnosis recipe and compares with the
+completed B57 DINOv2 arm. No external diagnosis labels or held-out RSNA images
+enter gradients. This tests extra adaptation and external images together;
+it does not isolate the effect of external data alone. Downloads and real-data
+A4500 preflights are still required; no improvement is claimed.
+[B58 protocol and commands](B58_EXTERNAL_KNEE_PRETRAINING.md).
 
 ## Independent hidden evidence
 

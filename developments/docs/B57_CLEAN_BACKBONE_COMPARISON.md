@@ -1,6 +1,10 @@
 # B57: a clean reference and a different MRI representation
 
-**Status: implemented; no competition-data training or AUC result yet.**
+**Status (2026-09-13): DINOv2 arm running on the 5090, per user report;
+no completed AUC result yet.** Keep that machine's checkout and environment
+unchanged until it finishes. The separate
+[B58 A4500 experiment](B58_EXTERNAL_KNEE_PRETRAINING.md) will use its completed
+DINOv2 result as a reference; it does not modify this run.
 The protocol is `config/b57_clean_backbone_comparison.json`. Run everything
 from the primary `CNN_CPC` checkout. Outputs go to
 `runs/093_Experiment_B57_clean_backbone_comparison/`. No sibling worktree is
