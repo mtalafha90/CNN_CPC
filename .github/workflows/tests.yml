@@ -35,6 +35,13 @@ jobs:
           MKL_NUM_THREADS: '2'
         run: |
           pytest -q developments/tests/test_b58_external_knee.py
+      - name: Verify local DINOv2 notebook, process control and result provenance
+        env:
+          OMP_NUM_THREADS: '2'
+          MKL_NUM_THREADS: '2'
+          MPLBACKEND: Agg
+        run: |
+          pytest -q notebook/test_dinov2_local_notebook.py
       - name: Run active-endpoint and compatibility safety tests
         env:
           PYTHONPATH: developments/src

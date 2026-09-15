@@ -2,6 +2,12 @@
 
 Twelve binary findings per knee MRI study, scored as macro ROC AUC.
 
+For an explained local DINOv2 training workflow on the full dataset, open
+[`notebook/dinov2_knee_mri_local.ipynb`](notebook/dinov2_knee_mri_local.ipynb).
+It includes slice previews, an architecture diagram, probabilities and loss,
+checkpoint recovery, and plots of the actual run. Follow the
+[local notebook setup guide](docs/DINOV2_LOCAL_NOTEBOOK.md).
+
 ## Latest competition work
 
 The best recorded Kaggle endpoint is **B52 full-data, 0.716**. B42 remains the
