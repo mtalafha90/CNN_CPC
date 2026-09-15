@@ -38,13 +38,51 @@ conda create --name dinov2-local --clone rsna-knee -y
 conda activate dinov2-local
 python -m pip install -e '.[notebook]'
 python -m ipykernel install --user --name dinov2-local --display-name 'Knee MRI · DINOv2'
-python -m jupyterlab notebook/dinov2_knee_mri_local.ipynb
+python -m jupyterlab notebook/dinov2_knee_mri_local.ipynb --ServerApp.ip=127.0.0.1
 ```
 
 The editable install has no upgrade flag. Keep the working Torch/torchvision
 pair; the notebook performs an actual CUDA forward/backward check and a real
 model preflight. Registering a kernel from its own environment is the standard
 [IPython kernel installation workflow](https://ipython.readthedocs.io/en/stable/install/kernel_install.html).
+
+## Repair a blank JupyterLab page or static-file HTTP 500
+
+The following traceback was reproduced with JupyterLab 4.6.3, Jupyter Server
+2.21.0 and Tornado 6.5.9 on 2026-09-15:
+
+```text
+AttributeError: 'FileFindHandler' object has no attribute 'allowed_symlink_directory'
+```
+
+Tornado 6.5.9 added a static-file symlink check, but Jupyter's custom handler
+does not initialise its new attribute. The failure occurs while serving the
+JavaScript bundle and favicon, before the notebook loads. The earlier notebook
+kernel checks did not exercise this browser-asset path. See the
+[Tornado release change](https://github.com/tornadoweb/tornado/blob/v6.5.9/docs/releases/v6.5.9.rst)
+and [Jupyter's handler](https://github.com/jupyter-server/jupyter_server/blob/v2.21.0/jupyter_server/base/handlers.py).
+
+The notebook dependency extra now pins Tornado to **6.5.8**, which passes the
+same static-asset checks. For an already installed environment, stop the failed
+Jupyter server with **Ctrl+C** and confirm with `y` if prompted. In the same
+terminal, keeping the environment that launched the server active, run:
+
+```bash
+cd /media/talafha/Disk_1/CNN_CPC
+python -m pip install --no-deps 'tornado==6.5.8'
+python -c "import sys, tornado; print(sys.executable); print('Tornado:', tornado.version)"
+python -m jupyterlab notebook/dinov2_knee_mri_local.ipynb --ServerApp.ip=127.0.0.1
+```
+
+This changes only Tornado. It does not reinstall PyTorch, CUDA, or the training
+packages. Use the new URL printed by the restarted server, then reload the
+browser with **Ctrl+Shift+R**. The message about skipped, non-installed language
+servers is informational and is not the cause of this failure.
+
+This temporary pin is for the documented loopback-only local server; it
+predates the symlink hardening in Tornado 6.5.9. Retire the pin once a compatible
+upstream combination passes the static-asset tests. Authentication and XSRF
+settings remain at their normal defaults.
 
 ## In Jupyter
 
@@ -110,11 +148,14 @@ python notebook/build_dinov2_local_notebook.py
 python -m pip install -e '.[test,notebook]'
 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 MPLBACKEND=Agg python -m pytest -q \
   notebook/test_dinov2_local_notebook.py \
+  notebook/test_jupyter_static_assets.py \
   developments/tests/test_b57_clean_comparison.py
 ```
 
 Automated notebook execution uses explicitly synthetic CPU fixtures. Production
 data/model preparation, train/resume delegation, process interruption and report
 hash/label checks have separate tests; the existing model regression suite
-checks real DINOv2 gradients and checkpoint round trips. These checks are not
+checks real DINOv2 gradients and checkpoint round trips. CI also installs the
+actual notebook web dependencies and validates the shipped JavaScript and
+favicon through Jupyter's static-file handler. These checks are not
 a substitute for the included real-data preflight on the 5090.

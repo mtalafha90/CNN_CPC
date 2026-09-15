@@ -16,7 +16,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -e ".[test,b57,b58]"
+          pip install -e ".[test,notebook,b57,b58]"
       - name: Verify packaged B42 endpoint
         run: |
           python -c "import rsna_knee; from rsna_knee import b42_constant_area_aspect_sparse_mil as b42; print(rsna_knee.__version__, b42.B42_VERSION)"
@@ -41,7 +41,7 @@ jobs:
           MKL_NUM_THREADS: '2'
           MPLBACKEND: Agg
         run: |
-          pytest -q notebook/test_dinov2_local_notebook.py
+          pytest -q notebook/test_dinov2_local_notebook.py notebook/test_jupyter_static_assets.py
       - name: Run active-endpoint and compatibility safety tests
         env:
           PYTHONPATH: developments/src
