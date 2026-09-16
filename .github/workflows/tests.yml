@@ -34,7 +34,7 @@ jobs:
           OMP_NUM_THREADS: '2'
           MKL_NUM_THREADS: '2'
         run: |
-          pytest -q developments/tests/test_b58_external_knee.py
+          pytest -q developments/tests/test_b58_external_knee.py developments/tests/test_b58_full_data.py
       - name: Verify standalone DINOv2 execution, numerical parity and recovery
         env:
           OMP_NUM_THREADS: '2'

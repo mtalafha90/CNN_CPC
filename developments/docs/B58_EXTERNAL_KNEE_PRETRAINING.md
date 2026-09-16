@@ -1,5 +1,9 @@
 # B58: adapt DINOv2 to additional knee MRI images
 
+**Preserved v1 runbook.** For the user's expanded run on all eligible training
+data and native labels, use [B58 full-data v2](B58_FULL_DATA.md). The v1 commands
+below retain their original subset and unlabelled behavior for existing runs.
+
 **Status (2026-09-13): implemented; no real-data B58 training or AUC yet.**
 The user reports the B57 DINOv2 arm is running on the 5090. B58 is a separate
 A4500 experiment. Keep the running 5090 checkout and environment unchanged.

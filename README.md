@@ -24,11 +24,12 @@ It runs inside `CNN_CPC/runs/093_Experiment_B57_clean_backbone_comparison`.
 Its reused development split is held out from the entire new training lineage;
 old B52 local AUCs are not directly comparable to this clean protocol.
 
-**B58 is implemented for the A4500:** adapt DINOv2-S using original RSNA
-training images plus MRNet, fastMRI and OAI, then apply the unchanged B57
-diagnosis-training recipe. External datasets must be downloaded first.
-[Data requirements and commands](developments/docs/B58_EXTERNAL_KNEE_PRETRAINING.md).
-Outputs stay under `CNN_CPC/runs/094_Experiment_B58_external_knee_pretraining`.
+**B58 full-data v2 is implemented for the A4500:** use every eligible training
+case/series from RSNA, MRNet, fastMRI and OAI; learn from native diagnosis labels,
+then apply the unchanged B57 RSNA fine-tuning recipe. Images and external label
+files, including explicit OAI visit/knee joins, are required. No AUC is recorded.
+[Data requirements and commands](developments/docs/B58_FULL_DATA.md).
+Outputs stay under `CNN_CPC/runs/094_Experiment_B58_external_knee_pretraining/full_data_v2`.
 Keep the running B57 machine's checkout and environment unchanged.
 
 ## Current operational endpoint

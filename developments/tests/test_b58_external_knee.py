@@ -333,9 +333,13 @@ def test_ssl_trainer_restart_preserves_weights_and_exact_source_exposure(tmp_pat
         ssl.load_encoder(roots[1], p)
 
 
-def test_full_supervised_trainer_recovers_and_exports_comparable_predictions(tmp_path, monkeypatch):
+@pytest.mark.parametrize("revision", ["v1", "full_data_v2"])
+def test_full_supervised_trainer_recovers_and_exports_comparable_predictions(tmp_path, monkeypatch, revision):
     from types import SimpleNamespace
-    from rsna_knee.b58_external_knee import training as t, evaluation as e, VERSION
+    if revision == "v1":
+        from rsna_knee.b58_external_knee import training as t, evaluation as e, VERSION
+    else:
+        from rsna_knee.b58_full_data import finetune as t, evaluation as e, VERSION
     from rsna_knee.b57_models import ARMS
     from rsna_knee.b57_protocol import VERSION as B57_VERSION
     from rsna_knee.b57_training import save_predictions as export_b57

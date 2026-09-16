@@ -12,16 +12,17 @@ scientific promotion claim.
 | B53 / B55 | below B52 on both recorded report-teacher rulers | [Common-ruler results](../developments/docs/B55_RUNBOOK.md) |
 | B56 | geometry-only protocol specified; no result in the reviewed main snapshot | [B56 protocol](../developments/docs/B55_RUNBOOK.md) |
 | B57 | DINOv2 arm running on 5090 (user report, 2026-09-13); no completed AUC | [B57 runbook](../developments/docs/B57_CLEAN_BACKBONE_COMPARISON.md) |
-| B58 | implemented for A4500, unrun; mixed RSNA/MRNet/fastMRI/OAI adaptation followed by B57 diagnosis training | [B58 runbook](../developments/docs/B58_EXTERNAL_KNEE_PRETRAINING.md) |
+| B58 full-data v2 | implemented for A4500, unrun; complete eligible inventories and native labels, followed by B57 diagnosis training | [B58 full-data runbook](../developments/docs/B58_FULL_DATA.md) |
 
 The B57 machine-readable recipe is `config/b57_clean_backbone_comparison.json`.
 Its launcher is `developments/scripts/run_b57_clean_comparison.sh`; its output
 root is `runs/093_Experiment_B57_clean_backbone_comparison`. The historical
 numbered archive registry ends at B50 and does not describe these later runs.
-B58's recipe is `config/b58_external_knee_pretraining.json`, its launcher is
-`developments/scripts/run_b58_external_knee.sh`, and its output root is
-`runs/094_Experiment_B58_external_knee_pretraining`. It does not modify or
-retrain the active B57 run on the other machine.
+B58 v2's recipe is `config/b58_full_data.json`, its launcher is
+`developments/scripts/run_b58_full_data.sh`, and its output root is
+`runs/094_Experiment_B58_external_knee_pretraining/full_data_v2`. The capped,
+unlabelled v1 remains preserved at its original entrypoint. Neither revision
+modifies or retrains the active B57 run on the other machine.
 
 ## B42 constant-area native-aspect sparse MIL
 

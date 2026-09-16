@@ -1,6 +1,6 @@
 # Current project status
 
-**Snapshot:** 2026-09-13 (latest update below; earlier experiment records retained)
+**Snapshot:** 2026-09-16 (latest update below; earlier experiment records retained)
 **Primary metric:** macro ROC AUC across 12 targets
 **Best recorded displayed Kaggle score:** **B52 full-data, 0.716**
 
@@ -36,15 +36,18 @@ one 50:50 ensemble. Expert-58 remains diagnostic. The comparison is development
 evidence requiring another group-disjoint confirmation before promotion.
 [Protocol and commands](B57_CLEAN_BACKBONE_COMPARISON.md).
 
-**B58 is implemented, not trained:** a separate A4500 experiment adapts the
-public DINOv2-S encoder for 2,000 self-supervised steps on a frozen subset of
-RSNA training images, MRNet train, fastMRI knee train and OAI knee MRI. It then
-uses B57's unchanged twelve-epoch RSNA diagnosis recipe and compares with the
-completed B57 DINOv2 arm. No external diagnosis labels or held-out RSNA images
-enter gradients. This tests extra adaptation and external images together;
-it does not isolate the effect of external data alone. Downloads and real-data
-A4500 preflights are still required; no improvement is claimed.
-[B58 protocol and commands](B58_EXTERNAL_KNEE_PRETRAINING.md).
+**B58 full-data v2 is implemented, not trained:** the user's 2026-09-16 expansion
+uses all eligible series in the supplied RSNA/MRNet/fastMRI/OAI training
+inventories, with no group/series caps. It runs one complete image-adaptation
+pass, six native-label diagnosis passes, then the unchanged twelve-epoch B57
+RSNA recipe. MRNet's three labels, fastMRI+ finding annotations/reviewed-normal
+scans, and explicitly joined OAI native assessments train separate heads.
+Unknown labels are masked; held-out/expert images never enter gradients.
+Slice centres remain sampled. Full downloads, OAI joins and A4500 preflights
+are still required. No AUC improvement is claimed. This tests the combined
+data/supervision/training recipe, not external data alone.
+[B58 full-data protocol and commands](B58_FULL_DATA.md). The earlier capped,
+unlabelled [v1](B58_EXTERNAL_KNEE_PRETRAINING.md) is preserved for existing runs.
 
 ## Independent hidden evidence
 

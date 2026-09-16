@@ -4,9 +4,10 @@
 `0.716`. [B57](docs/B57_CLEAN_BACKBONE_COMPARISON.md) now implements a fresh
 ConvNeXt reference versus a fully fine-tuned DINOv2 slice model, with shared
 labels and evaluation. Its DINOv2 arm is running on the 5090, per user report;
-no AUC is recorded yet. [B58](docs/B58_EXTERNAL_KNEE_PRETRAINING.md) implements
-separate A4500 adaptation with RSNA, MRNet, fastMRI and OAI images, followed by
-the same RSNA diagnosis recipe; it is not trained yet. The earlier B42-centered
+no AUC is recorded yet. [B58 full-data v2](docs/B58_FULL_DATA.md) implements
+separate A4500 adaptation with all eligible RSNA, MRNet, fastMRI and OAI training
+series and source-native labels, followed by the same RSNA diagnosis recipe;
+it is not trained yet. The earlier B42-centered
 description below records the maintained compatibility baseline.
 
 This directory preserves the complete research/development history that
