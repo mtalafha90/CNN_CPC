@@ -93,11 +93,13 @@ explicitly. With the defaults, discovery looks only inside WORK_ROOT/runs,
 first for input paths recorded in an existing frozen data protocol, then for
 matching data files. Ambiguous matches stop and ask for an explicit path.
 
-For portable Jupyter execution, the DataLoader uses **zero subprocess
-workers**. Notebook-defined classes therefore need no exported worker module.
-This can reduce data-loading throughput; it does not change the sampling,
-model, loss, batch size, or split. GPU micro-batches remain two triplets and
-optimizer batches remain two studies.
+The DataLoader defaults below are tuned for the RTX 5090 workstation: six CPU
+workers, two prefetched batches per worker, pinned host memory, and no persistent
+workers because this notebook intentionally rebuilds loaders at epoch/evaluation
+boundaries. These settings change data delivery only; they do not change the
+sampling, model, loss, batch size, or split. GPU micro-batches remain two
+triplets and optimizer batches remain two studies. If host RAM is constrained,
+reduce NUM_WORKERS before reducing PREFETCH_FACTOR.
 ''')
 code(r'''
 from pathlib import Path
@@ -111,6 +113,12 @@ LABELS_ROOT = None
 SCANNER_SPLIT_ROOT = None
 SERIES_POLICY = None
 DEVICE = "cuda:0"
+
+# RTX 5090 DataLoader defaults. These affect throughput/host-memory use, not maths.
+NUM_WORKERS = 6
+PREFETCH_FACTOR = 2
+PIN_MEMORY = True
+PERSISTENT_WORKERS = False
 ''', "settings")
 code(r'''
 from __future__ import annotations
@@ -662,9 +670,19 @@ def collate_studies(items):
 def make_loader(dataset, *, epoch=None):
     seed = RECIPE["seed"] + (0 if epoch is None else int(epoch) * 1009)
     generator = torch.Generator().manual_seed(seed)
-    return DataLoader(dataset, batch_size=RECIPE["batch_size"] if epoch is not None else 1,
-                      shuffle=epoch is not None, drop_last=False, collate_fn=collate_studies,
-                      num_workers=0, pin_memory=False, generator=generator)
+    workers = int(NUM_WORKERS)
+    if workers < 0:
+        raise ValueError("NUM_WORKERS must be nonnegative.")
+    kwargs = dict(batch_size=RECIPE["batch_size"] if epoch is not None else 1,
+                  shuffle=epoch is not None, drop_last=False, collate_fn=collate_studies,
+                  num_workers=workers, pin_memory=bool(PIN_MEMORY), generator=generator)
+    if workers > 0:
+        prefetch = int(PREFETCH_FACTOR)
+        if prefetch < 1:
+            raise ValueError("PREFETCH_FACTOR must be >= 1 when NUM_WORKERS > 0.")
+        kwargs["prefetch_factor"] = prefetch
+        kwargs["persistent_workers"] = bool(PERSISTENT_WORKERS)
+    return DataLoader(dataset, **kwargs)
 ''')
 markdown(r'''
 ## 6. DINOv2 and the complete study model
@@ -1143,6 +1161,8 @@ after an interruption resumes this notebook's last completed epoch.
 ''')
 code(r'''
 environment_check(DEVICE)
+print("DataLoader:", dict(num_workers=NUM_WORKERS, prefetch_factor=PREFETCH_FACTOR,
+                          pin_memory=PIN_MEMORY, persistent_workers=PERSISTENT_WORKERS))
 protocol = prepare_data(work_root=WORK_ROOT, data_root=DATA_ROOT, run_root=RUN_ROOT,
                         labels_root=LABELS_ROOT, scanner_split_root=SCANNER_SPLIT_ROOT,
                         series_policy=SERIES_POLICY)
