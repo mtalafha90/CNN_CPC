@@ -2,10 +2,11 @@
 
 Twelve binary findings per knee MRI study, scored as macro ROC AUC.
 
-For an explained local DINOv2 training workflow on the full dataset, open
+For a standalone DINOv2 training notebook on the full dataset, open
 [`notebook/dinov2_knee_mri_local.ipynb`](notebook/dinov2_knee_mri_local.ipynb).
-It includes slice previews, an architecture diagram, probabilities and loss,
-checkpoint recovery, and plots of the actual run. Follow the
+All pipeline functions and classes are in its cells; no project installation
+or source imports are required. It includes slice previews, the architecture,
+training/recovery, evaluation, and plots of the actual run. Follow the
 [local notebook setup guide](docs/DINOV2_LOCAL_NOTEBOOK.md).
 
 ## Latest competition work

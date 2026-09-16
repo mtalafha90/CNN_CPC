@@ -1,50 +1,152 @@
-# Local DINOv2 knee MRI notebook
+# Standalone DINOv2 knee MRI notebook
 
 Open [`dinov2_knee_mri_local.ipynb`](../notebook/dinov2_knee_mri_local.ipynb)
-for the explained full-data DINOv2 workflow on one RTX 5090. It covers data
-boundaries, real MRI slice previews, the architecture, sigmoid and loss, a
-gradient preflight, training/recovery, and final AUC and probability exports.
+for the complete local DINOv2 workflow on one RTX 5090. Every pipeline function
+and class is defined in notebook cells: DICOM/metadata handling, supervision,
+scanner separation, preprocessing, the dataset, study model, loss, optimizer,
+preflight, training, recovery, evaluation, inference loading and plotting.
 
-The notebook uses the existing DINOv2 training recipe: public ViT-S/14 encoder,
-all layers trainable, 32 three-slice inputs per series, aspect-preserving
-geometry, one series transformer, twelve finding queries, two studies per
-optimizer step and twelve fixed epochs. The original label and scanner split
-artifacts are required. Full data means every allowed training study each
-epoch; scanner validation and expert diagnostic studies remain held out.
+**Copying this one notebook is sufficient for the code.** It does not import
+`rsna_knee`, alter `sys.path`, run external scripts, load Python helpers, or
+require an editable project installation. Standard Python libraries are still
+required; the DINOv2 image backbone comes from `timm==1.0.20` and the authors'
+public weights. All knee-specific architecture code is in the notebook.
 
-## Setup on the 5090 machine
+The established recipe is preserved: public ViT-S/14, full encoder fine-tuning,
+32 three-slice inputs per series, 90% crop, aspect-preserving geometry at about
+448² pixels, one series transformer, twelve finding queries, two studies per
+optimizer update and twelve fixed epochs. Full data means every permitted
+training study; scanner validation and expert studies remain held out.
 
-Finish the current GPU training job before updating its checkout or starting
-another training process. Work inside the primary project directory. The
-commands below never create a sibling project checkout.
+## Open the updated notebook on the 5090
+
+Use the primary project directory. Updating fetches the notebook; the running
+notebook does not depend on the checkout. Preserve local edits if Git reports
+a conflict.
 
 ```bash
 cd /media/talafha/Disk_1/CNN_CPC
 git status --short
 git pull --ff-only origin main
-test -f notebook/dinov2_knee_mri_local.ipynb
+conda activate dinov2-local
+python -m jupyterlab notebook/dinov2_knee_mri_local.ipynb --ServerApp.ip=127.0.0.1
 ```
 
-If Git stops because of local edits, preserve and resolve those edits before
-continuing; do not reset or remove existing training artifacts.
+If Jupyter is already open, close the old notebook tab, reopen the file from
+the file browser, and restart its kernel. Otherwise an open editor may still
+contain the earlier package-based notebook. Keep any previously executed copy
+under a different filename if you need its output record.
 
-Create a notebook environment by cloning the environment whose PyTorch already
-works on the 5090. This preserves its GPU build and keeps notebook dependencies
-separate. Do this creation step once. If `dinov2-local` already exists, activate
-it instead of recreating it.
+If the notebook environment does not yet exist, create it once by cloning the
+environment whose PyTorch works on the 5090. This preserves its working GPU
+build. Activate an existing environment instead of recreating it.
 
 ```bash
 conda create --name dinov2-local --clone rsna-knee -y
 conda activate dinov2-local
-python -m pip install -e '.[notebook]'
+python -m pip install "timm==1.0.20" "numpy>=1.26" "pandas>=2" \
+  "scikit-learn>=1.3" "matplotlib>=3.8" "pydicom>=3" "python-gdcm>=3.0.10" \
+  "jupyterlab>=4,<5" "tornado==6.5.8" "ipykernel>=6"
 python -m ipykernel install --user --name dinov2-local --display-name 'Knee MRI · DINOv2'
-python -m jupyterlab notebook/dinov2_knee_mri_local.ipynb --ServerApp.ip=127.0.0.1
 ```
 
-The editable install has no upgrade flag. Keep the working Torch/torchvision
-pair; the notebook performs an actual CUDA forward/backward check and a real
-model preflight. Registering a kernel from its own environment is the standard
-[IPython kernel installation workflow](https://ipython.readthedocs.io/en/stable/install/kernel_install.html).
+No `pip install -e .` is needed. Keep the working Torch/torchvision pair. The
+notebook performs CUDA arithmetic and a real model backward preflight before
+training. The first public-weight preparation may need internet access; later
+runs use the verified local initialization. Registering a kernel from its own
+environment follows the standard
+[IPython workflow](https://ipython.readthedocs.io/en/stable/install/kernel_install.html).
+
+## Inputs and independent execution
+
+The first cell defaults to the existing primary directory as `WORK_ROOT`, the
+full original dataset, and a dedicated output folder:
+
+```text
+/media/talafha/Disk_1/CNN_CPC/runs/dinov2_knee_mri_standalone
+```
+
+`WORK_ROOT` is just a data/output directory. No source directory is required.
+You can put the notebook anywhere and set the paths explicitly. The required
+inputs are:
+
+| Setting | Required files |
+|---|---|
+| `DATA_ROOT` | Original `train.csv`, `train_series.csv`, and DICOM series |
+| `LABELS_ROOT` | Original `training_targets.csv`, `policy.json`, `audit.json` |
+| `SCANNER_SPLIT_ROOT` | Existing selection-split JSON, per-study CSV and SHA256 file |
+| `SERIES_POLICY` | Existing label-free all-series policy JSON |
+| `RUN_ROOT` | A dedicated empty folder for a new run, or this notebook's existing run |
+
+Leave the three optional input settings as `None` to discover them under
+`WORK_ROOT/runs`. Discovery first reads existing frozen protocol JSON files
+for verified input locations. These are data-only manifests; no old Python
+implementation or model is imported. If there are multiple candidates, set
+the explicit paths. Do not rebuild the split or replace the teacher labels.
+
+Preparation reconstructs the original soft labels and scanner grouping from
+raw CSV/JSON files and DICOM headers, so an older prepared protocol is not
+required. Original artifact filenames/column names are accepted without
+renaming those files. The default population is 3,603 training, 548 validation,
+198 profile-overlap exclusions and 58 expert diagnostic studies.
+
+Supported DICOM layouts are `train_series/<study>/<series>`,
+`train_images/<study>/<series>`, or `<study>/<series>` under `DATA_ROOT`.
+Supported suffixes include `.dcm`, `.dicom`, `.ima`, and no suffix. The inherited
+loader can skip individual decode failures; missing or wholly unreadable
+series raise errors. This is not a complete file-by-file pixel audit.
+
+## Run and resume
+
+1. Select **Knee MRI · DINOv2** and review the paths in the first cell.
+2. Run the definition cells in order. They contain all executable pipeline code.
+3. In **Run the workflow**, prepare inputs and public weights, inspect the
+   population and actual slice preview, and run the model preflight.
+4. Start the training cell when the GPU is available. Leave Jupyter running.
+5. After training, run the learning-curve and results cell. Save your executed
+   notebook copy as the run record.
+
+The notebook uses `num_workers=0` so its dataset class can run directly in
+Jupyter without exporting a module for spawned workers. This can reduce
+loading throughput relative to multiprocessing; it leaves the training
+recipe unchanged. Do not select spawned workers for notebook-local classes.
+
+Training runs in the kernel, and ordinary interruption cleans up model/optimizer
+references. Recovery is at completed epochs; a partial epoch is repeated.
+After restarting the kernel, keep the same code, settings, environment and
+inputs, rerun the cells, and start training again. The checkpoint restores
+model, optimizer, scheduler, scaler and random state. A completed run verifies
+its final artifacts and returns without additional updates.
+
+This notebook has a separate checkpoint format and default output folder.
+It does not resume the earlier package-based runner's checkpoints. Existing
+training runs and their source modules are preserved. Model state keys and
+numerical behavior are checked against the established DINOv2 implementation,
+but this is not a claim that a new GPU run will be bitwise identical.
+
+The resume contract fingerprints the executed function definitions, recipe,
+input files, pretrained tensors, library versions and precision. Copying the
+notebook to a different filename is supported. Moving an existing run and its
+inputs to different paths or changing software can invalidate its resume
+contract; independent new runs may use any correct paths.
+
+## Outputs
+
+| Folder or file under `RUN_ROOT` | Contents |
+|---|---|
+| `notebook_run.json` | Executed implementation fingerprint and recipe |
+| `protocol/` | Input hashes, frozen labels, study lists and series index |
+| `public_init/` | Hash-verified public image-encoder initialization |
+| `preflight.json` | Actual backward checks, zero updates and peak GPU allocation |
+| `model/` | Recovery/final checkpoints, history and held-out predictions |
+| `reports/` | Metrics, per-finding AUC/coverage and per-study probabilities |
+| `figures/` | Architecture, slices, sigmoid, history and AUC as PNG/SVG |
+
+The saved model can be reconstructed with the notebook's own
+`load_trained_model` function. All outputs are for the fixed final epoch.
+The reused scanner validation surface is a development measure, and expert
+scores are diagnostic only. This workflow does not select the best epoch,
+compare paired candidate/control models or generate competition submissions.
 
 ## Repair a blank JupyterLab page or static-file HTTP 500
 
@@ -84,78 +186,26 @@ predates the symlink hardening in Tornado 6.5.9. Retire the pin once a compatibl
 upstream combination passes the static-asset tests. Authentication and XSRF
 settings remain at their normal defaults.
 
-## In Jupyter
-
-1. Select **Knee MRI · DINOv2** as the kernel.
-2. Review the first settings cell. The defaults point to the primary checkout
-   and its full `rsna-knee-abnormality-detection` dataset.
-3. Keep the default output folder `runs/dinov2_knee_mri_local` for a new run.
-   It is separate from your current training artifacts. A nonempty foreign run
-   folder is refused.
-4. Leave the label, scanner-split and series-policy overrides as `None` when
-   they remain in their established locations. Existing protocol paths are
-   reused when available; otherwise the original artifacts are discovered.
-   Missing or ambiguous artifacts require their exact paths, not a new split.
-5. Run the cells in order. Review the population table and real slice preview,
-   wait for the model preflight to pass, then run the training cell.
-6. After training finishes, run the history and evaluation cells and save the
-   executed notebook as your local run record.
-
-The source notebook has no experiment-number labels and ships with empty
-outputs. The adapter retains the original machine-readable protocol identities
-and checkpoint keys internally for compatibility; it does not rewrite model
-provenance. Only the DINOv2 encoder is initialized and trained by this workflow.
-
-## Recovery and outputs
-
-Normal **Kernel → Interrupt** signals the trainer and data-worker process
-group. Recovery is at the last completed epoch. An unfinished epoch is repeated.
-After restarting Jupyter, use the same settings, code and environment, rerun
-setup/preparation/preflight, then run the training cell again. A completed run
-is checked and returned without training again. Leave the Jupyter server and
-kernel running during a live run.
-
-`NUM_WORKERS = 2` is a conservative default. Set it to zero for loading-error
-diagnosis or lower CPU memory pressure. Prefetch remains one batch per worker.
-Worker changes are allowed on resume; model, precision, input and software
-contract changes are checked and rejected. The notebook does not expose a new
-slice-count, geometry or epoch sweep.
-
-All outputs are inside `CNN_CPC/runs/dinov2_knee_mri_local/`:
-
-| Folder or file | Contents |
-|---|---|
-| `notebook_session.json` | Input paths and notebook adapter fingerprints |
-| `protocol/` | Frozen input hashes, study groups, labels and model settings |
-| `public_init/` | Hash-verified public DINOv2 initialization |
-| `dinov2_slice_candidate/` | Recovery/final checkpoints, history and prediction artifacts |
-| `reports/` | Final metrics, per-finding coverage/AUC and per-study probabilities |
-| `figures/` | Architecture, slices, sigmoid, learning curves and AUC as PNG/SVG |
-| `logs/` | Verbatim stage logs and full preflight details |
-
-Evaluation is for the fixed final epoch on the existing development and expert
-diagnostic surfaces. The notebook does not select the best epoch, calculate a
-paired control comparison, or create a competition submission.
-
 ## Maintainer checks
 
-The notebook is generated deterministically; edit its builder and rebuild it.
-The local helper is a subpackage so existing flat-module source digests remain
-unchanged. Its own adapter files are fingerprinted separately for resume.
+The notebook builder extracts selected existing algorithms at **build time**
+and inserts their complete definitions into visible notebook cells. It adds
+standalone orchestration in the builder. Notebook execution never calls the
+builder or reads repository source/config files. Edit the builder and rebuild:
 
 ```bash
 python notebook/build_dinov2_local_notebook.py
-python -m pip install -e '.[test,notebook]'
 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 MPLBACKEND=Agg python -m pytest -q \
   notebook/test_dinov2_local_notebook.py \
+  notebook/test_local_dinov2_adapter.py \
   notebook/test_jupyter_static_assets.py \
   developments/tests/test_b57_clean_comparison.py
 ```
 
-Automated notebook execution uses explicitly synthetic CPU fixtures. Production
-data/model preparation, train/resume delegation, process interruption and report
-hash/label checks have separate tests; the existing model regression suite
-checks real DINOv2 gradients and checkpoint round trips. CI also installs the
-actual notebook web dependencies and validates the shipped JavaScript and
-favicon through Jupyter's static-file handler. These checks are not
-a substitute for the included real-data preflight on the 5090.
+Tests check exact preprocessing agreement, real DINOv2 state/logit/gradient
+agreement, label/scanner metadata boundaries, interrupted versus uninterrupted
+training, checkpoint round trips and tamper rejection. Every notebook cell
+also runs from an isolated directory with repository imports blocked and
+explicitly synthetic CPU fixtures. CI adds execution in a real Jupyter kernel.
+The earlier adapter keeps its compatibility tests. No GPU/full-data training
+result is implied by these checks; use the notebook's actual 5090 preflight.
