@@ -5,11 +5,17 @@ from copy import deepcopy
 import json
 from pathlib import Path
 
-import h5py
 import numpy as np
 import pytest
 import torch
 from torch import nn
+
+# h5py lives in the optional `b58` extra, not in `test`. Imported at module
+# level it does not skip this file -- pytest interrupts collection and none of
+# the repository's ~2,350 tests run, which silently removes the regression gate
+# this module's own documentation relies on. `b58_external_knee/data.py`
+# already gets this right, importing h5py inside `read_volume`.
+h5py = pytest.importorskip("h5py", reason="h5py is in the optional b58 extra")
 
 from rsna_knee.b58_external_knee import data, protocol, ssl
 from rsna_knee.b57_protocol import digest, write_json, sha256_file

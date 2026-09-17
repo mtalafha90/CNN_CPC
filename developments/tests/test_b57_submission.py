@@ -12,6 +12,7 @@ leaderboard will exercise anyway.
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -30,6 +31,23 @@ from rsna_knee.b57_submission import (
 from rsna_knee.constants import SUBMISSION_COLUMNS, TARGETS
 
 
+#: The real run's curve: peak at epoch 5, endpoint at 12. Used verbatim so the
+#: fixtures cannot drift into a shape the trainer could never emit -- which is
+#: how the earlier "stopped early" test passed against a tautological guard.
+REAL_CURVE = [
+    0.535017, 0.676901, 0.780420, 0.776951, 0.794906, 0.788904,
+    0.782210, 0.781088, 0.772780, 0.773500, 0.774100, 0.774759,
+]
+
+
+def _history(scores=None):
+    scores = REAL_CURVE if scores is None else scores
+    return [
+        {"epoch": i, "validation": {"macro_auc": value}}
+        for i, value in enumerate(scores, start=1)
+    ]
+
+
 def _payload(**overrides):
     payload = {
         "version": VERSION,
@@ -37,7 +55,7 @@ def _payload(**overrides):
         "selection": "fixed_final_epoch",
         "completed_epochs": 12,
         "model_config": {"epochs": 12},
-        "history": [{"validation": {"macro_auc": 0.774759}}],
+        "history": _history(),
     }
     payload.update(overrides)
     return payload
@@ -71,9 +89,30 @@ def test_a_selection_rule_other_than_the_declared_endpoint_is_refused(tmp_path):
 
 def test_an_arm_that_stopped_early_is_refused(tmp_path):
     """The DINOv2 candidate peaked at epoch 5 of 12; that is not the endpoint."""
-    stopped = _payload(completed_epochs=5)
+    stopped = _payload(completed_epochs=5, history=_history(REAL_CURVE[:5]))
     with pytest.raises(ValueError, match="stopped at 5 of 12"):
         load_endpoint(_save(tmp_path, stopped))
+
+
+def test_a_history_shorter_than_the_schedule_is_refused(tmp_path):
+    """The trainer writes completed_epochs and model_config from one dict, so
+    those two always agree. The history is the independent witness."""
+    short = _payload(history=_history(REAL_CURVE[:10]))
+    with pytest.raises(ValueError, match="carries 10 history entries"):
+        load_endpoint(_save(tmp_path, short))
+
+
+def test_a_history_missing_an_epoch_in_the_middle_is_refused(tmp_path):
+    gapped = _payload()
+    gapped["history"] = [row for row in gapped["history"] if row["epoch"] != 7]
+    gapped["history"].append({"epoch": 13, "validation": {"macro_auc": 0.77}})
+    with pytest.raises(ValueError, match="missing or repeated"):
+        load_endpoint(_save(tmp_path, gapped))
+
+
+def test_the_real_twelve_epoch_payload_is_accepted(tmp_path):
+    """The shape the trainer actually emits must still pass."""
+    assert load_endpoint(_save(tmp_path, _payload()))["completed_epochs"] == 12
 
 
 def test_an_unknown_arm_is_refused(tmp_path):
@@ -83,10 +122,8 @@ def test_an_unknown_arm_is_refused(tmp_path):
 
 def test_the_recorded_score_comes_from_the_last_epoch_not_the_best():
     """The peak is not what B57 claims, and must not be what this reports."""
-    payload = _payload(history=[
-        {"validation": {"macro_auc": 0.794906}},   # the peak, at epoch 5
-        {"validation": {"macro_auc": 0.774759}},   # the endpoint
-    ])
+    payload = _payload()
+    assert max(r["validation"]["macro_auc"] for r in payload["history"]) == 0.794906
     assert recorded_macro_auc(payload) == 0.774759
 
 
@@ -274,3 +311,100 @@ def test_the_command_line_renders(capsys, monkeypatch):
     printed = capsys.readouterr().out
     for flag in ("--run-root", "--arm", "--data-root", "--out-path", "--skip-verify"):
         assert flag in printed
+
+
+# --- the test split really points at the test images ----------------------------
+#
+# `make_b7_dataset_config` hard-codes split="train" and takes no split argument.
+# The first version of `test_surface` threaded `split` into the metadata repair
+# and forgot the dataset config, so every test study was looked up under
+# `train_series/` and raised on the first one -- inside the notebook, after the
+# verification pass. The reproduction guard could never have caught it, because
+# the validation split genuinely does live under `train_*`.
+#
+# These build a real directory tree instead of reading the source.
+
+
+def _data_root(tmp_path, *, images_dir, studies=("studyA",), series=("s1",)):
+    import pydicom
+    from pydicom.dataset import FileDataset, FileMetaDataset
+
+    root = tmp_path / "data"
+    rows = []
+    for study in studies:
+        for name in series:
+            directory = root / images_dir / study / name
+            directory.mkdir(parents=True)
+            for i in range(4):
+                meta = FileMetaDataset()
+                meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
+                ds = FileDataset(str(directory / f"{i}.dcm"), {}, file_meta=meta,
+                                 preamble=b"\0" * 128)
+                ds.Rows, ds.Columns = 8, 8
+                ds.BitsAllocated, ds.BitsStored, ds.HighBit = 16, 16, 15
+                ds.PixelRepresentation, ds.SamplesPerPixel = 0, 1
+                ds.PhotometricInterpretation = "MONOCHROME2"
+                ds.PixelSpacing = [1.0, 1.0]
+                ds.ImagePositionPatient = [0.0, 0.0, float(i)]
+                ds.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
+                ds.InstanceNumber = i
+                ds.PixelData = (np.arange(64, dtype=np.uint16) + i).tobytes()
+                ds.save_as(directory / f"{i}.dcm", enforce_file_format=False)
+            rows.append({"StudyInstanceUID": study, "SeriesInstanceUID": name,
+                         "Fluid_Sensitive": True, "Fat_Suppression": False,
+                         "Anatomical_Plane": "Sagittal"})
+    pd.DataFrame([{"StudyInstanceUID": s} for s in studies]).to_csv(root / "test.csv", index=False)
+    pd.DataFrame(rows).to_csv(root / "test_series.csv", index=False)
+    return root
+
+
+def _b42_settings():
+    import yaml
+    return yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "config"
+         / "b42_constant_area_aspect_sparse.yaml").read_text()
+    )
+
+
+def test_the_test_surface_looks_under_the_test_images(tmp_path):
+    """The defect, reproduced as a passing requirement."""
+    from rsna_knee.b57_submission import test_surface
+
+    root = _data_root(tmp_path, images_dir="test_images")
+    dataset, uids, _repair = test_surface(root, {"b42_config": _b42_settings()}, split="test")
+
+    assert uids == ["studyA"]
+    assert dataset.config.split == "test", "the dataset would read train_images"
+
+
+def test_looking_under_train_for_test_images_is_caught(tmp_path):
+    """The exact defect: images under test_images, the config saying train.
+
+    That is what `make_b7_dataset_config`'s hard-coded split produced, and it
+    surfaced only when the first study was loaded -- inside the notebook.
+    """
+    from rsna_knee.b57_submission import require_series_on_disk
+
+    root = _data_root(tmp_path, images_dir="test_images")
+    index = {"studyA": [{"series_uid": "s1"}]}
+
+    require_series_on_disk(root, index, split="test")
+    with pytest.raises(FileNotFoundError, match="not on this machine"):
+        require_series_on_disk(root, index, split="train")
+
+
+def test_missing_images_are_named_before_the_model_is_built(tmp_path):
+    from rsna_knee.b57_submission import require_series_on_disk
+
+    root = _data_root(tmp_path, images_dir="test_images")
+    index = {"studyA": [{"series_uid": "s1"}], "studyB": [{"series_uid": "s9"}]}
+
+    with pytest.raises(FileNotFoundError, match="studyB/s9"):
+        require_series_on_disk(root, index, split="test")
+
+
+def test_a_complete_surface_passes_the_disk_check(tmp_path):
+    from rsna_knee.b57_submission import require_series_on_disk
+
+    root = _data_root(tmp_path, images_dir="test_images")
+    require_series_on_disk(root, {"studyA": [{"series_uid": "s1"}]}, split="test")

@@ -14,11 +14,21 @@ place in this project to discover a bug -- it costs a slot and a day, and it
 returns one number that cannot tell you whether the model or the plumbing was
 at fault.
 
-So `--verify` is not optional decoration. It re-runs this module's own
-inference over the **validation** studies and checks the macro AUC against the
-number the training run recorded in `final.pt`. Same weights, same studies, a
-separately written loader: if the two disagree, the inference path is wrong and
-the submission would have been wrong with it. Run it before spending the slot.
+So the verification step re-scores the **validation** studies and checks the
+macro AUC against the number the training run recorded in `final.pt`.
+
+**Be precise about what that does and does not prove.** It reuses the trainer's
+`make_dataset`, `make_loader` and `predict`, so the only submission-owned code
+it exercises is `rebuild_model`. What it establishes is that `final.pt` reloads
+into `build_model(public_root=None)` and reproduces the recorded weights
+exactly. That is worth having -- a silently wrong reload is a real failure mode
+-- but it is **not** a test of the test-set path, and an earlier version of this
+docstring claimed a "separately written loader" that does not exist.
+
+The test-set path has its own guard instead, at the point where it can actually
+fail: `require_series_on_disk` resolves every series directory before the model
+is built, so a wrong split or a missing copy raises at load time rather than
+partway through a notebook with the clock running.
 
 ## What it does not do
 
@@ -50,6 +60,7 @@ from .b42_constant_area_aspect_sparse_mil import (
 from .b57_models import ARMS, build_model
 from .b57_protocol import VERSION
 from .b57_training import make_loader, predict, runtime_for
+from .dicom import find_series_dir
 from .b7_weak_supervision import make_b7_dataset_config
 from .constants import SUBMISSION_COLUMNS, TARGETS
 from .data import backfill_series_metadata, load_series_csv, load_test_csv
@@ -75,12 +86,30 @@ def load_endpoint(path: str | Path) -> dict:
             "B57 submits its declared endpoint. A payload with any other "
             "selection rule was chosen after seeing its own curve."
         )
-    completed = int(payload.get("completed_epochs", -1))
     planned = int(payload["model_config"]["epochs"])
+    completed = int(payload.get("completed_epochs", -1))
     if completed != planned:
         raise ValueError(
             f"this arm stopped at {completed} of {planned} epochs; `final.pt` is "
             "only written when the declared schedule finishes"
+        )
+    # The check above is tautological on anything the trainer emits: it writes
+    # `completed_epochs` and `model_config` from the same dict, so both sides
+    # are one value. The history is the independent witness -- it gains one
+    # entry per epoch actually run -- so count it rather than trusting a field
+    # that agrees with itself.
+    history = payload.get("history") or []
+    if len(history) != planned:
+        raise ValueError(
+            f"this payload declares {planned} epochs but carries {len(history)} "
+            "history entries. The record disagrees with itself; do not submit it "
+            "until you know which is right."
+        )
+    numbered = [row.get("epoch") for row in history if row.get("epoch") is not None]
+    if numbered and numbered != list(range(1, planned + 1)):
+        raise ValueError(
+            f"history epochs are {numbered[:3]}...{numbered[-1:]}, not 1..{planned}; "
+            "an epoch is missing or repeated"
         )
     return payload
 
@@ -122,8 +151,15 @@ def test_surface(data_root: str | Path, payload: dict, *, split: str = "test"):
     settings = dict(payload["b42_config"])
     settings["strict_dicom"] = True
     config = make_b7_dataset_config(settings, root, train=False)
+    # `make_b7_dataset_config` hard-codes split="train" and takes no split
+    # argument, so the images are looked up under `train_series/` unless this
+    # line overrides it. Without it every test study raises FileNotFoundError --
+    # in the notebook, after the verification pass has already run.
+    config.split = str(split)
     config.strict_dicom = True
     config.tta_center_offsets = ()
+
+    require_series_on_disk(root, index, split=split)
 
     placeholder = np.zeros((len(uids), len(TARGETS)), dtype=np.float32)
     dataset = B42ConstantAreaAspectDataset(
@@ -132,6 +168,33 @@ def test_surface(data_root: str | Path, payload: dict, *, split: str = "test"):
         center_offsets=(0,), targets=placeholder, weights=placeholder,
     )
     return dataset, uids, repair
+
+
+def require_series_on_disk(root, index: dict, *, split: str) -> None:
+    """Fail at load time rather than partway through the notebook.
+
+    `strict_dicom` is on, so a series the loader cannot find raises -- but only
+    once that study comes up, which in a submission means after the model is on
+    the card and the clock is running. This resolves every directory first and
+    names what is wrong while it is still cheap to fix.
+
+    It is also the check that would have caught the wrong `split` above: the
+    reproduction guard never could, because it scores the validation split and
+    the validation split really is under `train_*`.
+    """
+    missing = [
+        f"{uid}/{entry['series_uid']}"
+        for uid, entries in index.items()
+        for entry in entries
+        if find_series_dir(root, split, str(uid), str(entry["series_uid"])) is None
+    ]
+    if missing:
+        raise FileNotFoundError(
+            f"{len(missing)} of the {split} series are not on this machine under any "
+            f"layout the loader accepts (for example {missing[0]}). Either the "
+            f"images were not copied, or `split` does not match the directory "
+            f"they are in."
+        )
 
 
 def validation_surface(run_root: str | Path, payload: dict):
