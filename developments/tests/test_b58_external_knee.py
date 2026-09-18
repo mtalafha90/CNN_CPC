@@ -500,14 +500,14 @@ def _fastmri_release(tmp_path, folder, acquisition):
 
 def test_a_brain_release_in_the_generic_folder_is_refused(tmp_path):
     root = _fastmri_release(tmp_path, "multicoil_train", "AXFLAIR")
-    with pytest.raises(ValueError, match="BRAIN release"):
+    with pytest.raises(ValueError, match="BRAIN volumes"):
         data.index_fastmri(root)
 
 
 @pytest.mark.parametrize("acquisition", ["AXT1", "AXT2", "AXT1POST"])
 def test_every_known_brain_sequence_is_refused(tmp_path, acquisition):
     root = _fastmri_release(tmp_path, "knee_multicoil_train", acquisition)
-    with pytest.raises(ValueError, match="BRAIN release"):
+    with pytest.raises(ValueError, match="BRAIN volumes"):
         data.index_fastmri(root)
 
 
@@ -593,3 +593,167 @@ def test_an_unmanifested_cache_is_rebuilt_rather_than_refused(tmp_path, config):
 
     cached = data.build_cache(rows, cache, config)
     assert len(cached) == 2
+
+
+# --- the fastMRI guard must read every file, not the first ----------------------
+#
+# The first version of this guard sampled files[0]. Both fastMRI releases
+# extract to `multicoil_train`, so an operator can unpack them into one folder
+# -- and ASCII ordering puts `file1000000.h5` (0x31) before `file_brain_...`
+# (0x5F), so the sampled file was always a knee one and the check could never
+# fire. Half the SSL pool would have been brain MRI stamped as knee.
+
+
+def _fastmri_dir(tmp_path, files, folder="multicoil_train"):
+    train = tmp_path / folder
+    train.mkdir(parents=True)
+    for name, acquisition in files:
+        with h5py.File(train / name, "w") as f:
+            f.create_dataset("reconstruction_rss", data=volume())
+            if acquisition is not None:
+                f.attrs["acquisition"] = acquisition
+    return tmp_path
+
+
+def test_a_brain_volume_hidden_behind_knee_files_is_found(tmp_path):
+    """The exact ordering that defeated the first guard."""
+    root = _fastmri_dir(tmp_path, [
+        ("file1000000.h5", "CORPD_FBK"),
+        ("file1000001.h5", "CORPD_FBK"),
+        ("file_brain_AXT2_200_2020001.h5", "AXT2"),
+    ])
+    assert sorted(p.name for p in (root / "multicoil_train").glob("*.h5"))[0] == "file1000000.h5"
+
+    with pytest.raises(ValueError, match="BRAIN volumes"):
+        data.index_fastmri(root)
+
+
+def test_the_refusal_names_a_brain_file_so_it_can_be_removed(tmp_path):
+    root = _fastmri_dir(tmp_path, [
+        ("file1000000.h5", "CORPD_FBK"),
+        ("file_brain_AXFLAIR_201.h5", "AXFLAIR"),
+    ])
+    with pytest.raises(ValueError) as problem:
+        data.index_fastmri(root)
+    assert "file_brain_AXFLAIR_201.h5" in str(problem.value)
+
+
+def test_an_unrecognised_acquisition_is_refused_rather_than_stamped(tmp_path):
+    """Anything not on the knee list must not be frozen as knee."""
+    root = _fastmri_dir(tmp_path, [("file1000000.h5", "SOMETHING_NEW")])
+    with pytest.raises(ValueError, match="unrecognised fastMRI acquisitions"):
+        data.index_fastmri(root)
+
+
+def test_a_wholly_knee_directory_still_passes(tmp_path):
+    root = _fastmri_dir(tmp_path, [
+        ("file1000000.h5", "CORPD_FBK"), ("file1000001.h5", "CORPDFS_FBK"),
+    ])
+    rows = data.index_fastmri(root)
+    assert len(rows) == 2
+    assert {r["partition"] for r in rows} == {"official_knee_multicoil_train"}
+
+
+def test_one_file_missing_the_attribute_still_demands_the_explicit_name(tmp_path):
+    root = _fastmri_dir(tmp_path, [
+        ("file1000000.h5", "CORPD_FBK"), ("file1000001.h5", None),
+    ])
+    with pytest.raises(ValueError, match="carry no `acquisition` attribute"):
+        data.index_fastmri(root)
+
+    named = _fastmri_dir(tmp_path / "other", [
+        ("file1000000.h5", "CORPD_FBK"), ("file1000001.h5", None),
+    ], folder="knee_multicoil_train")
+    assert len(data.index_fastmri(named)) == 2
+
+
+# --- MRNet must be whole ---------------------------------------------------------
+#
+# `Path.glob` on a missing directory returns empty rather than raising, so a
+# partial download indexed silently: a smaller, biased pool, with protocol.json
+# recording only the resulting counts.
+
+
+def _mrnet(tmp_path, counts):
+    for plane, n in counts.items():
+        (tmp_path / "train" / plane).mkdir(parents=True)
+        for i in range(n):
+            np.save(tmp_path / "train" / plane / f"{i:04d}.npy", volume(i))
+    return tmp_path
+
+
+def test_a_missing_plane_is_refused(tmp_path):
+    with pytest.raises(ValueError, match=r"no .npy files for \['coronal', 'sagittal'\]"):
+        data.index_mrnet(_mrnet(tmp_path, {"axial": 3}))
+
+
+def test_an_exam_missing_one_plane_is_refused(tmp_path):
+    """MRNet is three planes per exam by construction."""
+    root = _mrnet(tmp_path, {"axial": 3, "coronal": 2, "sagittal": 3})
+    with pytest.raises(ValueError, match="missing at least one plane"):
+        data.index_mrnet(root)
+
+
+def test_the_refusal_reports_the_counts_per_plane(tmp_path):
+    root = _mrnet(tmp_path, {"axial": 3, "coronal": 2, "sagittal": 3})
+    with pytest.raises(ValueError) as problem:
+        data.index_mrnet(root)
+    message = str(problem.value)
+    assert "axial=3" in message and "coronal=2" in message
+
+
+def test_a_complete_mrnet_passes(tmp_path):
+    rows = data.index_mrnet(_mrnet(tmp_path, {"axial": 4, "coronal": 4, "sagittal": 4}))
+    assert len(rows) == 12
+    assert len({r["group"] for r in rows}) == 4
+
+
+# --- a skip must be frozen, not merely logged ------------------------------------
+#
+# The comment beside build_cache claimed quarantine.json was "part of the frozen
+# record so a skip can never be silent". It was not: the protocol hashed
+# selection, cache_manifest and rsna_protocol, and nothing else. Anyone could
+# delete or edit the quarantine afterwards and every check still passed, while
+# source_counts kept reporting what selection CHOSE rather than what was cached.
+
+
+def test_the_protocol_hashes_the_quarantine():
+    import inspect
+
+    from rsna_knee.b58_external_knee import protocol as module
+
+    source = inspect.getsource(module.prepare)
+    assert '"quarantine_sha256": sha256_file(quarantine_path)' in source
+    assert "quarantine_sha256" in inspect.getsource(module.load)
+
+
+def test_a_clean_run_still_writes_a_quarantine_so_the_hash_exists():
+    """An absent file is an absence nobody notices; an empty one is a record."""
+    import inspect
+
+    source = inspect.getsource(
+        __import__("rsna_knee.b58_external_knee.protocol", fromlist=["prepare"]).prepare
+    )
+    assert "if not quarantine_path.exists():" in source
+    assert '"unreadable": [], "by_source": {}' in source
+
+
+def test_cached_counts_are_recorded_beside_the_selected_ones():
+    """source_counts is what selection chose; after a skip it overstates."""
+    import inspect
+
+    from rsna_knee.b58_external_knee import protocol as module
+
+    source = inspect.getsource(module.prepare)
+    assert '"cached_counts": cached_counts' in source
+    assert '"source_counts": counts' in source, "both must be kept, not one replaced"
+
+
+def test_a_protocol_frozen_before_the_quarantine_existed_still_loads():
+    """Adding a guard must not brick runs that predate it."""
+    import inspect
+
+    from rsna_knee.b58_external_knee import protocol as module
+
+    source = inspect.getsource(module.load)
+    assert "if key not in p:" in source and "continue" in source

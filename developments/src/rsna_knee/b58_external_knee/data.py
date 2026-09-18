@@ -39,13 +39,38 @@ def index_mrnet(root):
     if (root / "MRNet-v1.0").is_dir():
         root = root / "MRNet-v1.0"
     train = training_directory(root, ("train",))
+    planes = ("axial", "coronal", "sagittal")
+    # `Path.glob` on a missing directory returns empty rather than raising, so a
+    # partial download used to index silently: an axial-only tree produced a
+    # smaller, biased pool and protocol.json recorded only the resulting counts.
+    # MRNet is three planes per exam by construction; anything else is an
+    # incomplete extraction, and the operator should hear so here.
+    by_plane = {plane: sorted((train / plane).glob("*.npy")) for plane in planes}
+    missing = [plane for plane, paths in by_plane.items() if not paths]
+    if missing:
+        raise ValueError(
+            f"MRNet {train} has no .npy files for {missing}. Every exam has all "
+            f"three planes, so this is a partial download or extraction: "
+            + ", ".join(f"{plane}={len(paths)}" for plane, paths in by_plane.items())
+        )
+    exams = {plane: {path.stem for path in paths} for plane, paths in by_plane.items()}
+    complete = set.intersection(*exams.values())
+    incomplete = set.union(*exams.values()) - complete
+    if incomplete:
+        raise ValueError(
+            f"{len(incomplete)} MRNet exams are missing at least one plane (for "
+            f"example {sorted(incomplete)[0]}). Counts per plane: "
+            + ", ".join(f"{plane}={len(paths)}" for plane, paths in by_plane.items())
+            + ". Re-fetch them rather than adapting on a biased subset."
+        )
     rows = []
-    for plane in ("axial", "coronal", "sagittal"):
-        for path in sorted((train / plane).glob("*.npy")):
+    for plane in planes:
+        for path in by_plane[plane]:
             rows.append(record("mrnet", path.stem, f"{path.stem}/{plane}", [path], "npy",
                                partition="official_train", grouping="exam_id; official split is patient-disjoint"))
     if not rows:
         raise ValueError(f"no MRNet train/{{axial,coronal,sagittal}}/*.npy at {root}")
+    print(f"[B58] MRNet {len(complete)} exams x 3 planes = {len(rows)} series", flush=True)
     return rows
 
 
@@ -79,26 +104,49 @@ def index_fastmri(root):
     # would freeze that claim over whatever was actually downloaded -- a
     # provenance field asserting something nothing ever checked. So the anatomy
     # is read out of the files instead.
-    acquisition = fastmri_acquisition(files[0])
-    if acquisition is not None and acquisition.upper() in FASTMRI_BRAIN_ACQUISITIONS:
+    # EVERY file, not the first. The knee and brain releases extract to the
+    # same generic folder name, so an operator can unpack both into one
+    # directory -- and ASCII ordering puts `file1000000.h5` (0x31) before
+    # `file_brain_...` (0x5F), so sampling files[0] would always see a knee
+    # file and never fire. Reading one attribute per file is cheap; half the
+    # SSL pool being brain MRI, stamped as knee, is not.
+    found = {}
+    for path in files:
+        found.setdefault(fastmri_acquisition(path), []).append(path.name)
+    brain = {a: names for a, names in found.items()
+             if a is not None and a.upper() in FASTMRI_BRAIN_ACQUISITIONS}
+    if brain:
+        example = sorted(brain.values())[0][0]
         raise ValueError(
-            f"{train} holds a fastMRI BRAIN release (acquisition {acquisition!r}). "
-            "B58 needs the knee multicoil training release. Both carry "
-            "reconstruction_rss, so nothing downstream would have noticed."
+            f"{train} contains fastMRI BRAIN volumes ({sorted(brain)}, for example "
+            f"{example}) among {len(files)} files. B58 needs the knee multicoil "
+            "training release, and both releases carry reconstruction_rss, so "
+            "nothing downstream would have noticed. If the knee and brain "
+            "archives were unpacked into one folder, separate them."
         )
-    if acquisition is None and train.name != "knee_multicoil_train":
+    unknown = {a for a in found
+               if a is not None and a.upper() not in FASTMRI_KNEE_ACQUISITIONS}
+    if unknown:
         raise ValueError(
-            f"{train} carries no `acquisition` attribute, so its anatomy cannot "
-            "be confirmed from the files, and `multicoil_train` is the generic "
-            "name a brain release uses too. Rename the directory to "
-            "`knee_multicoil_train` to state which release this is."
+            f"{train} holds unrecognised fastMRI acquisitions {sorted(unknown)}; "
+            f"the knee release uses {list(FASTMRI_KNEE_ACQUISITIONS)}. Refusing "
+            "rather than stamping them official_knee_multicoil_train."
+        )
+    acquisition = next((a for a in found if a is not None), None)
+    if None in found and train.name != "knee_multicoil_train":
+        raise ValueError(
+            f"{len(found[None])} of {len(files)} files in {train} carry no "
+            "`acquisition` attribute, so their anatomy cannot be confirmed from "
+            "the files, and `multicoil_train` is the generic name a brain "
+            "release uses too. Rename the directory to `knee_multicoil_train` "
+            "to state which release this is."
         )
 
     rows = [record("fastmri", p.stem, p.stem, [p], "h5",
                    partition="official_knee_multicoil_train", grouping="acquisition_id; patient identity unavailable")
             for p in files]
     print(
-        f"[B58] fastMRI acquisition {acquisition or 'unstated'}; "
+        f"[B58] fastMRI acquisitions {sorted(a or 'unstated' for a in found)}; "
         f"{len(rows)} knee training volumes",
         flush=True,
     )

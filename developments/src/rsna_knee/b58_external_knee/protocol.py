@@ -8,7 +8,7 @@ import shutil
 import numpy as np
 
 from . import VERSION
-from .data import (SOURCES, build_cache, index_fastmri, index_mrnet, index_oai,
+from .data import (MAX_UNREADABLE_FRACTION, SOURCES, build_cache, index_fastmri, index_mrnet, index_oai,
                    index_rsna, select_records)
 from ..b57_models import prepare_public_weights
 from ..b57_protocol import (digest, load_protocol as load_rsna, prepare_protocol,
@@ -100,16 +100,34 @@ def prepare(*, run_root, data_root, labels_root, domain_split, series_policy,
         raise OSError(f"B58 needs approximately {estimate/2**30:.1f} GiB of cache plus 2 GiB headroom")
     print(f"[B58] source counts: {json.dumps(counts)}", flush=True)
     print(f"[B58] bounded float16 cache estimate: {estimate/2**30:.1f} GiB", flush=True)
-    # Any series that would not decode is written here rather than ending a
-    # multi-hour prepare, and the file is part of the frozen record so a
-    # skip can never be silent.
-    cached = build_cache(selected, root / "cache", c,
-                         quarantine_path=root / "quarantine.json")
+    # A series that would not decode is skipped rather than ending a multi-hour
+    # prepare -- and the skip is frozen, not merely logged. The file is written
+    # even when nothing failed, so its hash always exists and a later deletion
+    # is a mismatch rather than an absence nobody notices.
+    quarantine_path = root / "quarantine.json"
+    cached = build_cache(selected, root / "cache", c, quarantine_path=quarantine_path)
+    if not quarantine_path.exists():
+        write_json(quarantine_path, {"unreadable": [], "by_source": {},
+                                     "max_fraction": MAX_UNREADABLE_FRACTION})
     write_json(root / "cache_manifest.json", cached)
+
+    # `counts` is what selection CHOSE. After quarantine it can overstate what
+    # was actually cached, and the selected figure is the one that used to be
+    # frozen alone -- a record saying 2,048 OAI series over 1,966 that existed.
+    cached_counts = {}
+    for row in cached:
+        entry = cached_counts.setdefault(row["source"], {"cached_series": 0, "cached_groups": set()})
+        entry["cached_series"] += 1
+        entry["cached_groups"].add(row["group"])
+    cached_counts = {source: {"cached_series": entry["cached_series"],
+                              "cached_groups": len(entry["cached_groups"])}
+                     for source, entry in cached_counts.items()}
     protocol = {"version": VERSION, "request": request, "config": c,
                 "rsna_identity": selection["rsna_identity"], "rsna_counts": p["counts"],
                 "rsna_protocol_sha256": sha256_file(root / "rsna_protocol" / "protocol.json"),
                 "selection_sha256": sha256_file(selection_path), "source_counts": counts,
+                "cached_counts": cached_counts,
+                "quarantine_sha256": sha256_file(quarantine_path),
                 "cache_manifest_sha256": sha256_file(root / "cache_manifest.json"),
                 "external_labels_used": False, "ssl_uses_rsna_training_images": True,
                 "validation_images_in_gradient": 0, "gold_studies_in_gradient": 0,
@@ -132,7 +150,14 @@ def load(root, *, verify_cache=False):
         raise ValueError("B58 config file changed")
     validate_config(p["config"])
     for name, key in (("selection.json", "selection_sha256"), ("cache_manifest.json", "cache_manifest_sha256"),
+                      ("quarantine.json", "quarantine_sha256"),
                       ("rsna_protocol/protocol.json", "rsna_protocol_sha256")):
+        # Only what this protocol actually recorded. `quarantine_sha256` was
+        # added after the first runs were frozen, and demanding it here would
+        # make every earlier protocol unloadable -- punishing an old run for a
+        # guard it predates. Once a protocol carries the key it is enforced.
+        if key not in p:
+            continue
         if sha256_file(root / name) != p[key]:
             raise ValueError(f"B58 frozen artifact changed: {name}")
     rsna = load_rsna(root / "rsna_protocol")
