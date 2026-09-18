@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 
 from .b7_weak_supervision import (make_b7_dataset_config, seed_everything,
                                   target_balance_multipliers, target_balanced_weak_bce)
+from .b37_highres_sparse_mil import B37_CROP_FRACTION
 from .b42_constant_area_aspect_sparse_mil import B42ConstantAreaAspectDataset, collate_b42, require_b42_contract
 from .b42_constant_area_aspect_sparse_training import _batch_scales, _move_study
 from .b52_competition_training import macro_auc
@@ -47,6 +48,52 @@ def runtime_for(device, workers, prefetch_factor=DEFAULT_PREFETCH_FACTOR):
                             "multiprocessing_context": "spawn"})
 
 
+class B57CropFractionDataset(B42ConstantAreaAspectDataset):
+    """B42's dataset at a crop fraction B42 itself refuses.
+
+    The 90% native centre crop is frozen at four layers -- the config default,
+    B20's contract (which refuses first), `require_b37_sparse_contract`, and
+    B42's own constructor -- because B37, B42, B52, B53 and B55 all read
+    `B37_CROP_FRACTION`, and changing it would silently alter the geometry of
+    every completed run in the archive.
+
+    B57 already departs from that lineage: public weights, fresh heads, no
+    competition-trained parent. Letting it choose its own field of view is the
+    same kind of deliberate departure, and it is done in a subclass so B42's
+    contract stays exactly as frozen as it was.
+
+    The parent is constructed at the frozen fraction so its guard really runs,
+    and the requested fraction is installed afterwards -- `_load_b42` reads
+    `self.crop_focus_policy` per call, not at construction. Nothing is
+    monkey-patched and no assertion is disabled; one value is replaced, in the
+    open, by a class whose whole purpose is to replace it.
+    """
+
+    def __init__(self, *args, crop_focus_policy: dict, crop_fraction: float, **kwargs):
+        fraction = float(crop_fraction)
+        if not 0.1 < fraction <= 1.0:
+            raise ValueError(
+                f"crop_fraction must be in (0.1, 1.0]; got {fraction}. A value "
+                "above 1 would ask for more image than exists, and 90 is the "
+                "percentage, not the fraction."
+            )
+        super().__init__(
+            *args,
+            crop_focus_policy={**crop_focus_policy, "crop_fraction": B37_CROP_FRACTION},
+            **kwargs,
+        )
+        self.crop_focus_policy = {**crop_focus_policy, "crop_fraction": fraction}
+        self.crop_fraction = fraction
+
+
+def crop_fraction_for(config: dict) -> float:
+    """B57's field of view, defaulting to the lineage's frozen 90%."""
+    fraction = float(config.get("crop_fraction", B37_CROP_FRACTION))
+    if not 0.1 < fraction <= 1.0:
+        raise ValueError(f"B57 crop_fraction must be in (0.1, 1.0]; got {fraction}")
+    return fraction
+
+
 def make_dataset(protocol_root, p, split):
     index = json.loads((Path(protocol_root) / "series_index.json").read_text())
     with np.load(Path(protocol_root) / "labels.npz", allow_pickle=False) as f:
@@ -67,9 +114,13 @@ def make_dataset(protocol_root, p, split):
     cfg = make_b7_dataset_config(settings, Path(p["data_root"]), train=False)
     cfg.strict_dicom = True
     cfg.tta_center_offsets = ()
-    return B42ConstantAreaAspectDataset(uids, index, cfg,
-        crop_focus_policy=require_b42_contract(settings), center_offsets=(0,),
-        targets=target, weights=weight)
+    policy = require_b42_contract(settings)
+    fraction = crop_fraction_for(p["config"])
+    shared = dict(crop_focus_policy=policy, center_offsets=(0,),
+                  targets=target, weights=weight)
+    if fraction == B37_CROP_FRACTION:
+        return B42ConstantAreaAspectDataset(uids, index, cfg, **shared)
+    return B57CropFractionDataset(uids, index, cfg, crop_fraction=fraction, **shared)
 
 
 def make_loader(dataset, runtime, config, *, epoch=None):

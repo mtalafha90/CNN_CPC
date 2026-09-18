@@ -414,3 +414,102 @@ def test_both_stages_accept_the_flag():
 
     for function in (preflight, train_arm):
         assert inspect.signature(function).parameters["prefetch_factor"].default == 1
+
+
+# --- B57's own field of view, without unfreezing B42's --------------------------
+#
+# 0.90 is pinned in the config default, in require_b37_sparse_contract, and in
+# B42's constructor, because B37/B42/B52/B53/B55 all read B37_CROP_FRACTION.
+# Changing that constant would alter the geometry of every completed run.
+
+
+def test_the_default_is_still_the_frozen_ninety_percent():
+    from rsna_knee.b37_highres_sparse_mil import B37_CROP_FRACTION
+    from rsna_knee.b57_training import crop_fraction_for
+
+    assert B37_CROP_FRACTION == 0.90
+    assert crop_fraction_for({}) == B37_CROP_FRACTION
+
+
+def test_b42s_own_contract_still_refuses_anything_else():
+    """The freeze must remain in force for every other experiment."""
+    import pytest
+    import yaml
+    from pathlib import Path
+
+    from rsna_knee.b42_constant_area_aspect_sparse_mil import require_b42_contract
+
+    settings = yaml.safe_load(
+        (Path(__file__).resolve().parents[2]
+         / "config/b42_constant_area_aspect_sparse.yaml").read_text()
+    )
+    require_b42_contract(settings)                      # 0.90 passes
+    settings["b20_crop_focus_crop_fraction"] = 1.0
+    # B20's own contract refuses first, before B37's "historical fixed 90%"
+    # message is ever reached -- the fraction is pinned at four layers, not
+    # three: the config default, B20, B37, and B42's constructor.
+    with pytest.raises(ValueError, match="freezes crop_fraction=0.9"):
+        require_b42_contract(settings)
+
+
+def test_b57_can_ask_for_the_whole_image():
+    from rsna_knee.b57_training import crop_fraction_for
+
+    assert crop_fraction_for({"crop_fraction": 1.0}) == 1.0
+
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("bad", [90, 0.0, -0.5, 1.5])
+def test_an_implausible_crop_fraction_is_refused(bad):
+    import pytest
+
+    from rsna_knee.b57_training import crop_fraction_for
+
+    with pytest.raises(ValueError, match=r"\(0.1, 1.0\]"):
+        crop_fraction_for({"crop_fraction": bad})
+
+
+def test_the_subclass_carries_the_fraction_the_loader_reads():
+    """`_load_b42` reads self.crop_focus_policy per call, so that is what must
+    hold the new value -- not a constructor argument that is discarded."""
+    import inspect
+
+    from rsna_knee.b42_constant_area_aspect_sparse_mil import B42ConstantAreaAspectDataset
+    from rsna_knee.b57_training import B57CropFractionDataset
+
+    assert issubclass(B57CropFractionDataset, B42ConstantAreaAspectDataset)
+    source = inspect.getsource(B57CropFractionDataset)
+    assert 'self.crop_focus_policy = {**crop_focus_policy, "crop_fraction": fraction}' in source
+
+    loader = inspect.getsource(B42ConstantAreaAspectDataset._load_b42)
+    assert 'self.crop_focus_policy["crop_fraction"]' in loader
+
+
+def test_a_full_fraction_crops_nothing():
+    """1.0 must be a true no-op, not a rounding that shaves a row."""
+    import numpy as np
+
+    from rsna_knee.b37_highres_sparse_mil import _native_center_crop
+
+    x = np.arange(2 * 3 * 11 * 13, dtype=np.float32).reshape(2, 3, 11, 13)
+    assert np.array_equal(_native_center_crop(x, 1.0), x)
+    assert _native_center_crop(x, 0.90).shape == (2, 3, 10, 12)
+
+
+def test_the_six_epoch_no_crop_config_is_valid():
+    import json
+    from pathlib import Path
+
+    from rsna_knee.b57_protocol import ARMS, VERSION
+    from rsna_knee.b57_training import crop_fraction_for
+
+    config = json.loads(
+        (Path(__file__).resolve().parents[2]
+         / "config/b57_six_epoch_no_crop.json").read_text()
+    )
+    assert config["version"] == VERSION and config["arms"] == list(ARMS)
+    assert config["selection"] == "fixed_final_epoch" and config["augmentation"] is False
+    assert config["epochs"] == 6
+    assert crop_fraction_for(config) == 1.0
