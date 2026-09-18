@@ -356,3 +356,61 @@ def test_bootstrap_refuses_claiming_interval_from_one_scanner():
     result = bootstrap_delta(p["target"], p["weight"], p["prediction"], p["prediction"],
                              groups=["same"] * len(p["uids"]), replicates=20)
     assert result["ci95"] is None
+
+
+# --- prefetch_factor is a loader knob, not a contract term ----------------------
+
+
+def test_the_prefetch_default_is_the_conservative_one():
+    from rsna_knee.b57_training import DEFAULT_PREFETCH_FACTOR, runtime_for
+    import inspect
+
+    assert DEFAULT_PREFETCH_FACTOR == 1
+    assert inspect.signature(runtime_for).parameters["prefetch_factor"].default == 1
+
+
+def test_prefetch_reaches_the_loader():
+    from rsna_knee.b57_training import runtime_for
+
+    kwargs = runtime_for("cpu", 12, 4).loader_kwargs(seed=0)
+    assert kwargs["num_workers"] == 12
+    assert kwargs["prefetch_factor"] == 4
+
+
+def test_prefetch_without_workers_is_refused():
+    """PyTorch raises on prefetch_factor at num_workers=0; say so first."""
+    import pytest
+
+    from rsna_knee.b57_training import runtime_for
+
+    with pytest.raises(ValueError, match="worker processes"):
+        runtime_for("cpu", 0, 4)
+
+
+def test_prefetch_is_not_in_the_run_contract():
+    """Changing it must not invalidate a resume or the paired comparison."""
+    import inspect
+
+    from rsna_knee.b57_training import run_contract
+
+    assert "prefetch" not in inspect.getsource(run_contract)
+
+
+def test_prefetch_cannot_change_the_shuffle():
+    """The seed comes from the epoch, so the batches are identical either way."""
+    import inspect
+
+    from rsna_knee.b57_training import make_loader
+
+    source = inspect.getsource(make_loader)
+    assert 'config["seed"] + (0 if epoch is None else int(epoch) * 1009)' in source
+    assert "prefetch" not in source
+
+
+def test_both_stages_accept_the_flag():
+    import inspect
+
+    from rsna_knee.b57_training import preflight, train_arm
+
+    for function in (preflight, train_arm):
+        assert inspect.signature(function).parameters["prefetch_factor"].default == 1

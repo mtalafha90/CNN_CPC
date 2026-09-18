@@ -26,10 +26,25 @@ from .training_resume import load_checkpoint, resume, save_checkpoint
 DEFAULT_ROOT = "runs/093_Experiment_B57_clean_backbone_comparison"
 
 
-def runtime_for(device, workers):
+#: How many batches each worker reads ahead. One is the conservative default a
+#: cold cache on a slow disk wants; more hides read latency on a fast machine.
+#: It is a loader setting only -- `make_loader` rebuilds the shuffle from the
+#: epoch number, so changing it cannot alter which studies a batch contains or
+#: in what order, and it is deliberately not part of the run contract.
+DEFAULT_PREFETCH_FACTOR = 1
+
+
+def runtime_for(device, workers, prefetch_factor=DEFAULT_PREFETCH_FACTOR):
+    if int(workers) == 0 and int(prefetch_factor) != DEFAULT_PREFETCH_FACTOR:
+        raise ValueError(
+            "prefetch_factor applies to worker processes and PyTorch refuses it "
+            "at num_workers=0. Raise --num-workers, or leave --prefetch-factor "
+            "alone."
+        )
     return resolve_runtime({"device": device, "precision": "auto", "num_workers": workers,
                             "pin_memory": False, "persistent_workers": False,
-                            "prefetch_factor": 1, "multiprocessing_context": "spawn"})
+                            "prefetch_factor": int(prefetch_factor),
+                            "multiprocessing_context": "spawn"})
 
 
 def make_dataset(protocol_root, p, split):
@@ -164,12 +179,13 @@ def batch_step(model, arm, items, runtime, optimizer, scaler, multiplier_cpu, co
     return total, float(grad_norm)
 
 
-def preflight(*, run_root, arm, device="auto", workers=0):
+def preflight(*, run_root, arm, device="auto", workers=0,
+              prefetch_factor=DEFAULT_PREFETCH_FACTOR):
     """Real training studies, backward pass, no optimizer step, disposable model."""
     root = Path(run_root)
     p = load_protocol(root / "protocol")
     c = p["config"]
-    runtime = runtime_for(device, workers)
+    runtime = runtime_for(device, workers, prefetch_factor)
     contract = run_contract(root / "protocol", p, arm, root / "public_init", runtime)
     seed_everything(c["seed"])
     model = build_model(arm, p["b42_config"], c, root / "public_init").to(runtime.device).train()
@@ -209,11 +225,12 @@ def preflight(*, run_root, arm, device="auto", workers=0):
     return result
 
 
-def train_arm(*, run_root, arm, device="auto", workers=0):
+def train_arm(*, run_root, arm, device="auto", workers=0,
+              prefetch_factor=DEFAULT_PREFETCH_FACTOR):
     root, out = Path(run_root), Path(run_root) / arm
     p = load_protocol(root / "protocol")
     c = p["config"]
-    runtime = runtime_for(device, workers)
+    runtime = runtime_for(device, workers, prefetch_factor)
     print(f"[B57/{arm}] {runtime.describe()}", flush=True)
     if runtime.device.type != "cuda" and device != "cpu":
         raise ValueError("no CUDA device; use explicit device=cpu only for small synthetic tests")
@@ -316,6 +333,13 @@ def main():
     parser.add_argument("--arm", choices=ARMS)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument(
+        "--prefetch-factor", type=int, default=DEFAULT_PREFETCH_FACTOR,
+        help=(
+            "batches each worker reads ahead. Loader-only: the shuffle is\n"
+            "rebuilt from the epoch, so this cannot change the result."
+        ),
+    )
     parser.add_argument("--data-root")
     parser.add_argument("--labels-root")
     parser.add_argument("--domain-split")
@@ -338,7 +362,8 @@ def main():
         if args.arm is None:
             parser.error("preflight/train requires --arm")
         fn = preflight if args.stage == "preflight" else train_arm
-        fn(run_root=args.run_root, arm=args.arm, device=args.device, workers=args.num_workers)
+        fn(run_root=args.run_root, arm=args.arm, device=args.device,
+           workers=args.num_workers, prefetch_factor=args.prefetch_factor)
 
 
 if __name__ == "__main__":
