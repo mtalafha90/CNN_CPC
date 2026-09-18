@@ -49,13 +49,59 @@ def index_mrnet(root):
     return rows
 
 
+#: fastMRI stamps each file with the sequence it was acquired with. The knee
+#: release uses coronal proton-density, with and without fat saturation; the
+#: brain release uses axial sequences. Both carry `reconstruction_rss`, so the
+#: pixels alone cannot tell the two apart.
+FASTMRI_KNEE_ACQUISITIONS = ("CORPD_FBK", "CORPDFS_FBK")
+FASTMRI_BRAIN_ACQUISITIONS = ("AXT1", "AXT1PRE", "AXT1POST", "AXT2", "AXFLAIR")
+
+
+def fastmri_acquisition(path):
+    """The sequence recorded in the file, or None when the attribute is absent."""
+    import h5py
+
+    with h5py.File(path, "r") as f:
+        value = f.attrs.get("acquisition")
+    if value is None:
+        return None
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
 def index_fastmri(root):
     train = training_directory(root, ("knee_multicoil_train", "multicoil_train"))
+    files = sorted(train.glob("*.h5"))
+    if not files:
+        raise ValueError(f"no fastMRI training HDF5 files in {train}")
+
+    # `multicoil_train` is also what a fastMRI BRAIN release extracts to, and
+    # every row below is stamped `official_knee_...`. Trusting the folder name
+    # would freeze that claim over whatever was actually downloaded -- a
+    # provenance field asserting something nothing ever checked. So the anatomy
+    # is read out of the files instead.
+    acquisition = fastmri_acquisition(files[0])
+    if acquisition is not None and acquisition.upper() in FASTMRI_BRAIN_ACQUISITIONS:
+        raise ValueError(
+            f"{train} holds a fastMRI BRAIN release (acquisition {acquisition!r}). "
+            "B58 needs the knee multicoil training release. Both carry "
+            "reconstruction_rss, so nothing downstream would have noticed."
+        )
+    if acquisition is None and train.name != "knee_multicoil_train":
+        raise ValueError(
+            f"{train} carries no `acquisition` attribute, so its anatomy cannot "
+            "be confirmed from the files, and `multicoil_train` is the generic "
+            "name a brain release uses too. Rename the directory to "
+            "`knee_multicoil_train` to state which release this is."
+        )
+
     rows = [record("fastmri", p.stem, p.stem, [p], "h5",
                    partition="official_knee_multicoil_train", grouping="acquisition_id; patient identity unavailable")
-            for p in sorted(train.glob("*.h5"))]
-    if not rows:
-        raise ValueError(f"no fastMRI training HDF5 files in {train}")
+            for p in files]
+    print(
+        f"[B58] fastMRI acquisition {acquisition or 'unstated'}; "
+        f"{len(rows)} knee training volumes",
+        flush=True,
+    )
     return rows
 
 
@@ -251,11 +297,35 @@ def raw_fingerprint(paths):
     return digest([{ "path": str(p), "sha256": sha256_file(p)} for p in paths])
 
 
-def build_cache(rows, root, config):
+#: How much of a source may fail to decode before the run stops. One bad file
+#: in a re-exported archive is a fact of life; one in twenty means the archive
+#: is wrong and caching the rest would waste hours on the way to a bad answer.
+MAX_UNREADABLE_FRACTION = 0.05
+
+
+def build_cache(rows, root, config, *, quarantine_path=None):
+    """Decode and cache every selected series, surviving the odd bad file.
+
+    A single unreadable series used to end a multi-hour `prepare`: `read_volume`
+    raised, nothing caught it, and re-running rebuilt the identical frozen
+    selection and died in the same place. The operator's only route was editing
+    a frozen artefact.
+
+    B58's reader is deliberately stricter than the one B57 uses on the same
+    RSNA directories -- it refuses duplicate slice positions, mixed matrices
+    and undecodable files rather than repairing them -- so a failure here is
+    often the archive, not the code. Skipping is therefore allowed, but never
+    silently: every skip is written to `quarantine.json`, counted per source,
+    and printed. Past `MAX_UNREADABLE_FRACTION` of a source the run stops,
+    because at that point the archive is wrong and the answer would be built on
+    whatever happened to survive.
+    """
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    result, pixels = [], {}
+    result, pixels, quarantine = [], {}, []
+    per_source = {}
     for i, row in enumerate(rows, 1):
+        per_source[row["source"]] = per_source.get(row["source"], 0) + 1
         key = digest([row["source"], row["group"], row["series"]])
         path, meta_path = root / f"{key}.npy", root / f"{key}.json"
         raw_sha = raw_fingerprint(row["paths"])
@@ -267,8 +337,26 @@ def build_cache(rows, root, config):
                 raise ValueError(f"existing B58 cache/input changed: {path}")
         else:
             if path.exists():
-                raise FileExistsError(f"unmanifested B58 cache: {path}; inspect it before retrying")
-            x = cache_triplets(read_volume(row), centres=config["cache_centres"], side=config["ssl_side"])
+                # A crash between the .npy landing and its manifest being
+                # written left this behind. The bytes are rebuildable from the
+                # same inputs, so rebuild them rather than telling the operator
+                # to "inspect it" in the middle of a multi-hour prepare.
+                print(f"[B58] rebuilding unmanifested cache {path.name}", flush=True)
+                path.unlink()
+            try:
+                x = cache_triplets(read_volume(row), centres=config["cache_centres"], side=config["ssl_side"])
+            except Exception as problem:
+                quarantine.append({
+                    "source": row["source"], "group": row["group"], "series": row["series"],
+                    "paths": [str(q) for q in row["paths"][:3]],
+                    "error": f"{type(problem).__name__}: {problem}",
+                })
+                print(
+                    f"[B58] unreadable {row['source']}/{row['series']}: "
+                    f"{type(problem).__name__}: {problem}",
+                    flush=True,
+                )
+                continue
             temporary = path.with_suffix(".writing")
             with temporary.open("wb") as f:
                 np.save(f, x, allow_pickle=False)
@@ -284,4 +372,24 @@ def build_cache(rows, root, config):
             "raw_sha256": raw_sha, "shape": saved["shape"]})
         if i == 1 or i % 100 == 0 or i == len(rows):
             print(f"[B58] cached {i}/{len(rows)} MRI series", flush=True)
+
+    if quarantine:
+        failed = {}
+        for entry in quarantine:
+            failed[entry["source"]] = failed.get(entry["source"], 0) + 1
+        print(f"[B58] quarantined {len(quarantine)} unreadable series: {failed}", flush=True)
+        if quarantine_path is not None:
+            write_json(quarantine_path, {"unreadable": quarantine, "by_source": failed,
+                                         "max_fraction": MAX_UNREADABLE_FRACTION})
+        for source, count in sorted(failed.items()):
+            fraction = count / max(per_source.get(source, 1), 1)
+            if fraction > MAX_UNREADABLE_FRACTION:
+                raise ValueError(
+                    f"{count} of {per_source[source]} {source} series failed to decode "
+                    f"({fraction:.1%}, above {MAX_UNREADABLE_FRACTION:.0%}). That is the "
+                    "archive, not one bad file: investigate the extraction rather than "
+                    "training on whatever survived."
+                )
+    if not result:
+        raise ValueError("no MRI series could be decoded; nothing to train on")
     return result

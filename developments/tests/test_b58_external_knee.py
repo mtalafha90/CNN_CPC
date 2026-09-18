@@ -479,3 +479,117 @@ def test_cli_run_stops_after_failed_stage(tmp_path, monkeypatch):
     with pytest.raises(subprocess.CalledProcessError):
         cli.main(["run", "--run-root", str(tmp_path), "--device", "cpu"])
     assert seen == ["preflight"]
+
+
+# --- a brain release must not be frozen as a knee one ---------------------------
+#
+# `multicoil_train` is what a fastMRI BRAIN release also extracts to, and every
+# row is stamped `official_knee_multicoil_train`. Both releases carry
+# `reconstruction_rss`, so nothing downstream could ever have noticed.
+
+
+def _fastmri_release(tmp_path, folder, acquisition):
+    train = tmp_path / folder
+    train.mkdir(parents=True)
+    with h5py.File(train / "scan.h5", "w") as f:
+        f.create_dataset("reconstruction_rss", data=volume())
+        if acquisition is not None:
+            f.attrs["acquisition"] = acquisition
+    return tmp_path
+
+
+def test_a_brain_release_in_the_generic_folder_is_refused(tmp_path):
+    root = _fastmri_release(tmp_path, "multicoil_train", "AXFLAIR")
+    with pytest.raises(ValueError, match="BRAIN release"):
+        data.index_fastmri(root)
+
+
+@pytest.mark.parametrize("acquisition", ["AXT1", "AXT2", "AXT1POST"])
+def test_every_known_brain_sequence_is_refused(tmp_path, acquisition):
+    root = _fastmri_release(tmp_path, "knee_multicoil_train", acquisition)
+    with pytest.raises(ValueError, match="BRAIN release"):
+        data.index_fastmri(root)
+
+
+@pytest.mark.parametrize("acquisition", ["CORPD_FBK", "CORPDFS_FBK"])
+def test_the_knee_sequences_are_accepted(tmp_path, acquisition):
+    root = _fastmri_release(tmp_path, "multicoil_train", acquisition)
+    rows = data.index_fastmri(root)
+    assert len(rows) == 1
+    assert rows[0]["partition"] == "official_knee_multicoil_train"
+
+
+def test_an_unstated_anatomy_requires_the_explicit_knee_folder(tmp_path):
+    """No attribute and a generic name is exactly the ambiguous case."""
+    root = _fastmri_release(tmp_path, "multicoil_train", None)
+    with pytest.raises(ValueError, match="cannot be confirmed"):
+        data.index_fastmri(root)
+
+
+def test_an_unstated_anatomy_is_accepted_when_the_folder_says_knee(tmp_path):
+    """An older release without the attribute must still be usable."""
+    root = _fastmri_release(tmp_path, "knee_multicoil_train", None)
+    assert len(data.index_fastmri(root)) == 1
+
+
+# --- one bad series must not end a multi-hour prepare ---------------------------
+
+
+def _npy_rows(tmp_path, count, *, broken=()):
+    rows = []
+    for i in range(count):
+        path = tmp_path / f"v{i}.npy"
+        if i in broken:
+            path.write_text("this is not a numpy file")
+        else:
+            np.save(path, volume(i))
+        rows.append(data.record("mrnet", f"g{i}", f"s{i}", [path], "npy"))
+    return rows
+
+
+def test_an_unreadable_series_is_skipped_and_recorded(tmp_path, config):
+    rows = _npy_rows(tmp_path, 40, broken=(7,))
+    quarantine = tmp_path / "quarantine.json"
+
+    cached = data.build_cache(rows, tmp_path / "cache", config, quarantine_path=quarantine)
+
+    assert len(cached) == 39, "the other 39 must still be cached"
+    report = json.loads(quarantine.read_text())
+    assert report["by_source"] == {"mrnet": 1}
+    assert report["unreadable"][0]["series"] == "s7"
+    assert "error" in report["unreadable"][0], "the reason must be recorded, not just the count"
+
+
+def test_too_many_unreadable_series_stops_the_run(tmp_path, config):
+    """Past the threshold it is the archive, not one bad file."""
+    rows = _npy_rows(tmp_path, 20, broken=(1, 2, 3, 4))
+    with pytest.raises(ValueError, match="That is the archive"):
+        data.build_cache(rows, tmp_path / "cache", config,
+                         quarantine_path=tmp_path / "quarantine.json")
+
+
+def test_a_wholly_unreadable_source_is_refused(tmp_path, config):
+    rows = _npy_rows(tmp_path, 4, broken=(0, 1, 2, 3))
+    with pytest.raises(ValueError, match="archive|nothing to train on"):
+        data.build_cache(rows, tmp_path / "cache", config)
+
+
+def test_a_clean_run_writes_no_quarantine_file(tmp_path, config):
+    quarantine = tmp_path / "quarantine.json"
+    data.build_cache(_npy_rows(tmp_path, 6), tmp_path / "cache", config,
+                     quarantine_path=quarantine)
+    assert not quarantine.exists(), "a clean prepare must leave no failure record"
+
+
+def test_an_unmanifested_cache_is_rebuilt_rather_than_refused(tmp_path, config):
+    """A crash between the .npy landing and its manifest used to make prepare
+    unresumable; the bytes are rebuildable from the same frozen inputs."""
+    rows = _npy_rows(tmp_path, 2)
+    cache = tmp_path / "cache"
+    data.build_cache(rows, cache, config)
+
+    key = digest([rows[0]["source"], rows[0]["group"], rows[0]["series"]])
+    (cache / f"{key}.json").unlink()          # manifest lost, .npy remains
+
+    cached = data.build_cache(rows, cache, config)
+    assert len(cached) == 2

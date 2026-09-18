@@ -40,7 +40,15 @@ fastMRI's [official format documentation](https://github.com/facebookresearch/fa
 distinguishes complex k-space from reconstructed image targets. B58 consumes
 `reconstruction_rss`, not complex k-space or challenge test files. Download the
 **knee** training release; a brain release is not an alternative input.
-The generic official folder name `multicoil_train` is also accepted.
+
+The generic folder name `multicoil_train` is accepted, but no longer on trust:
+a brain release extracts to that same name and also carries
+`reconstruction_rss`, so the folder name alone cannot tell them apart while
+every record is stamped `official_knee_multicoil_train`. The anatomy is read
+from each file's `acquisition` attribute instead -- `CORPD_FBK` and
+`CORPDFS_FBK` are the knee sequences, and an axial brain sequence is refused
+by name. If the attribute is absent, the directory must be called
+`knee_multicoil_train` so the claim comes from somewhere.
 
 For OAI, use extracted MRI DICOM files, including extensionless DICOM files.
 X-rays, clinical tables and unopened ZIP archives are not training images.
@@ -51,6 +59,13 @@ files, repeated slice positions, mixed matrices and decoding errors fail
 explicitly. Physical slice positions are used when present, with
 `InstanceNumber` as the fallback. Do not repair images by renaming files or
 removing failed slices without first investigating the source.
+
+A series that will not decode no longer ends the whole preparation. It is
+skipped, written to `quarantine.json` with the reason, and counted per source;
+past 5% of any one source the run stops, because at that point the archive is
+wrong rather than one file. Read that file before training: B58's reader is
+deliberately stricter than the one B57 uses on the same RSNA directories, so a
+skip usually means the extraction needs looking at.
 
 External labels are never mapped to missing RSNA diagnoses. The sources do
 not all supply the same twelve labels. Before a later competition submission,

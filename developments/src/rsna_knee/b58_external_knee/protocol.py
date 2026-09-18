@@ -100,7 +100,11 @@ def prepare(*, run_root, data_root, labels_root, domain_split, series_policy,
         raise OSError(f"B58 needs approximately {estimate/2**30:.1f} GiB of cache plus 2 GiB headroom")
     print(f"[B58] source counts: {json.dumps(counts)}", flush=True)
     print(f"[B58] bounded float16 cache estimate: {estimate/2**30:.1f} GiB", flush=True)
-    cached = build_cache(selected, root / "cache", c)
+    # Any series that would not decode is written here rather than ending a
+    # multi-hour prepare, and the file is part of the frozen record so a
+    # skip can never be silent.
+    cached = build_cache(selected, root / "cache", c,
+                         quarantine_path=root / "quarantine.json")
     write_json(root / "cache_manifest.json", cached)
     protocol = {"version": VERSION, "request": request, "config": c,
                 "rsna_identity": selection["rsna_identity"], "rsna_counts": p["counts"],
