@@ -197,13 +197,40 @@ def require_series_on_disk(root, index: dict, *, split: str) -> None:
         )
 
 
-def validation_surface(run_root: str | Path, payload: dict):
-    """The studies the training run scored, rebuilt from the frozen protocol."""
-    from .b57_protocol import load_protocol
+def validation_surface(run_root: str | Path, payload: dict, *, allow_source_drift: bool = False):
+    """The studies the training run scored, rebuilt from the frozen protocol.
+
+    `load_protocol` folds a hash of every module in the package into the
+    protocol, and refuses to load when it moves. That is right for *resuming
+    training*: the weights would continue under different code. It is wrong
+    here. This reads frozen artefacts -- labels.npz, series_index.json -- to
+    rebuild a dataset and score weights that are already final. No training
+    happens, and an unrelated module changing cannot alter what those files
+    say.
+
+    So `allow_source_drift` exists, and it prints what it is skipping rather
+    than passing quietly. It never skips the artefact hashes themselves: if
+    labels.npz or series_index.json changed, the surface really is different
+    and the refusal stands.
+    """
+    from .b57_protocol import load_protocol, source_digest
     from .b57_training import make_dataset
 
     protocol_root = Path(run_root) / "protocol"
-    return make_dataset(protocol_root, load_protocol(protocol_root), "validation")
+    if not allow_source_drift:
+        return make_dataset(protocol_root, load_protocol(protocol_root), "validation")
+
+    protocol = load_protocol(protocol_root, verify_sources=False)
+    recorded, current = protocol.get("source_digest"), source_digest()
+    if recorded != current:
+        print(
+            "[B57 submit] source digest drift accepted: this protocol was frozen "
+            f"under {str(recorded)[:12]}... and the package now hashes to "
+            f"{current[:12]}.... The frozen artefacts are still verified; only "
+            "the code-identity check is skipped, and no training resumes here.",
+            flush=True,
+        )
+    return make_dataset(protocol_root, protocol, "validation")
 
 
 def recorded_macro_auc(payload: dict) -> float:
@@ -214,7 +241,8 @@ def recorded_macro_auc(payload: dict) -> float:
     return float(history[-1]["validation"]["macro_auc"])
 
 
-def verify(run_root: str | Path, payload: dict, model, runtime) -> dict:
+def verify(run_root: str | Path, payload: dict, model, runtime, *,
+           allow_source_drift: bool = False) -> dict:
     """Re-score the validation studies through this module's own path.
 
     The point is not to recompute a number we already have. It is to prove that
@@ -224,7 +252,7 @@ def verify(run_root: str | Path, payload: dict, model, runtime) -> dict:
     """
     from .b52_competition_training import macro_auc
 
-    dataset = validation_surface(run_root, payload)
+    dataset = validation_surface(run_root, payload, allow_source_drift=allow_source_drift)
     predicted = predict(model, make_loader(dataset, runtime, payload["model_config"]), runtime)
     scores = macro_auc(predicted["target"], predicted["weight"], predicted["prediction"])
 
@@ -273,6 +301,7 @@ def generate(
     workers: int = 0,
     split: str = "test",
     skip_verify: bool = False,
+    allow_source_drift: bool = False,
 ) -> Path:
     checkpoint = Path(run_root) / arm / "final.pt"
     payload = load_endpoint(checkpoint)
@@ -295,7 +324,8 @@ def generate(
         )
     else:
         print("[B57 submit] reproducing the recorded validation score", flush=True)
-        agreement = verify(run_root, payload, model, runtime)
+        agreement = verify(run_root, payload, model, runtime,
+                           allow_source_drift=allow_source_drift)
         print(
             f"[B57 submit] reproduced {agreement['reproduced_macro_auc']:.6f} "
             f"against {agreement['recorded_macro_auc']:.6f} "
@@ -333,6 +363,15 @@ def main() -> None:
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--split", default="test", choices=("test", "train"))
     parser.add_argument(
+        "--allow-source-drift",
+        action="store_true",
+        help=(
+            "read the frozen protocol even though the package has changed "
+            "since it was frozen. The artefact hashes are still checked; only "
+            "the code-identity check is skipped. Nothing resumes training."
+        ),
+    )
+    parser.add_argument(
         "--skip-verify",
         action="store_true",
         help=(
@@ -351,6 +390,7 @@ def main() -> None:
         workers=args.num_workers,
         split=args.split,
         skip_verify=args.skip_verify,
+        allow_source_drift=args.allow_source_drift,
     )
 
 

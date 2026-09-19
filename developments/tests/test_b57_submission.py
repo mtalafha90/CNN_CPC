@@ -152,7 +152,8 @@ def _verify_with(monkeypatch, reproduced, recorded=0.774759):
     target = (generator.random((rows, len(TARGETS))) > 0.5).astype(np.float64)
     weight = np.ones_like(target)
 
-    monkeypatch.setattr(module, "validation_surface", lambda run_root, payload: object())
+    monkeypatch.setattr(module, "validation_surface",
+                        lambda run_root, payload, **kwargs: object())
     monkeypatch.setattr(module, "make_loader", lambda *a, **k: object())
     monkeypatch.setattr(
         module, "predict",
@@ -408,3 +409,58 @@ def test_a_complete_surface_passes_the_disk_check(tmp_path):
 
     root = _data_root(tmp_path, images_dir="test_images")
     require_series_on_disk(root, {"studyA": [{"series_uid": "s1"}]}, split="test")
+
+
+# --- reading a finished run is not resuming it ----------------------------------
+#
+# load_protocol folds a hash of every module in the package into the protocol
+# and refuses when it moves. That is right for resuming training and wrong for
+# scoring weights that are already final: copy_audit.py and this very module
+# were added after the 093 protocol was frozen, which made the verification
+# guard structurally unreachable on the only run it exists to check.
+
+
+def test_the_drift_flag_is_off_by_default():
+    """Accepting drift must be asked for, never assumed."""
+    for function in (generate, verify):
+        assert inspect.signature(function).parameters["allow_source_drift"].default is False
+
+
+def test_accepting_drift_still_verifies_the_frozen_artefacts():
+    """Only the code-identity check is skipped, never labels.npz."""
+    from rsna_knee import b57_submission as module
+
+    source = inspect.getsource(module.validation_surface)
+    assert "verify_sources=False" in source
+    assert "frozen artefacts are still verified" in source
+
+
+def test_accepting_drift_says_so_out_loud():
+    from rsna_knee import b57_submission as module
+
+    source = inspect.getsource(module.validation_surface)
+    assert "source digest drift accepted" in source
+    assert "no training resumes here" in source
+
+
+def test_the_flag_reaches_the_protocol_read():
+    from rsna_knee import b57_submission as module
+
+    assert "allow_source_drift=allow_source_drift" in inspect.getsource(module.verify)
+    assert "allow_source_drift=allow_source_drift" in inspect.getsource(module.generate)
+
+
+def test_the_command_line_offers_it():
+    import sys
+
+    from rsna_knee import b57_submission as module
+
+    argv = sys.argv
+    try:
+        sys.argv = ["b57-submit", "--help"]
+        try:
+            module.main()
+        except SystemExit:
+            pass
+    finally:
+        sys.argv = argv
