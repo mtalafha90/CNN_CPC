@@ -464,3 +464,209 @@ def test_the_command_line_offers_it():
             pass
     finally:
         sys.argv = argv
+
+
+# --- a packaged checkpoint has no run root --------------------------------------
+#
+# `generate` derived the endpoint as <run_root>/<arm>/final.pt, which assumes the
+# training layout survived the copy onto Kaggle. It does not: the file is copied
+# out on its own, usually renamed, with no protocol beside it. The notebook died
+# on FileNotFoundError with the model already packaged and the slot half spent.
+
+
+def test_the_endpoint_can_be_named_directly():
+    assert inspect.signature(generate).parameters["checkpoint"].default is None
+    assert inspect.signature(generate).parameters["run_root"].default is None
+
+
+def test_naming_neither_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="either checkpoint= or run_root="):
+        generate(data_root=tmp_path)
+
+
+def test_a_checkpoint_that_is_not_there_says_what_to_pass(tmp_path):
+    with pytest.raises(FileNotFoundError, match="pass checkpoint="):
+        generate(checkpoint=tmp_path / "nowhere.pt", data_root=tmp_path)
+
+
+def test_a_run_root_that_is_not_there_says_the_same(tmp_path):
+    """The derived path fails with the same guidance, not a bare errno."""
+    with pytest.raises(FileNotFoundError, match="packaged submission"):
+        generate(run_root=tmp_path, data_root=tmp_path)
+
+
+def test_verification_needs_the_run_root(tmp_path):
+    """The frozen protocol lives beside the run, not beside the checkpoint."""
+    endpoint = tmp_path / "final.pt"
+    endpoint.write_bytes(b"not really a checkpoint")
+
+    import torch
+
+    def _refuse(*_args, **_kwargs):
+        raise AssertionError("the run-root guard must fire before the load")
+
+    saved, torch.load = torch.load, _refuse
+    try:
+        with pytest.raises(ValueError, match="verification needs run_root="):
+            generate(checkpoint=endpoint, data_root=tmp_path)
+    finally:
+        torch.load = saved
+
+
+def test_the_command_line_offers_the_checkpoint(capsys, monkeypatch):
+    import sys
+
+    from rsna_knee import b57_submission as module
+
+    monkeypatch.setattr(sys, "argv", ["b57-submit", "--help"])
+    with pytest.raises(SystemExit):
+        module.main()
+    assert "--checkpoint" in capsys.readouterr().out
+
+
+# --- one unreadable series must not end the submission --------------------------
+#
+# `test_surface` pinned strict_dicom=True with no way to change it. A single
+# series the reader choked on raised, and Kaggle reported "Notebook Threw
+# Exception" with no traceback. B39, B41 and B51 each died this way with a
+# working model behind them.
+#
+# The systematic failure -- wrong split, images never copied -- is a *missing
+# directory*, and `require_series_on_disk` still raises on that whatever mode is
+# chosen. Only a file that is present and will not decode falls back.
+
+
+def _corrupt(root, images_dir, study, series):
+    """Leave the directory in place and make every file in it undecodable."""
+    for path in sorted((root / images_dir / study / series).glob("*.dcm")):
+        path.write_bytes(b"this is not a DICOM file")
+
+
+def test_the_two_modes_mean_what_they_mean_elsewhere():
+    """One vocabulary for this, spelled in two files."""
+    from rsna_knee import b57_submission as module
+    from rsna_knee.b42_constant_area_aspect_sparse_submission_dualgpu_fast import (
+        ON_UNREADABLE_FALLBACK,
+        ON_UNREADABLE_MODES,
+        ON_UNREADABLE_RAISE,
+    )
+
+    assert module.ON_UNREADABLE_RAISE == ON_UNREADABLE_RAISE
+    assert module.ON_UNREADABLE_FALLBACK == ON_UNREADABLE_FALLBACK
+    assert module.ON_UNREADABLE_MODES == ON_UNREADABLE_MODES
+
+
+def test_a_submission_keeps_going_by_default():
+    from rsna_knee import b57_submission as module
+
+    for function in (module.test_surface, module.generate):
+        parameter = inspect.signature(function).parameters["on_unreadable"]
+        assert parameter.default == module.ON_UNREADABLE_FALLBACK
+
+
+def test_an_unknown_mode_is_refused(tmp_path):
+    from rsna_knee.b57_submission import test_surface
+
+    root = _data_root(tmp_path, images_dir="test_images")
+    with pytest.raises(ValueError, match="on_unreadable must be one of"):
+        test_surface(root, {"b42_config": _b42_settings()},
+                     split="test", on_unreadable="skip")
+
+
+@pytest.mark.parametrize(
+    "mode, strict", [("raise", True), ("fallback", False)]
+)
+def test_the_mode_reaches_the_dataset(tmp_path, mode, strict):
+    from rsna_knee.b57_submission import test_surface
+
+    root = _data_root(tmp_path, images_dir="test_images")
+    dataset, _uids, _repair = test_surface(
+        root, {"b42_config": _b42_settings()}, split="test", on_unreadable=mode
+    )
+    assert dataset.config.strict_dicom is strict
+
+
+def test_an_undecodable_series_is_zeroed_rather_than_raised(tmp_path):
+    """The whole point: one bad file costs one study, not the submission."""
+    from rsna_knee.b57_submission import test_surface
+
+    root = _data_root(tmp_path, images_dir="test_images")
+    _corrupt(root, "test_images", "studyA", "s1")
+
+    dataset, uids, _repair = test_surface(
+        root, {"b42_config": _b42_settings()}, split="test",
+        on_unreadable="fallback",
+    )
+    item = dataset[0]
+
+    assert uids == ["studyA"]
+    assert item["present"].tolist() == [0.0], "the series should be marked absent"
+    assert float(item["volumes"][0].abs().sum()) == 0.0
+
+
+def test_the_old_behaviour_is_still_available(tmp_path):
+    from rsna_knee.b57_submission import test_surface
+
+    root = _data_root(tmp_path, images_dir="test_images")
+    _corrupt(root, "test_images", "studyA", "s1")
+
+    dataset, _uids, _repair = test_surface(
+        root, {"b42_config": _b42_settings()}, split="test", on_unreadable="raise",
+    )
+    with pytest.raises(Exception):
+        dataset[0]
+
+
+def test_a_readable_series_is_untouched_by_the_fallback(tmp_path):
+    """Softening the failure must not soften the success."""
+    from rsna_knee.b57_submission import test_surface
+
+    root = _data_root(tmp_path, images_dir="test_images")
+    settings = _b42_settings()
+
+    strict, _uids, _r = test_surface(root, {"b42_config": settings},
+                                     split="test", on_unreadable="raise")
+    soft, _uids, _r = test_surface(root, {"b42_config": settings},
+                                   split="test", on_unreadable="fallback")
+
+    import torch
+
+    assert strict[0]["present"].tolist() == [1.0]
+    assert soft[0]["present"].tolist() == [1.0]
+    assert torch.equal(strict[0]["volumes"][0], soft[0]["volumes"][0])
+
+
+def test_a_missing_directory_still_stops_the_run(tmp_path):
+    """The fallback covers undecodable files, never a path that is not there.
+
+    This is what keeps a wrong split from producing a complete submission full
+    of zeroed studies, which is the failure the fallback could otherwise hide.
+    """
+    from rsna_knee.b57_submission import test_surface
+
+    root = _data_root(tmp_path, images_dir="test_images")
+    # The CSVs exist under both names; only the images are under `test_images`.
+    # That is exactly the shape of the wrong-split defect.
+    (root / "train.csv").write_text((root / "test.csv").read_text())
+    (root / "train_series.csv").write_text((root / "test_series.csv").read_text())
+
+    with pytest.raises(FileNotFoundError, match="not on this machine"):
+        test_surface(root, {"b42_config": _b42_settings()},
+                     split="train", on_unreadable="fallback")
+
+
+def test_the_mode_reaches_the_surface_from_generate():
+    from rsna_knee import b57_submission as module
+
+    assert "on_unreadable=on_unreadable" in inspect.getsource(module.generate)
+
+
+def test_the_command_line_offers_the_mode(capsys, monkeypatch):
+    import sys
+
+    from rsna_knee import b57_submission as module
+
+    monkeypatch.setattr(sys, "argv", ["b57-submit", "--help"])
+    with pytest.raises(SystemExit):
+        module.main()
+    assert "--on-unreadable" in capsys.readouterr().out

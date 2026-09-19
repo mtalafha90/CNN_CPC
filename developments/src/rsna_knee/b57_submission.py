@@ -30,6 +30,13 @@ fail: `require_series_on_disk` resolves every series directory before the model
 is built, so a wrong split or a missing copy raises at load time rather than
 partway through a notebook with the clock running.
 
+That guard is also what lets the test path be forgiving about the *other*
+failure. A series that is present but will not decode no longer raises: it
+becomes a zero volume with its presence flag at 0, the same shape the pooling
+already handles for a study missing a plane. Three submissions in this archive
+-- B39, B41 and B51 -- died as *Notebook Threw Exception* on one bad file with
+a working model behind it. `on_unreadable="raise"` restores the old behaviour.
+
 ## What it does not do
 
 It does not select a checkpoint. B57 declares `fixed_final_epoch` before it
@@ -72,6 +79,15 @@ B57_SUBMISSION_VERSION = "b57_submission_v1"
 #: one centre offset, `predict` under `no_grad` -- so the only expected drift is
 #: floating-point ordering under autocast. Anything larger is a real divergence.
 REPRODUCTION_TOLERANCE = 5e-4
+
+#: What to do when a series will not read. These are the same two words the B42
+#: fast submission uses, spelled again here rather than imported: that module
+#: pulls in a dual-GPU streaming chain for two strings, and this one runs inside
+#: an offline notebook. `test_b57_submission` pins them to the originals, so if
+#: either side is renamed the suite says so.
+ON_UNREADABLE_RAISE = "raise"
+ON_UNREADABLE_FALLBACK = "fallback"
+ON_UNREADABLE_MODES = (ON_UNREADABLE_RAISE, ON_UNREADABLE_FALLBACK)
 
 
 def load_endpoint(path: str | Path) -> dict:
@@ -133,13 +149,46 @@ def rebuild_model(payload: dict, device):
     return model.eval().to(device)
 
 
-def test_surface(data_root: str | Path, payload: dict, *, split: str = "test"):
+def test_surface(
+    data_root: str | Path,
+    payload: dict,
+    *,
+    split: str = "test",
+    on_unreadable: str = ON_UNREADABLE_FALLBACK,
+):
     """The studies to predict, with placeholder labels.
 
     `predict` reads `target` and `weight` off each item because it is shared
     with the training path. The test set has neither, so zeros are passed and
     never read: nothing downstream of the probabilities touches them.
+
+    ## Why one bad series does not end the run
+
+    This used to set `strict_dicom=True` with no way to change it, so a single
+    series the reader choked on raised, and the notebook died as *Notebook
+    Threw Exception* with no traceback shown. That has cost this project three
+    submissions -- B39, B41 and B51 -- and in every one of them the model was
+    fine.
+
+    The default is now `fallback`: an unreadable series becomes a zero volume
+    with its presence flag at 0, which is exactly what the sparse-MIL pooling
+    already does for a study that never had that plane. The study still gets a
+    prediction from whatever else it has, and one study is worth far less than
+    the whole submission.
+
+    **This does not hide a broken path.** The failure that actually happens --
+    a wrong split, or images that were never copied -- is a *missing directory*,
+    not an unreadable file, and `require_series_on_disk` below still raises on
+    that whatever this argument says. What falls back here is the narrow case
+    it is meant for: a file that is present and will not decode.
+
+    Pass `on_unreadable="raise"` to get the old behaviour when you would rather
+    know than score.
     """
+    if on_unreadable not in ON_UNREADABLE_MODES:
+        raise ValueError(f"on_unreadable must be one of {ON_UNREADABLE_MODES}")
+    strict = on_unreadable == ON_UNREADABLE_RAISE
+
     root = Path(data_root).expanduser().resolve()
     frame = load_test_csv(root / f"{split}.csv")
     uids = [str(uid) for uid in frame["StudyInstanceUID"]]
@@ -149,14 +198,14 @@ def test_surface(data_root: str | Path, payload: dict, *, split: str = "test"):
     _summary, index = audit_variable_series_surface(series, uids)
 
     settings = dict(payload["b42_config"])
-    settings["strict_dicom"] = True
+    settings["strict_dicom"] = strict
     config = make_b7_dataset_config(settings, root, train=False)
     # `make_b7_dataset_config` hard-codes split="train" and takes no split
     # argument, so the images are looked up under `train_series/` unless this
     # line overrides it. Without it every test study raises FileNotFoundError --
     # in the notebook, after the verification pass has already run.
     config.split = str(split)
-    config.strict_dicom = True
+    config.strict_dicom = strict
     config.tta_center_offsets = ()
 
     require_series_on_disk(root, index, split=split)
@@ -173,10 +222,12 @@ def test_surface(data_root: str | Path, payload: dict, *, split: str = "test"):
 def require_series_on_disk(root, index: dict, *, split: str) -> None:
     """Fail at load time rather than partway through the notebook.
 
-    `strict_dicom` is on, so a series the loader cannot find raises -- but only
-    once that study comes up, which in a submission means after the model is on
-    the card and the clock is running. This resolves every directory first and
-    names what is wrong while it is still cheap to fix.
+    This runs whatever `on_unreadable` says, and it is the reason the fallback
+    above is safe to default to. A *missing directory* is the systematic
+    failure -- a wrong split, or images that were never copied -- and it would
+    otherwise be swallowed one study at a time as an empty prediction, giving a
+    complete submission full of nothing. Resolving every directory up front
+    turns that into one message while it is still cheap to fix.
 
     It is also the check that would have caught the wrong `split` above: the
     reproduction guard never could, because it scores the validation split and
@@ -293,7 +344,8 @@ def submission_frame(uids, probabilities: np.ndarray) -> pd.DataFrame:
 
 def generate(
     *,
-    run_root: str | Path,
+    run_root: str | Path | None = None,
+    checkpoint: str | Path | None = None,
     arm: str = ARMS[1],
     data_root: str | Path,
     out_path: str | Path = "submission.csv",
@@ -302,8 +354,32 @@ def generate(
     split: str = "test",
     skip_verify: bool = False,
     allow_source_drift: bool = False,
+    on_unreadable: str = ON_UNREADABLE_FALLBACK,
 ) -> Path:
-    checkpoint = Path(run_root) / arm / "final.pt"
+    # A packaged submission has no run root: the checkpoint is copied out on
+    # its own, often renamed, with no protocol beside it. Deriving the path
+    # from run_root/arm assumed the training layout survived the copy, and it
+    # does not -- it failed inside the notebook, which is the one place this
+    # module exists to keep clear of surprises.
+    if checkpoint is None:
+        if run_root is None:
+            raise ValueError("pass either checkpoint= or run_root=")
+        checkpoint = Path(run_root) / arm / "final.pt"
+    checkpoint = Path(checkpoint)
+    if not checkpoint.is_file():
+        raise FileNotFoundError(
+            f"no B57 endpoint at {checkpoint}. In a packaged submission the "
+            "file is usually copied out on its own -- pass checkpoint=<path> "
+            "rather than run_root=."
+        )
+    if not skip_verify and run_root is None:
+        # Checked here rather than at the verification step: by then the
+        # checkpoint is loaded and the model is on the card, and the answer
+        # would still be the same.
+        raise ValueError(
+            "verification needs run_root= for the frozen protocol. Pass "
+            "skip_verify=True when submitting from a packaged checkpoint."
+        )
     payload = load_endpoint(checkpoint)
     runtime = runtime_for(device, workers)
     print(f"[B57 submit] {runtime.describe()}", flush=True)
@@ -333,8 +409,14 @@ def generate(
             flush=True,
         )
 
-    dataset, uids, repair = test_surface(data_root, payload, split=split)
-    print(f"[B57 submit] {len(uids)} {split} studies; metadata repair {repair}", flush=True)
+    dataset, uids, repair = test_surface(
+        data_root, payload, split=split, on_unreadable=on_unreadable
+    )
+    print(
+        f"[B57 submit] {len(uids)} {split} studies; metadata repair {repair}; "
+        f"unreadable series -> {on_unreadable}",
+        flush=True,
+    )
     predicted = predict(model, make_loader(dataset, runtime, payload["model_config"]), runtime)
 
     order = {uid: i for i, uid in enumerate(predicted["uids"].tolist())}
@@ -355,13 +437,27 @@ def main() -> None:
         "rsna-knee-b57-submission",
         description="Write a submission from a finished B57 arm.",
     )
-    parser.add_argument("--run-root", required=True)
+    parser.add_argument("--run-root", default=None)
+    parser.add_argument(
+        "--checkpoint", default=None,
+        help="the endpoint directly, for a packaged copy with no run root",
+    )
     parser.add_argument("--arm", default=ARMS[1], choices=ARMS)
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--out-path", default="submission.csv")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--split", default="test", choices=("test", "train"))
+    parser.add_argument(
+        "--on-unreadable",
+        default=ON_UNREADABLE_FALLBACK,
+        choices=ON_UNREADABLE_MODES,
+        help=(
+            "what to do with a series that is present but will not decode. "
+            "'fallback' zeroes it and keeps going, which is what a submission "
+            "wants; 'raise' stops. A missing directory raises either way."
+        ),
+    )
     parser.add_argument(
         "--allow-source-drift",
         action="store_true",
@@ -383,6 +479,7 @@ def main() -> None:
 
     generate(
         run_root=args.run_root,
+        checkpoint=args.checkpoint,
         arm=args.arm,
         data_root=args.data_root,
         out_path=args.out_path,
@@ -391,6 +488,7 @@ def main() -> None:
         split=args.split,
         skip_verify=args.skip_verify,
         allow_source_drift=args.allow_source_drift,
+        on_unreadable=args.on_unreadable,
     )
 
 
@@ -400,6 +498,9 @@ if __name__ == "__main__":
 
 __all__ = [
     "B57_SUBMISSION_VERSION",
+    "ON_UNREADABLE_FALLBACK",
+    "ON_UNREADABLE_MODES",
+    "ON_UNREADABLE_RAISE",
     "REPRODUCTION_TOLERANCE",
     "generate",
     "load_endpoint",
