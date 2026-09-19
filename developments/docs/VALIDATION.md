@@ -4,6 +4,13 @@
 
 `CNN_CPC` now uses several distinct evaluation resources. They answer different questions and must not be mixed.
 
+> **Ruler policy — 2026-09-19.** Decisions are read on the **58 expert studies**
+> and nowhere else. The 548-study report-derived surface is retired as a decision
+> surface: it scores against the same label process that produces the teacher,
+> local movement has reached the leaderboard at roughly one quarter, and coverage
+> predicts its AUC at Pearson `-0.931`. It may be printed as telemetry; it may not
+> decide anything. See [CURRENT_STATUS](CURRENT_STATUS.md#ruler-policy-the-58-expert-studies).
+
 ## 1. External technical fixture
 
 `fixtures/external_validation/` is for software checks only: DICOM decoding, routing, preprocessing, missing-stream masking and inference plumbing. It is **not** a scientific benchmark.

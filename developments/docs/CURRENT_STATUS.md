@@ -2,6 +2,9 @@
 
 **Snapshot:** 2026-09-19 (latest update below; earlier experiment records retained)
 **Primary metric:** macro ROC AUC across 12 targets
+**Primary ruler (from 2026-09-19):** the **58 expert studies**. The 548-study
+report-derived surface is retired as a decision surface — see
+[Ruler policy](#ruler-policy-the-58-expert-studies) below.
 **Best recorded displayed Kaggle score:** **B52 full-data, 0.716**
 
 This file is the living project-status record. Earlier snapshots remain available in Git history and in the frozen experiment documents.
@@ -59,6 +62,44 @@ are still required. No AUC improvement is claimed. This tests the combined
 data/supervision/training recipe, not external data alone.
 [B58 full-data protocol and commands](B58_FULL_DATA.md). The earlier capped,
 unlabelled [v1](B58_EXTERNAL_KNEE_PRETRAINING.md) is preserved for existing runs.
+
+**B59 is implemented and unrun:** the first measurement of whether report
+silence indicates absence. Two thirds of the teacher's grid is answered; the
+blank third is the `uncertain` and `unmentioned` states the loss discards.
+Converting silence to a negative would take coverage from 65.2% to nearly 100%
+for no compute, and it is the only coverage increase that adds *negatives* into
+a teacher whose measured fault is 106 false positives against 5 false negatives.
+The rule is frozen, the audit is read-only and needs no GPU, and an empty policy
+is a recorded result. [Protocol and decision rule](B59_SILENCE_AS_NEGATIVE.md).
+
+## Ruler policy: the 58 expert studies
+
+**Every measurement is read on Expert-58. The 548-study report-derived surface
+is retired as a decision surface.** It may still be printed by a trainer as
+telemetry; it may not decide anything.
+
+The reason is recorded in three places in this archive and is the same each time:
+
+```text
+B50 adapted hierarchy      local +0.011219    hidden -0.001
+B52 trained regime         local +0.071881    hidden +0.002
+teacher accuracy vs model                     Pearson +0.09
+```
+
+The hidden labels are **image-derived** by two MSK radiologists under a severity
+rubric. The 548-study surface scores against **report-derived** labels produced
+by the same teacher that trained the model. They are two different instruments,
+and local movement has reached the leaderboard at roughly one quarter.
+
+Expert-58 labels all twelve findings on all 58 studies whatever the report
+happened to say, so it carries no mention-selection. Its known limits stand and
+are not an argument for going back: resolution about `±0.03`, per-target
+intervals 0.1–0.2 wide, and heavy prior reuse. Use it as a **macro veto**, once
+per experiment — never to rank targets, pick an epoch or choose a blend.
+
+Coverage predicts the report surface's AUC at Pearson `-0.931`, so any change to
+label coverage moves that number for reasons unrelated to the model. That alone
+disqualifies it from refereeing the supervision work.
 
 ## Independent hidden evidence
 
