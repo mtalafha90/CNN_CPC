@@ -513,3 +513,56 @@ def test_the_six_epoch_no_crop_config_is_valid():
     assert config["selection"] == "fixed_final_epoch" and config["augmentation"] is False
     assert config["epochs"] == 6
     assert crop_fraction_for(config) == 1.0
+
+
+# --- the loader must set the sharing strategy inside its workers -----------------
+#
+# B53 died on the A4500 with "received 0 items of ancdata"; B57's submission
+# check died on the same machine with "Too many open files". Both are the file
+# descriptor limit, and both come from using runtime.loader_kwargs, which seeds
+# a worker but leaves the default sharing strategy. Under spawn the strategy
+# must be set inside the worker, which is what worker_init does.
+
+
+def test_the_loader_uses_the_sharing_aware_helper():
+    import inspect
+
+    from rsna_knee.b57_training import make_loader
+
+    source = inspect.getsource(make_loader)
+    assert "loader_kwargs_with_sharing(runtime, seed=seed)" in source
+    assert "runtime.loader_kwargs(seed=seed)" not in source
+
+
+def test_workers_receive_the_strategy_setting_init():
+    from rsna_knee.b57_training import runtime_for
+    from rsna_knee.loader_throughput import loader_kwargs_with_sharing, worker_init
+
+    kwargs = loader_kwargs_with_sharing(runtime_for("cpu", 4, 2), seed=0)
+    assert kwargs["worker_init_fn"] is worker_init
+    assert kwargs["num_workers"] == 4
+
+
+def test_no_workers_means_no_worker_init():
+    """Nothing to initialise, and PyTorch would not call it."""
+    from rsna_knee.b57_training import runtime_for
+    from rsna_knee.loader_throughput import loader_kwargs_with_sharing
+
+    kwargs = loader_kwargs_with_sharing(runtime_for("cpu", 0), seed=0)
+    assert kwargs.get("worker_init_fn") is None
+
+
+def test_the_shuffle_is_unchanged_by_the_helper():
+    """It must fix descriptors without touching which studies a batch holds."""
+    from rsna_knee.b57_training import runtime_for
+    from rsna_knee.loader_throughput import loader_kwargs_with_sharing
+
+    runtime = runtime_for("cpu", 4, 2)
+    plain = runtime.loader_kwargs(seed=7)
+    shared = loader_kwargs_with_sharing(runtime, seed=7)
+
+    for key in set(plain) - {"worker_init_fn"}:
+        if key == "generator":
+            assert shared[key].initial_seed() == plain[key].initial_seed()
+        else:
+            assert shared[key] == plain[key], f"{key} changed"

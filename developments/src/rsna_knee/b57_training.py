@@ -21,6 +21,7 @@ from .b57_models import (PUBLIC_STATE_SHA256, build_model, encoder_of, parameter
                          prepare_public_weights, public_weights, state_digest)
 from .b57_protocol import (ARMS, VERSION, digest, load_protocol, prepare_protocol,
                            require_same_run, sha256_file, write_json)
+from .loader_throughput import loader_kwargs_with_sharing
 from .runtime import autocast, make_scaler, resolve_runtime
 from .training_resume import load_checkpoint, resume, save_checkpoint
 
@@ -127,9 +128,16 @@ def make_loader(dataset, runtime, config, *, epoch=None):
     # Reconstruct the generator from epoch, not process age. Resuming after E4
     # gets exactly E5's shuffle, even with a new Python process/worker count.
     seed = config["seed"] + (0 if epoch is None else int(epoch) * 1009)
+    # `loader_kwargs_with_sharing`, not `runtime.loader_kwargs`. The plain one
+    # seeds each worker but leaves the default file-descriptor sharing
+    # strategy, and a ragged multi-series study opens enough tensors to exhaust
+    # the limit: B53 died of it on the A4500 with "received 0 items of
+    # ancdata", and B57's submission check died of the same thing as "Too many
+    # open files". The helper installs a worker_init that sets the strategy
+    # INSIDE each worker, which is the only place it takes effect under spawn.
     return DataLoader(dataset, batch_size=config["batch_size"] if epoch is not None else 1,
         shuffle=epoch is not None, drop_last=False, collate_fn=collate_b42,
-        **runtime.loader_kwargs(seed=seed))
+        **loader_kwargs_with_sharing(runtime, seed=seed))
 
 
 def loss_for(model, arm, item, runtime, multipliers, config):
