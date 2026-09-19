@@ -1,6 +1,6 @@
 # Current project status
 
-**Snapshot:** 2026-09-16 (latest update below; earlier experiment records retained)
+**Snapshot:** 2026-09-19 (latest update below; earlier experiment records retained)
 **Primary metric:** macro ROC AUC across 12 targets
 **Best recorded displayed Kaggle score:** **B52 full-data, 0.716**
 
@@ -27,14 +27,25 @@ See [B57's source audit](B57_CLEAN_BACKBONE_COMPARISON.md).
 B56 is specified as B55 geometry with the original teacher; the reviewed
 `main` snapshot records no result. [B55/B56 runbook](B55_RUNBOOK.md).
 
-**B57's DINOv2 arm is running on the 5090**, according to the user's
-2026-09-13 report. No completed AUC is recorded yet. It starts a B52-style reference and a
-DINOv2-S slice model from pinned public weights, with fresh competition heads.
-It excludes validation scanner profiles from every new training row, freezes
-the shared original teacher and masks, and evaluates fixed final epochs plus
-one 50:50 ensemble. Expert-58 remains diagnostic. The comparison is development
-evidence requiring another group-disjoint confirmation before promotion.
-[Protocol and commands](B57_CLEAN_BACKBONE_COMPARISON.md).
+**B57's DINOv2 arm completed and scored `0.633` on Kaggle** (2026-09-19),
+against a validation endpoint of `0.774759` at its declared twelfth epoch.
+Validation had peaked at `0.794906` at epoch 5 and declined from there; the
+`fixed_final_epoch` rule was declared before the run, so epoch 12 was the only
+submittable endpoint and the hidden set agreed with the direction of the decline.
+
+`0.633` is `0.074` below the lowest of this project's six earlier hidden
+submissions, which span `0.707`–`0.716`. It establishes that this arm as run is
+worse on the hidden set than the B42/B52 family.
+
+It does **not** establish that the DINOv2 backbone is the cause. B57 is a
+two-arm comparison and `clean_b52_reference` was never trained, so the candidate
+has only been compared across lineages. The confound is large: B52 fine-tuned on
+top of a Phase-9 ancestor exposed to all 4,349 report-only studies, while the
+candidate started at public weights with twelve epochs and nothing else. Running
+the reference arm separates "this backbone is wrong" from "this recipe supplies
+less supervision", and costs no Kaggle slot, because B57's gate is a local
+comparison. Until it runs, B57 has produced one number and no comparison.
+[Protocol, result and the resume caveat](B57_CLEAN_BACKBONE_COMPARISON.md).
 
 **B58 full-data v2 is implemented, not trained:** the user's 2026-09-16 expansion
 uses all eligible series in the supplied RSNA/MRNet/fastMRI/OAI training
@@ -61,9 +72,14 @@ The recorded completed hidden submissions are:
 | B49 candidate | full-FOV native tiled local branch, dual-T4 hidden-safe inference | 0.707 |
 | B51 | full-population adapted hierarchy | 0.713 |
 | B52 full-data | full encoder fine-tuning, completed schedule | **0.716** |
+| B57 DINOv2 candidate | DINOv2-S/14 slice Transformer from public weights, no ancestor | 0.633 |
 
 The three `0.714` entries are displayed ties. Kaggle rounds leaderboard values,
 so identical displayed scores do not establish identical unrounded AUC.
+
+The B57 candidate is the first entry outside the `0.707`–`0.716` band, by eight
+times the spread of everything above it. It is also the only entry that did not
+begin from a Phase-9 ancestor, so the table compares recipes, not backbones.
 
 B41 originally failed during the hidden notebook rerun. The same frozen scientific endpoint later completed after inference was changed to hidden-safe streaming: one TTA study view at a time, native normalization once per series, host trimming after each study, and runtime prediction converted from a possible exception into telemetry. The resulting hidden score was `0.714`, demonstrating that the original B41 failure was operational rather than a model result.
 

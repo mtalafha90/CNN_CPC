@@ -1,10 +1,10 @@
 # B57: a clean reference and a different MRI representation
 
-**Status (2026-09-13): DINOv2 arm running on the 5090, per user report;
-no completed AUC result yet.** Keep that machine's checkout and environment
-unchanged until it finishes. The separate
-[B58 A4500 experiment](B58_EXTERNAL_KNEE_PRETRAINING.md) will use its completed
-DINOv2 result as a reference; it does not modify this run.
+**Status (2026-09-19): the DINOv2 arm is complete and has been submitted; the
+reference arm has not been run, so B57's comparison has not happened.** See
+[Result](#result-the-dinov2-arm-only) below. The separate
+[B58 A4500 experiment](B58_EXTERNAL_KNEE_PRETRAINING.md) was to use the
+completed DINOv2 result as a reference; it does not modify this run.
 The protocol is `config/b57_clean_backbone_comparison.json`. Run everything
 from the primary `CNN_CPC` checkout. Outputs go to
 `runs/093_Experiment_B57_clean_backbone_comparison/`. No sibling worktree is
@@ -196,6 +196,63 @@ with provenance, and `complete.json`. B57 checkpoints are self-contained for
 model reconstruction with `build_model(..., public_root=None)` plus strict
 `model_state` loading. Existing B52 submission loaders cannot load them; a
 Kaggle-specific runtime/package is a later step if the evidence supports it.
+
+## Result: the DINOv2 arm only
+
+The candidate ran to its declared twelfth epoch on the 5090 in roughly 31 hours
+and was submitted to Kaggle on 2026-09-19.
+
+| Surface | Macro AUC |
+|---|---:|
+| Validation, epoch 5 (highest recorded epoch) | 0.794906 |
+| Validation, epoch 12 (**the declared endpoint**) | 0.774759 |
+| **Kaggle hidden set** | **0.633** |
+
+Every completed hidden submission in this project before it sits between
+`0.707` and `0.716`. The candidate is `0.074` below the lowest of them. The
+spread among the earlier endpoints is at most `0.009`, so this is not a tie
+being broken; it is a different size of difference.
+
+### What the number does and does not establish
+
+**It establishes that this arm, as run, is worse on the hidden set than the
+B42/B52 family.** That conclusion needs no comparison arm.
+
+**It does not establish that the DINOv2 backbone is the cause**, and the
+protocol above is the reason why. B57 is a two-arm comparison whose gate is a
+macro delta against `clean_b52_reference` under the same protocol, data,
+labels, masks and epoch count. That arm was never trained, so the candidate has
+only been compared to endpoints from an entirely different lineage.
+
+The confound is specific and large. B52 fine-tuned on top of a Phase-9 ancestor
+that had already trained on all 4,349 report-only studies; the candidate began
+at public weights and received twelve epochs and nothing else. A drop of this
+size is at least as consistent with "this recipe supplies less supervision" as
+with "this backbone is wrong for knee MRI". Running the reference arm separates
+the two and costs no Kaggle slot, because the gate is a local comparison.
+
+### The endpoint rule behaved as designed, and cost something
+
+Validation peaked at epoch 5 and fell by `0.020` by epoch 12. `fixed_final_epoch`
+was declared before the run, so epoch 12 was the only submittable endpoint, and
+submitting it was correct. The hidden set then agreed with the direction of that
+decline. The epoch-5 weights no longer exist: the trainer keeps one rolling
+recovery file.
+
+A future run may legitimately declare a six-epoch schedule *before it starts* --
+`config/b57_six_epoch_dinov2.json` already does -- because that is pre-registration
+informed by a completed run, not a best epoch chosen after seeing a curve. It
+would be a different run with its own endpoint, not a re-reading of this one.
+
+### Note on resuming into this run root
+
+`load_protocol` folds a hash of every module in the package into the frozen
+protocol and refuses to train when it moves. Several modules have changed since
+this protocol was frozen, so `train` will refuse in this run root until the
+checkout matches the commit that froze it. That guard is correct for training
+and must not be relaxed; plan for the checkout step rather than around it.
+(`b57_submission.validation_surface` accepts drift only because it scores
+already-final weights and the artefact hashes are still verified.)
 
 ## Evidence behind the candidate
 
